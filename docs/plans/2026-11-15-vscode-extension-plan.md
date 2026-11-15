@@ -6,6 +6,7 @@
 - 2026-11-15: revision 2, after Codex review round 1 (1 P1, 7 P2, 1 P3; all accepted; the carried design finding was confirmed fixed). See "Review round 1" at the end.
 - 2026-11-15: revision 3, after Codex review round 2 (no P1; 3 P2, all accepted). See "Review round 2" at the end.
 - 2026-11-15: revision 4, after Codex review round 3 (no P1; 2 P2, both accepted). See "Review round 3" at the end.
+- 2026-11-15: revision 5, after Codex review round 4 (1 P1, 1 P2, both accepted; the round 3 fixes hold). See "Review round 4" at the end.
 - Design: `docs/design/2026-11-15-vscode-extension-design.md`. This plan builds exactly that design; where the two differ, the design wins and the plan is wrong.
 - Carried from the design review: P2 FIXED design round 10 #1 (Python runtime in the checker's fingerprint, skill 2.9.1), to be confirmed by the review of this plan.
 
@@ -16,6 +17,7 @@
 | 1 | P0=0 P1=1 P2=7 P3=1, coverage complete. Carried item (design round 10 #1) confirmed fixed | All 9 accepted; revision 2 |
 | 2 | P0=0 P1=0 P2=3 P3=0, coverage complete | All 3 accepted; revision 3 |
 | 3 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 4 |
+| 4 | P0=0 P1=1 P2=1 P3=0, coverage complete | Both accepted; revision 5 |
 
 ## What is built
 
@@ -108,13 +110,13 @@ export function assign(note: FileNote, textLines: string[]): Assignment
 | Step | Rule |
 |---|---|
 | Line equality | `sameLine(noteLine, textLine, lineNo, masked)`: equal strings match. Otherwise, only when the note line holds `[masked]` and `lineNo` is in `maskedLines`: a line that is `[masked]` alone matches any line; else the text around each mask must match (the regular expression of `mask_pattern` in the checker, anchored at both ends). The text line has its line ending removed first; nothing else is changed |
-| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). To find them quickly: pick as anchor the first line of the block that holds no `[masked]`, take every place that exact line occurs in the text, and try the block at (place minus the anchor's offset). A block in which every line holds a mask has no anchor: every start line of the text is tried |
+| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). No candidate is ever dropped and there is no cap. How they are found, in time linear in the text for each block: every distinct line string of the text and of the note gets a number once (a map from string to number), so a line comparison is a number comparison. **A block without masks** is a sequence of numbers searched in the text's sequence with the Knuth-Morris-Pratt method: time (text lines + block lines), whatever repeats. **A block with masks** is cut at its masked lines into runs of unmasked lines; each run is searched the same way, giving the starts at which that run fits; a start of the block is a candidate when every run fits at its offset (the sets of starts are intersected), and then only the masked lines are compared at that start with the mask rule. Time: (text lines + block lines) for each run, plus the masked lines for each surviving start. A block made of masked lines only has no run: every start is tried against its masked lines; the checker allows masks on at most a quarter of a file's lines, so such a block is short |
 | Assignment | Blocks in the order of their recorded `from`. Dynamic programming over (block index, candidate): a block may be placed at a candidate that starts after the end of the previous placed block, or left unplaced. Best = most blocks placed; among those, the smallest sum of distances between placed start and recorded `from` |
 | Ambiguous | After the best is found: for each placed block, if another best solution (same count, same sum) places it elsewhere, its state is `ambiguous` and `candidates` lists the places. Found by counting best solutions per (block, candidate) in the same table |
 | Changed | A block left unplaced. Its marker place: the first start line where the block matches with spaces at line ends ignored (`spacesOnly: true`), else its recorded lines clipped to the text |
 | Masked | A placed block with at least one line matched through a mask is `current-masked` |
 | Unexplained | Non-blank text lines outside every placed block of state `current` or `current-masked` |
-| Cost | A map from line text to line numbers gives the anchor's places, so a block costs (places of its anchor) times (its length). The no-anchor case costs (text lines) times (block length) and can only arise for a block made of masked lines alone |
+| Cost | As above: linear in the length of the text for each block without masks and for each unmasked run of a block with masks. `match.test.ts` has a test with a 20,000-line text of one repeated line and a 5,000-line block of the same line: it must finish well inside a second, which a compare-at-every-occurrence method cannot |
 
 Tests (`match.test.ts`):
 
@@ -129,6 +131,8 @@ Tests (`match.test.ts`):
 | a masked line, declared | `current-masked` |
 | a block whose first line is masked (`token = "[masked]"`) | found through a later, unmasked line; `current-masked` |
 | a block of masked lines only, declared | found by trying every start line; `current-masked` |
+| 20,000 identical lines, a block of 5,000 of them | finishes within one second; the candidates are all 15,001 starts; with a second identical block the order rule places both |
+| a block with a masked line in the middle and repeated unmasked runs | only the starts where both runs fit are candidates |
 | a note line with `[masked]` not declared in `masked_lines`, text differs | `changed` |
 | source text that itself says `[masked]`, copied exactly | `current`, not masked |
 | a block that appears twice in the text, recorded line half-way between, no neighbour to decide | `ambiguous` with both candidates |
@@ -175,11 +179,12 @@ Four `TextEditorDecorationType`s (current, changed or ambiguous, unexplained, ma
 | Trust | Every start of the checker (the check, the fingerprint on activation, the fingerprint after an event) first tests `workspace.isTrusted`. Not trusted: nothing is run and the badge is "not checked: this window is in Restricted Mode". `workspace.onDidGrantWorkspaceTrust` starts the pending fingerprint calls. The same guard covers the `git` calls below |
 | Run | `child_process.execFile(python, ["-B", checker, "--json", "--notes", notesFolder, "--source", sourceRoot, "--scope", sourceRel, ...(vault ? ["--vault", vault] : []), ...(graph ? ["--graph", graph] : ["--no-graph"])])`, no shell, 120 s limit, output up to 20 MB |
 | Outcome | In the design's order: start failure, signal, exit code other than 0 or 1, or output that does not parse as the expected object: "check error". Exit 1: "check failed", entries grouped by `fails[].note` equal to this note, `fails[].graph`, others, plus `missing`. Exit 0 and `result === "PASS"`: "checked" when the file is in `graph.covered`, "checked, not in the graph" when in `graph.not_covered`. Exit 0 and `result === "PASS WITHOUT THE GRAPH CHECK"`: "checked without graph" |
-| Stored | `workspaceState`, keyed by project and source: the result object and the time |
+| Generation | Each project has a counter, its input generation. Every event that can change what the checker reads adds one to it: a note or vault file event, a source file event, a graph file event, a git event, a settings change, a window-focus return, a finished Create. Every check and every fingerprint call notes the generation when it starts |
+| Stored | In `workspaceState`, keyed by project and source: the result object and the time. A check's result is stored and shown only when the project's generation is still the one noted at its start. When the generation has moved on, the result is thrown away, the badge stays "not checked", and a new fingerprint call for the current generation is due (after the usual 1500 ms of quiet). The same rule holds for a fingerprint answer: an answer for an older generation neither confirms nor deletes anything; only an answer for the current generation does. So a slow check that started before a change can never bring "checked" back after it |
 | Still valid | The same command with `--fingerprint` in place of `--json`. The fingerprint is the authority; events only decide when to ask. Asked: on activation for the files that have a stored result; when the window gets the focus back (`window.onDidChangeWindowState`), which covers changes no watcher saw; and 1500 ms after the last event from the notes watcher, the vault watcher, a watcher on the source root, a watcher on the graph file, the git watchers, or a settings change. Git watchers: the extension asks git where the repository keeps its data (`git -C <sourceRoot> rev-parse --absolute-git-dir` and `--git-common-dir`, run with `execFile`), so a source root that is a subfolder of a repository, or a worktree, is handled; it watches `HEAD`, `refs/**`, `packed-refs` and `shallow` in both folders. No git, or not a repository: no git watchers. While a call is pending or after it failed: "not checked". A value other than the stored `fingerprint`: the stored result is deleted |
 | Never | Changing a note |
 
-The parsing of the result and the mapping to states live in functions without `vscode` imports (`src/core/checkResult.ts`: `stateOf(exit, stdout, sourceRel)` and `detailsOf(result, noteName)` for the Check details block), tested on recorded JSON: a pass with the file covered, a pass with it not covered, a pass without graph, a pass with warnings and masked lines (the details list them), a failure about this note, a failure only about the graph, a failure only about another note, broken JSON, exit code 2. The trust guard is a single function `mayRun()` through which every `execFile` and task start goes; a search of the source for `execFile(` and `executeTask(` outside that path is part of the safety checklist.
+The generation rule lives in a small class without `vscode` imports (`src/core/validity.ts`: `begin()` returns the generation, `changed()` adds one, `accept(startedAt)` says whether a finished call may be used), tested on these orders of events: check starts, input changes, fingerprint for the new state finishes, the old check finishes last: its pass is not stored; two fingerprint calls finish in the wrong order: only the one for the current generation counts; a change during a check leaves the state "not checked" until a call for the current generation answers. The parsing of the result and the mapping to states live in functions without `vscode` imports (`src/core/checkResult.ts`: `stateOf(exit, stdout, sourceRel)` and `detailsOf(result, noteName)` for the Check details block), tested on recorded JSON: a pass with the file covered, a pass with it not covered, a pass without graph, a pass with warnings and masked lines (the details list them), a failure about this note, a failure only about the graph, a failure only about another note, broken JSON, exit code 2. The trust guard is a single function `mayRun()` through which every `execFile` and task start goes; a search of the source for `execFile(` and `executeTask(` outside that path is part of the safety checklist.
 
 ## Piece 7: create (`create.ts`)
 
@@ -249,3 +254,10 @@ With the notes of the helper sample (7 files) and `C:\dev\applexus-chat` as work
 |---|---|---|---|
 | 1 | P2 | Tables under a block other than the line table (the template's "Part of line" tables) had no place in the block model | `prose` keeps everything after the code that is not a line row, in order, tables included; the panel renders it after the line table; a test |
 | 2 | P2 | The end of Create looked at an index that could be 300 ms old and report "no note written" | `index.refreshNow(project)` is awaited before the completion rules, and before a check or fingerprint call |
+
+## Review round 4: findings and what changed
+
+| # | Sev | Finding | Change in revision 5 |
+|---|---|---|---|
+| 1 | P1 | Overlapping calls had no order rule: a check that started before a change could finish last and store its outdated pass | A generation counter per project; a result or a fingerprint answer is used only when the generation is still the one at its start (piece 6 rows "Generation" and "Stored"; `validity.ts` with tests of the event orders) |
+| 2 | P2 | Comparing the whole block at every occurrence of one line is quadratic on repetitive files; the design asks for linear matching | Lines become numbers; Knuth-Morris-Pratt search for unmasked blocks and for each unmasked run of a masked block; no caps; a timing test |
