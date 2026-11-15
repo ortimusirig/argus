@@ -28,7 +28,7 @@ Every project, file, mechanism and library answers the same questions: what we g
 | Item | Needed for |
 | --- | --- |
 | Python 3.10+ | The check script |
-| [graphify](https://github.com/safishamsi/graphify) (`pip install graphifyy`) | Required. The graph gives the file order, the callers and callees, and the mechanism candidates. The skill stops without it. Do not run `graphify install` |
+| [graphify](https://github.com/Graphify-Labs/graphify) (`pip install graphifyy`) | Required. The graph gives the file order, the callers and callees, and the mechanism candidates. The skill stops without it. It is run as `graphify update <copy of the code>`, which uses no LLM. Do not run `graphify install` |
 | git | The history behind "what was not possible without it" and "issues today"; detecting notes that went stale |
 | [obsidian-skills](https://github.com/kepano/obsidian-skills) | Optional: Obsidian syntax, canvas maps, Bases views |
 
@@ -46,11 +46,11 @@ It fails when a source file in scope has no note, a non-blank line is in no bloc
 
 ## Status
 
-Version 2.0.1. Replaces the DOCX generator of version 1.
+Version 2.1.0. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
 | Note format and check script | Tried on three real files (105 lines): the check passes on the notes and fails on deliberately broken copies (11 kinds of defect) |
 | The skill text | Followed once by a fresh agent with no other context, on one 19-line file at depth `full`: it produced 30 notes that pass the check. A second fresh agent, without graphify, stopped at preflight as the skill requires. Their 30 reported gaps led to version 2.0.1. Not yet tried on a whole project or at depth `map` |
-| graphify step | Written from graphify's documentation; not yet run. The test used a hand-made graph file. The graph comparison reads the graph loosely and may need adjusting after the first real run |
+| graphify step | Run for real with graphify 0.9.103 on a 42-file JavaScript and PowerShell project: 1,329 nodes, 3,529 edges, no LLM used. `scripts/graph_plan.py` turns the graph into the reading order, callers and callees, and mechanism candidates; the callers it gave for one file matched a text search exactly. The check's graph comparison passed on the real graph. Known limits seen: two shell and PowerShell installer scripts gave no symbols, and a `require` inside a function was not in the graph |
 | Bases view, canvas map | Left to obsidian-skills; not yet tried |
