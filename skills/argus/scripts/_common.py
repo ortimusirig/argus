@@ -1,5 +1,6 @@
 """Shared by check_notes.py and graph_plan.py: reading files, which files count as source, scopes, graph paths."""
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -45,7 +46,9 @@ def witness(*parts):
     """Adds something a run read or was told to the run's fingerprint. Every file read, every folder listing and
     every answer from git goes through here, so the fingerprint cannot miss an input: it is built from what the run
     actually used, not from a list someone has to keep complete."""
-    _WITNESS.update(("\x1f".join(str(p) for p in parts) + "\x1e").encode("utf-8", "backslashreplace"))
+    # One JSON array per entry, one entry per line: no value, whatever characters it holds, can be mistaken for
+    # two values or for another entry (JSON escapes line breaks and quotes).
+    _WITNESS.update(json.dumps([str(p) for p in parts], ensure_ascii=True).encode("ascii") + b"\n")
 
 
 def fingerprint():
@@ -173,7 +176,7 @@ def all_files(root):
             if ".git" not in parts[:-1]:
                 result.append("/".join(parts))
     result.sort()
-    witness("files under", root, hashlib.sha256("\n".join(result).encode("utf-8", "backslashreplace")).hexdigest())
+    witness("files under", root, *result)
     return result
 
 

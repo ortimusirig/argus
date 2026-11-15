@@ -778,6 +778,27 @@ class FingerprintByWitness(unittest.TestCase):
             self.assertNotEqual(first, json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"])
 
 
+class FingerprintFraming(unittest.TestCase):
+    """Entries of the fingerprint cannot run into each other (extension design review, round 8)."""
+
+    def test_values_with_line_breaks_do_not_collide(self):
+        import importlib
+        sys.path.insert(0, str(HERE))
+        common = importlib.import_module("_common")
+
+        def digest(*entries):
+            common._WITNESS = common.hashlib.sha256()
+            for entry in entries:
+                common.witness(*entry)
+            return common.fingerprint()
+
+        one = digest(("files under", "root", "a.py\nb.py", "folder/c.py"))
+        two = digest(("files under", "root", "a.py", "b.py", "folder/c.py"))
+        self.assertNotEqual(one, two)
+        self.assertNotEqual(digest(("a", "b"), ("c",)), digest(("a",), ("b", "c")))
+        self.assertNotEqual(digest(("a\x1fb",)), digest(("a", "b")))
+
+
 class GraphPlanProbe(unittest.TestCase):
     def test_graph_paths_with_a_leading_folder_and_scope(self):  # 14
         with tempfile.TemporaryDirectory() as tmp:

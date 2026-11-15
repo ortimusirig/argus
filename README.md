@@ -60,7 +60,7 @@ It fails when a source file in scope has no note, a non-blank line is in no bloc
 
 ## Status
 
-Version 2.8.2. Replaces the DOCX generator of version 1.
+Version 2.8.3. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
