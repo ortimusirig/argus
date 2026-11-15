@@ -7,6 +7,7 @@ Exit code 0: no FAIL and no MISSING. 1: at least one. 2: wrong arguments. STALE 
 exit code, but the last line counts them, and every masked line is listed for a person to confirm.
 """
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -394,9 +395,50 @@ def note_files(folder):
             yield p
 
 
+def fingerprint(notes_dir, notes, targets, root, graph, settings):
+    """One hash over everything a run of this check reads or depends on. Two runs with the same fingerprint give
+    the same result; any change to a note, a linked name, a source file, the file list, the graph, the git commit,
+    the options or these scripts changes it. Notes and explained sources go in by content, other files by path,
+    size and time of change."""
+    h = hashlib.sha256()
+
+    def add(*parts):
+        h.update(("\x1f".join(str(p) for p in parts) + "\x1e").encode("utf-8", "backslashreplace"))
+
+    def digest(path):
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            return "unreadable"
+
+    for name, p in sorted(notes.items()):
+        add("note", p.relative_to(notes_dir).as_posix(), digest(p))
+        props = frontmatter(read_text(p)[0])
+        if props.get("written_by", "").lower() == "argus" and props.get("type") == "file" and props.get("source"):
+            src = on_disk(root, props["source"])
+            add("source", props["source"], src or "none", digest(Path(root) / src) if src else "none")
+    for name in sorted(targets):
+        add("target", name)
+    for rel in all_files(root):
+        try:
+            st = (Path(root) / rel).stat()
+            add("file", rel, st.st_size, st.st_mtime_ns)
+        except OSError:
+            add("file", rel, "gone")
+    add("graph", digest(graph) if graph else "none")
+    add("head", git(root, "rev-parse", "HEAD") or "no git")
+    add("settings", json.dumps(settings, sort_keys=True))
+    for script in ("check_notes.py", "_common.py"):
+        add("checker", script, digest(Path(__file__).resolve().parent / script))
+    return h.hexdigest()
+
+
 def main():
     utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--fingerprint", action="store_true",
+                    help="check nothing: print {\"fingerprint\": ...} for the given options and stop. The same value "
+                         "is in the --json result; while it stays the same, a new run would give the same result")
     ap.add_argument("--notes", required=True, help="folder that holds the notes this skill wrote")
     ap.add_argument("--source", required=True, help="source root; each File note's 'source' property is relative to it")
     ap.add_argument("--scope", action="append", default=[],
@@ -432,6 +474,15 @@ def main():
     for p in vault.rglob("*"):
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
             targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
+
+    print_of_inputs = None
+    if args.fingerprint or args.json:
+        print_of_inputs = fingerprint(notes_dir, notes, targets, root, args.graph, {
+            "scope": scopes, "include_tests": args.include_tests, "allow_missing": args.allow_missing,
+            "graph": bool(args.graph)})
+    if args.fingerprint:
+        json.dump({"fingerprint": print_of_inputs}, sys.stdout)
+        sys.exit(0)
 
     explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
     for name, p in notes.items():
@@ -524,7 +575,7 @@ def main():
                          if line.startswith(n + ": ") or line.startswith(n + " line ")), None)
 
         json.dump({
-            "result": verdict, "exit_code": 0 if bad == 0 else 1, "scope": scopes,
+            "result": verdict, "exit_code": 0 if bad == 0 else 1, "scope": scopes, "fingerprint": print_of_inputs,
             "notes_checked": sorted(kinds), "notes_not_checked": sorted(unowned),
             "explained": {src: note for src, note in sorted(explained.items())},
             "missing": missing,

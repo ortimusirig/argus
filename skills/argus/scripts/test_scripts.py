@@ -582,6 +582,56 @@ class ForPrograms(unittest.TestCase):
             self.assertIn("0 masked lines", out)
 
 
+class Fingerprint(unittest.TestCase):
+    """The fingerprint changes with everything a run depends on (extension design review, round 4)."""
+
+    def test_fingerprint_follows_every_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["def fa():", "    return 1"]
+            note = file_note("a.py", code).replace("does it (lines", "defines fa (lines")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            vault = Path(tmp) / "vault"
+            (vault / "shared").mkdir(parents=True)
+            (vault / "shared" / "Concept - shared.md").write_text("---\ntype: concept\nwritten_by: argus\n---\nShared.\n", encoding="utf-8")
+            import shutil
+            shutil.move(str(nd), str(vault / "notes"))
+            nd = vault / "notes"
+            graph = write_graph(tmp, [{"id": "f", "label": "a.py", "source_file": "a.py"},
+                                      {"id": "g", "label": "fa()", "source_file": "a.py", "_callable": True}])
+            base = ["--notes", nd, "--source", src, "--vault", vault, "--graph", graph]
+
+            def fp(*more):
+                code_, out = run(CHECK, *base, "--fingerprint", *more)
+                self.assertEqual(code_, 0, out)
+                return json.loads(out)["fingerprint"]
+
+            first = fp()
+            self.assertEqual(first, fp())  # the same inputs, the same fingerprint
+            code_, out = run(CHECK, *base, "--json")
+            self.assertEqual(json.loads(out)["fingerprint"], first)  # the check reports the same value
+
+            seen = {first}
+
+            def changed(what):
+                value = fp()
+                self.assertNotIn(value, seen, what)
+                seen.add(value)
+
+            (nd / "Concept - x.md").write_text("---\ntype: concept\nwritten_by: argus\n---\nOther words.\n", encoding="utf-8")
+            changed("another note of the folder changed")
+            (nd / "Extra.md").write_text("mine\n", encoding="utf-8")
+            changed("a note was added")
+            (vault / "shared" / "Concept - shared.md").unlink()
+            changed("a linked name in the vault went away")
+            (src / "new_unnoted.py").write_text("y = 2\n", encoding="utf-8")
+            changed("a source file without a note was added")
+            (src / "a.py").write_text("def fa():\n    return 2\n", encoding="utf-8")
+            changed("an explained source changed")
+            graph.write_text(graph.read_text(encoding="utf-8") + " ", encoding="utf-8")
+            changed("the graph changed")
+            self.assertNotIn(fp("--include-tests"), seen, "an option changed")
+
+
 class GraphPlanProbe(unittest.TestCase):
     def test_graph_paths_with_a_leading_folder_and_scope(self):  # 14
         with tempfile.TemporaryDirectory() as tmp:
