@@ -33,7 +33,7 @@ written: <YYYY-MM-DD>
 ---
 ```
 
-Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `project` and `written`. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead.
+Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `project` and `written`. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas) and `commit` (the output of `git rev-parse --short HEAD` in the source when the note was written): the check marks the note STALE when one of those files changes later.
 
 ## File note
 
@@ -117,7 +117,8 @@ Rules the check enforces on a File note:
 | Lens | All eight lens rows are present in Level 1, each with an answer |
 | Concepts | Every row of the Level 2 table has at least one `[[link]]` in its last cell |
 | Graph | Every function or class the graph places in the file is named in the note's own words, outside the copied code (a block purpose or a row) |
-| Masked secrets | A code line that contains `[masked]` is not compared |
+| Masked secrets | On a code line that contains `[masked]`, everything around each `[masked]` must equal the source line; only the secret value itself may be replaced |
+| Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
 ## Concept note
 

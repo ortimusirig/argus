@@ -2,16 +2,16 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, after commit `185533d` (version 2.2.0).
+Last updated: 2026-11-15, version 2.3.0 (fixes for Codex round 1).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.2.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py` |
-| In progress | Codex review, round 1, of the skill at commit `dd81c53` (before the rename). Findings not in yet |
+| Released | 2.3.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
+| In progress | Codex review, round 2, of the skill at 2.3.0. See "Codex review record" |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Handle the Codex findings (fix, or rebut with evidence), commit, review again until clean. 2. Write the design note for the VS Code extension and have Codex review it |
+| Next step | 1. Handle the round 2 findings (fix with a test, or rebut with evidence), commit, review again until clean. 2. Write the design note for the VS Code extension (`docs/design/`) and have Codex review it |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
 ## What Argus is
@@ -114,6 +114,28 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | 2026-11-15 | graphify 0.9.103 on a copy of the helper code (42 files) | 1,329 nodes, 3,529 edges, no LLM; callers of one file match a text search; `install.ps1` gave no symbols; a `require` inside a function is missing from the graph |
 
 Not yet tested: a whole project, depth `map`, the notes rendered in Obsidian, more than one agent run per case.
+
+## Codex review record
+
+Run with `bash ~/.claude/skills/cross-model-review/scripts/xreview.sh plan <SKILL.md> <outdir> --source <this repo> --ctx <context file>`. One Codex run at a time. Do not change the repository while a run is in progress: the helper voids the run.
+
+| Round | Subject | Outcome | Disposition |
+|---|---|---|---|
+| 1 | `SKILL.md` and the repository at `dd81c53` | P0=0 P1=2 P2=7 P3=0. The helper marked the run void because the skill folder was renamed while it ran; the findings were read and are valid | All 9 confirmed against the code and fixed in 2.3.0, each with a test |
+
+Round 1 findings, in short:
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | P1 | `--scope .` or an absolute path made the check pass with no notes | Scopes are made relative to the source root; `.` is the whole root; outside paths are refused |
+| 2 | P1 | `.vue`, `.html`, `.css`, `.dart` and others were not counted as source | Much wider list; files of an unknown kind are reported in a WARN |
+| 3 | P2 | A `map` note with code but no explanation passed | Every block needs its Level 2 row and, at `map`, an explanation after its code |
+| 4 | P2 | A `## ` comment inside copied code ended the block | Headings are read outside code fences only |
+| 5 | P2 | Any line with `[masked]` skipped the comparison | Everything around the mask must equal the source line |
+| 6 | P2 | A file outside a cycle could come before the cycle it uses | Strongly connected components, ordered dependency-first; cycles are listed |
+| 7 | P2 | A graph function could be checked against the wrong file (`data.py` vs `a.py`) | Paths match on whole path components |
+| 8 | P2 | An unusable graph gave a warning and PASS | It fails |
+| 9 | P2 | The update rule left Mechanism and Concept notes stale and blocked depth changes | "Later runs" table in the skill; Mechanism and Flow notes carry `sources` and `commit` and are checked for staleness |
 
 ## Backlog
 

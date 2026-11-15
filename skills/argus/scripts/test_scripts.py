@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Small tests for check_notes.py and graph_plan.py. Run: python test_scripts.py"""
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CHECK = HERE / "check_notes.py"
+PLAN = HERE / "graph_plan.py"
+LENS = ["In one sentence", "What we gain", "What we lose", "What was not possible without it", "Issues today",
+        "What it makes possible", "Open source used", "Risks"]
+
+
+def run(script, *args):
+    out = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True)
+    return out.returncode, out.stdout + out.stderr
+
+
+def file_note(src_rel, code_lines, depth="full", lang="py", explain=True, code_in_note=None, extra_props=""):
+    """A File note with one block that covers the whole file."""
+    n = len(code_lines)
+    rng = f"line 1" if n == 1 else f"lines 1-{n}"
+    shown = code_in_note if code_in_note is not None else code_lines
+    t = [f"---\ntype: file\nproject: P\nsource: {src_rel}\ndepth: {depth}\n{extra_props}---", f"# P file - {Path(src_rel).name}",
+         "", "## Level 1: purpose", "", "| Lens | Answer |", "| --- | --- |"]
+    t += [f"| {label} | an answer |" for label in LENS]
+    t += ["", "## Level 2: blocks", "", "| # | Lines | Purpose | Why this way | Concepts |", "| --- | --- | --- | --- | --- |"]
+    if explain:
+        t.append(f"| 1 | 1-{n} | does it | because | [[Concept - x]] |")
+    t += ["", "## Code and explanation", "", f"### Block 1: does it ({rng})", "", f"```{lang}", *shown, "```", ""]
+    if explain and depth == "map":
+        t.append("This block does it, see [[Concept - x]].")
+    if depth == "full":
+        t += ["| Line | Code | What happens | Real value |", "| --- | --- | --- | --- |"]
+        for i, line in enumerate(code_lines, 1):
+            if line.strip():
+                quoted = line.strip().replace("|", "\\|")
+                t.append(f"| {i} | `` {quoted} `` | it happens, [[Concept - x]] | none |")
+    return "\n".join(t) + "\n"
+
+
+def project(tmp, sources, notes):
+    """Write source files under tmp/src and notes under tmp/notes. Adds Start Here and one Concept note."""
+    src, nd = Path(tmp) / "src", Path(tmp) / "notes"
+    for rel, lines in sources.items():
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
+        (src / rel).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    nd.mkdir(parents=True, exist_ok=True)
+    src.mkdir(parents=True, exist_ok=True)
+    for name, text in notes.items():
+        (nd / f"{name}.md").write_text(text, encoding="utf-8")
+    links = " ".join(f"[[{name}]]" for name in notes)
+    (nd / "P - Start Here.md").write_text(f"---\ntype: start\n---\n# P\n{links} [[Concept - x]]\n", encoding="utf-8")
+    (nd / "Concept - x.md").write_text("---\ntype: concept\n---\n# Concept - x\nA thing.\n", encoding="utf-8")
+    return src, nd
+
+
+class CheckNotes(unittest.TestCase):
+    def test_good_note_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1", "", "y = 2"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+
+    def test_scope_dot_and_absolute_still_report_missing(self):  # Codex round 1, finding 1
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {})
+            for scope in (".", str(src), str(src / "a.py")):
+                code_, out = run(CHECK, "--notes", nd, "--source", src, "--scope", scope)
+                self.assertEqual(code_, 1, f"scope {scope}: {out}")
+                self.assertIn("MISSING a.py", out)
+
+    def test_scope_outside_source_is_refused(self):  # finding 1
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {})
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--scope", Path(tmp) / "notes")
+            self.assertNotEqual(code_, 0, out)
+
+    def test_other_source_formats_count(self):  # finding 2
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"App.vue": ["<template></template>"], "main.dart": ["void main() {}"]}, {})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("MISSING App.vue", out)
+            self.assertIn("MISSING main.dart", out)
+
+    def test_unknown_file_kinds_are_reported(self):  # finding 2
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"], "rules.xyzlang": ["rule one"]},
+                              {"P file - a.py": file_note("a.py", ["x = 1"])})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertIn(".xyzlang", out)
+
+    def test_map_depth_needs_explanations(self):  # finding 3
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code, depth="map", explain=False)})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("FAIL", out)
+
+    def test_map_depth_with_explanations_passes(self):  # finding 3
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code, depth="map")})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+
+    def test_heading_like_comment_in_code(self):  # finding 4
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["## Configuration", "x = 1", "### Block 9: not a block (lines 1-2)", "y = 2"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+
+    def test_masked_line_must_match_around_the_mask(self):  # finding 5
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ['token = "abc123"']
+            good = file_note("a.py", code, depth="map", code_in_note=['token = "[masked]"'])
+            bad = file_note("a.py", code, depth="map", code_in_note=['other = 5  # [masked]'])
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": good})
+            self.assertEqual(run(CHECK, "--notes", nd, "--source", src)[0], 0)
+            (nd / "P file - a.py.md").write_text(bad, encoding="utf-8")
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("differs from the source", out)
+
+    def test_graph_symbol_goes_to_the_right_file(self):  # finding 7
+        with tempfile.TemporaryDirectory() as tmp:
+            a, d = ["x = 1"], ["def load():", "    return 1"]
+            note_d = file_note("data.py", d).replace("does it (lines", "defines load (lines")
+            src, nd = project(tmp, {"a.py": a, "data.py": d},
+                              {"P file - a.py": file_note("a.py", a), "P file - data.py": note_d})
+            graph = Path(tmp) / "graph.json"
+            graph.write_text(json.dumps({"nodes": [
+                {"id": "f1", "label": "a.py", "source_file": "a.py"},
+                {"id": "f2", "label": "data.py", "source_file": "data.py"},
+                {"id": "l", "label": "load()", "source_file": "data.py", "_callable": True}], "links": []}))
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph)
+            self.assertEqual(code_, 0, out)
+
+    def test_unusable_graph_fails(self):  # finding 8
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            graph = Path(tmp) / "graph.json"
+            graph.write_text(json.dumps({"something": "else"}))
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph)
+            self.assertEqual(code_, 1, out)
+
+    def test_mechanism_note_goes_stale_with_its_sources(self):  # finding 9
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {})
+            git = lambda *a: subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                            capture_output=True, text=True)
+            if git("init", "-q").returncode != 0:
+                self.skipTest("git not available")
+            git("add", "-A"); git("commit", "-q", "-m", "one")
+            first = git("log", "-1", "--format=%h").stdout.strip()
+            (nd / "P file - a.py.md").write_text(file_note("a.py", code, extra_props=f"commit: {first}\n"), encoding="utf-8")
+            (nd / "P mechanism - m.md").write_text(
+                f"---\ntype: mechanism\nsources: a.py\ncommit: {first}\n---\n# m\n[[P file - a.py]]\n```mermaid\nsequenceDiagram\n```\n",
+                encoding="utf-8")
+            (nd / "P - Start Here.md").write_text("---\ntype: start\n---\n[[P file - a.py]] [[P mechanism - m]] [[Concept - x]]\n", encoding="utf-8")
+            self.assertNotIn("STALE", run(CHECK, "--notes", nd, "--source", src)[1])
+            (src / "a.py").write_text("x = 2\n", encoding="utf-8")
+            git("add", "-A"); git("commit", "-q", "-m", "two")
+            out = run(CHECK, "--notes", nd, "--source", src)[1]
+            self.assertIn("STALE P mechanism - m", out)
+            self.assertIn("STALE P file - a.py", out)
+
+
+class GraphPlan(unittest.TestCase):
+    def plan(self, tmp, nodes, links, *args):
+        graph = Path(tmp) / "graph.json"
+        graph.write_text(json.dumps({"nodes": nodes, "links": links}))
+        code_, out = run(PLAN, "--graph", graph, "--json", *args)
+        self.assertEqual(code_, 0, out)
+        return json.loads(out)
+
+    def test_cycle_comes_before_its_caller(self):  # finding 6
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = [{"id": n, "label": f"{n}.py", "source_file": f"{n}.py"} for n in ("a_entry", "b", "c")]
+            links = [{"source": "a_entry", "target": "b", "relation": "imports"},
+                     {"source": "b", "target": "c", "relation": "imports"},
+                     {"source": "c", "target": "b", "relation": "imports"}]
+            plan = self.plan(tmp, nodes, links)
+            self.assertEqual(plan["order"][-1], "a_entry.py", plan["order"])
+            self.assertIn(["b.py", "c.py"], plan["cycles"])
+
+    def test_scope_dot_is_everything(self):  # finding 1
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = [{"id": "a", "label": "a.py", "source_file": "a.py"}]
+            self.assertEqual(self.plan(tmp, nodes, [], "--scope", ".")["order"], ["a.py"])
+
+
+if __name__ == "__main__":
+    unittest.main()

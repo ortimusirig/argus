@@ -46,11 +46,12 @@ It fails when a source file in scope has no note, a non-blank line is in no bloc
 
 ## Status
 
-Version 2.2.0. Replaces the DOCX generator of version 1.
+Version 2.3.0. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
 | Note format and check script | Tried on three real files (105 lines): the check passes on the notes and fails on deliberately broken copies (11 kinds of defect) |
 | The skill text | Followed once by a fresh agent with no other context, on one 19-line file at depth `full`: it produced 30 notes that pass the check. A second fresh agent, without graphify, stopped at preflight as the skill requires. Their 30 reported gaps led to version 2.0.1. Not yet tried on a whole project or at depth `map` |
 | graphify step | Run for real with graphify 0.9.103 on a 42-file JavaScript and PowerShell project: 1,329 nodes, 3,529 edges, no LLM used. `scripts/graph_plan.py` turns the graph into the reading order, callers and callees, and mechanism candidates; the callers it gave for one file matched a text search exactly. The check's graph comparison passed on the real graph. Known limits seen: two shell and PowerShell installer scripts gave no symbols, and a `require` inside a function was not in the graph |
+| Codex review | Round 1 (2026-11-15): 2 P1 and 7 P2 findings, all confirmed and fixed in 2.3.0, each with a test in `scripts/test_scripts.py` (14 tests). Round 2 pending |
 | Bases view, canvas map | Left to obsidian-skills; not yet tried |

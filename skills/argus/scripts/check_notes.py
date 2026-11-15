@@ -12,20 +12,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-CODE_EXT = {
-    ".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".py", ".ps1", ".sh", ".go", ".rs", ".java", ".kt", ".cs",
-    ".rb", ".php", ".c", ".h", ".cpp", ".hpp", ".swift", ".sql", ".lua", ".r", ".scala",
-}
-SKIP_DIRS = {
-    "node_modules", ".git", "venv", ".venv", "__pycache__", "dist", "build", "out", "download", "graphify-out",
-    ".pytest_cache", "coverage", "vendor", ".claude",
-}
-TEST_DIRS = {"test", "tests", "__tests__", "spec"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import CODE_EXT, inventory, normalize_scopes, same_path  # noqa: E402
+
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 BLOCK = re.compile(r"^### Block (\w+)\b.*\(lines? (\d+)(?:-(\d+))?\)\s*$")
 ROW = re.compile(r"^\| (\d+)(?:-(\d+))? \|")
 FENCE = re.compile(r"^(`{3,})")
 LINK = re.compile(r"\[\[([^\]|#]+)")
+MASK = "[masked]"
 MISSING_SHOWN = 30
 
 fails, missing, stale, warns = [], [], [], []
@@ -46,34 +41,36 @@ def frontmatter(text):
     return props
 
 
-def section(text, heading):
-    """The text under a '## <heading...>' line, up to the next '## ' line. '' when absent."""
-    m = re.search(r"^## " + re.escape(heading) + r".*$", text, re.M)
-    if not m:
-        return ""
-    rest = text[m.end():]
-    nxt = re.search(r"^## ", rest, re.M)
-    return rest[: nxt.start()] if nxt else rest
+def fence_mask(lines):
+    """For each line: True when it is a fence line or inside a fence. A fence closes only on one at least as long."""
+    mask, fence = [], None
+    for line in lines:
+        m = FENCE.match(line)
+        if fence is None and m:
+            fence = len(m.group(1))
+            mask.append(True)
+        elif fence is not None:
+            mask.append(True)
+            if m and len(m.group(1)) >= fence and line.strip("`").strip() == "":
+                fence = None
+        else:
+            mask.append(False)
+    return mask
+
+
+def section(lines, mask, heading):
+    """The lines under a '## <heading...>' line that is outside every fence, up to the next such '## ' line."""
+    start = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## " + heading)), None)
+    if start is None:
+        return []
+    end = next((i for i in range(start + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
+    return [lines[i] for i in range(start + 1, end) if not mask[i]]
 
 
 def cells(row):
     """The cells of one table row. A | written as \\| stays inside its cell."""
     parts = re.split(r"(?<!\\)\|", row.strip())
     return [c.strip() for c in parts[1:-1]]
-
-
-def outside_fences(text):
-    """The lines of a note that are not inside a code fence. A fence closes only on a fence at least as long."""
-    kept, fence = [], None
-    for number, line in enumerate(text.split("\n"), 1):
-        m = FENCE.match(line)
-        if fence is None and m:
-            fence = len(m.group(1))
-        elif fence is not None and m and len(m.group(1)) >= fence and line.strip("`").strip() == "":
-            fence = None
-        elif fence is None:
-            kept.append((number, line))
-    return kept
 
 
 def code_excerpt(cell):
@@ -84,22 +81,28 @@ def code_excerpt(cell):
     return m.group(1).replace("\\|", "|").split("…")[0].strip()
 
 
-def source_files(root, include_tests, scopes):
-    for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in CODE_EXT:
-            continue
-        rel = p.relative_to(root)
-        parts = set(rel.parts[:-1])
-        if parts & SKIP_DIRS or (not include_tests and parts & TEST_DIRS):
-            continue
-        rel = rel.as_posix()
-        if scopes and not any(rel == s or rel.startswith(s + "/") for s in scopes):
-            continue
-        yield rel
+def same_line(got, real):
+    """A copied line equals the source line. With [masked] in it, everything around each mask must still match."""
+    if got == real:
+        return True
+    if MASK not in got:
+        return False
+    parts = got.split(MASK)
+    if not "".join(parts).strip():
+        return False
+    return re.fullmatch(".+?".join(re.escape(p) for p in parts), real) is not None
+
+
+def git(root, *args):
+    try:
+        out = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
 
 
 def check_file_note(name, text, props, root):
-    src = props.get("source", "")
+    src = props.get("source", "").replace("\\", "/")
     path = root / src
     if not src or not path.is_file():
         fails.append(f"{name}: property 'source' names no file under the source root: '{src}'")
@@ -111,37 +114,46 @@ def check_file_note(name, text, props, root):
     depth = props.get("depth", "")
     if depth not in ("map", "full"):
         fails.append(f"{name}: property 'depth' must be map or full, is '{depth}'")
+    note = text.split("\n")
+    mask = fence_mask(note)
 
     # Level 1: one table row per lens question, with an answer.
-    lens_rows = [cells(r) for r in section(text, "Level 1").splitlines() if r.startswith("|")]
+    lens_rows = [cells(r) for r in section(note, mask, "Level 1") if r.startswith("|")]
     for label in LENS:
         row = next((c for c in lens_rows if c and label in c[0].lower()), None)
         if row is None:
             fails.append(f"{name}: lens row missing in Level 1: '{label}'")
         elif len(row) < 2 or not row[1]:
             fails.append(f"{name}: lens row '{label}' has no answer")
-    # Level 2: every block row names its concepts in the last cell.
-    for row in section(text, "Level 2").splitlines():
-        if re.match(r"^\| \d", row):
-            c = cells(row)
-            if not c or "[[" not in c[-1]:
-                fails.append(f"{name}: Level 2 row names no concept in its last cell: {row[:60]}")
 
-    # Blocks: heading, code fence, line rows.
-    note_lines = text.split("\n")
-    starts = [i for i, line in enumerate(note_lines) if BLOCK.match(line)]
+    # Blocks: headings outside fences only.
+    starts = [i for i, line in enumerate(note) if not mask[i] and BLOCK.match(line)]
     if not starts:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
+    block_ids = [BLOCK.match(note[i]).group(1) for i in starts]
+
+    # Level 2: one row per block, each naming its concepts in the last cell.
+    level2 = {}
+    for row in section(note, mask, "Level 2"):
+        if re.match(r"^\| \w", row) and not row.startswith("| #") and not row.startswith("| ---"):
+            c = cells(row)
+            if c and re.fullmatch(r"\d\w*", c[0]):
+                level2[c[0]] = c
+    for block_id in block_ids:
+        row = level2.get(block_id)
+        if row is None:
+            fails.append(f"{name}: block {block_id} has no row in the Level 2 table")
+        elif "[[" not in row[-1]:
+            fails.append(f"{name}: Level 2 row {block_id} names no concept in its last cell")
+    for extra in sorted(set(level2) - set(block_ids)):
+        fails.append(f"{name}: Level 2 row {extra} has no '### Block {extra}' section")
+
     in_block, in_row = {}, {}
     for n, start in enumerate(starts):
-        m = BLOCK.match(note_lines[start])
+        m = BLOCK.match(note[start])
         block_id, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
-        end = starts[n + 1] if n + 1 < len(starts) else len(note_lines)
-        for i in range(start + 1, end):
-            if note_lines[i].startswith("## "):
-                end = i
-                break
-        body = note_lines[start + 1:end]
+        end = starts[n + 1] if n + 1 < len(starts) else len(note)
+        end = next((i for i in range(start + 1, end) if not mask[i] and note[i].startswith("## ")), end)
         if a < 1 or b > len(lines) or a > b:
             fails.append(f"{name}: block {block_id} range {a}-{b} is outside the file (1-{len(lines)})")
             continue
@@ -149,29 +161,26 @@ def check_file_note(name, text, props, root):
             if ln in in_block:
                 fails.append(f"{name}: line {ln} is in block {in_block[ln]} and block {block_id}")
             in_block[ln] = block_id
-        # The first code fence of the block.
-        code, fence, i = None, None, 0
-        while i < len(body):
-            fm = FENCE.match(body[i])
-            if fm and fence is None:
-                fence, code = fm.group(1), []
-            elif fence is not None and body[i].startswith(fence):
-                break
-            elif fence is not None:
-                code.append(body[i])
-            i += 1
-        after = body[i + 1:] if code is not None else body
-        if code is None:
+        # The first code fence of the block, and the explanation after it.
+        first = next((i for i in range(start + 1, end) if mask[i]), None)
+        if first is None:
             fails.append(f"{name}: block {block_id} has no code fence")
+            after = [note[i] for i in range(start + 1, end)]
         else:
+            last = next((i for i in range(first, end) if not mask[i]), end)
+            code = note[first + 1:last - 1]
             want = lines[a - 1:b]
             if len(code) != len(want):
                 fails.append(f"{name}: block {block_id} code has {len(code)} lines, source lines {a}-{b} are {len(want)}")
             else:
                 for offset, (got, real) in enumerate(zip(code, want)):
-                    if got != real and "[masked]" not in got:
+                    if not same_line(got, real):
                         fails.append(f"{name}: block {block_id} code differs from the source at line {a + offset}")
                         break
+            after = [note[i] for i in range(last, end) if not mask[i]]
+        if depth == "map":
+            if not any(row.strip() and not row.startswith(("|", "#")) for row in after):
+                fails.append(f"{name}: block {block_id} has no explanation after its code")
         if depth == "full":
             for row in after:
                 rm = ROW.match(row)
@@ -196,7 +205,7 @@ def check_file_note(name, text, props, root):
                 quoted = code_excerpt(c[1])
                 if quoted is None:
                     fails.append(f"{name}: row {label} quotes no code in its Code cell")
-                elif r1 >= 1 and r2 <= len(lines) and "[masked]" not in quoted:
+                elif r1 >= 1 and r2 <= len(lines) and MASK not in quoted:
                     if quoted and not any(quoted in lines[k - 1] for k in range(r1, r2 + 1)):
                         fails.append(f"{name}: row {label} quotes code that is not on that line: {quoted[:50]}")
     uncovered = sorted(nonblank - set(in_block))
@@ -216,22 +225,33 @@ def check_file_note(name, text, props, root):
     return src
 
 
-def check_stale(name, props, root):
-    src, noted = props.get("source", ""), props.get("commit", "")
+def check_stale(name, props, root, kind):
+    """A File note is stale when its source has a newer commit. A Mechanism or Flow note is stale when any of the
+    files in its 'sources' property changed after the note's 'commit'."""
+    noted = props.get("commit", "")
+    if kind == "file":
+        files = [props.get("source", "").replace("\\", "/")]
+    else:
+        files = [f.strip().replace("\\", "/") for f in props.get("sources", "").split(",") if f.strip()]
+        if not files:
+            warns.append(f"{name}: no 'sources' property, so a change to the code it describes cannot be detected")
+            return
     if not noted:
         warns.append(f"{name}: no 'commit' property, so a change to the source cannot be detected")
         return
-    try:
-        out = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%H", "--", src],
-                             capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as error:
-        warns.append(f"{name}: git could not be run, stale check skipped: {error}")
+    if kind == "file":
+        now = git(root, "log", "-1", "--format=%H", "--", files[0])
+        if not now:
+            warns.append(f"{name}: git has no history for {files[0]}, stale check skipped")
+        elif not now.startswith(noted):
+            stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}")
         return
-    now = out.stdout.strip()
-    if out.returncode != 0 or not now:
-        warns.append(f"{name}: git has no history for {src}, stale check skipped")
-    elif not now.startswith(noted):
-        stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}")
+    if git(root, "rev-parse", "--verify", "--quiet", noted + "^{commit}") is None:
+        warns.append(f"{name}: commit {noted} is not in the source's history, stale check skipped")
+        return
+    newer = git(root, "rev-list", "-1", f"{noted}..HEAD", "--", *files)
+    if newer:
+        stale.append(f"{name}: written at commit {noted}; {', '.join(files)} changed since (now {newer[:8]})")
 
 
 def check_graph(graph_path, noted, prose_by_source):
@@ -243,8 +263,8 @@ def check_graph(graph_path, noted, prose_by_source):
         fails.append(f"graph: cannot read {graph_path}: {error}")
         return
     nodes = data.get("nodes") if isinstance(data, dict) else data
-    if not isinstance(nodes, list):
-        warns.append("graph: no list of nodes found; graph check skipped")
+    if not isinstance(nodes, list) or not any(isinstance(n, dict) and n.get("source_file") for n in nodes):
+        fails.append(f"graph: {graph_path} has no list of nodes with a source_file; the graph check could not run")
         return
     files_in_graph, compared = set(), 0
     for node in nodes:
@@ -256,20 +276,22 @@ def check_graph(graph_path, noted, prose_by_source):
             continue
         where = where.replace("\\", "/")
         files_in_graph.add(where)
-        kind = str(node.get("type") or node.get("kind") or node.get("file_type") or "").lower()
-        if kind in ("file", "module", "document") or Path(label).suffix.lower() in CODE_EXT:
+        kind = str(node.get("type") or node.get("kind") or "").lower()
+        if node.get("external") or kind in ("file", "module", "document", "external"):
             continue
-        match = next((s for s in prose_by_source if where.endswith(s) or s.endswith(where)), None)
+        if Path(label).suffix.lower() in CODE_EXT:
+            continue
+        match = next((s for s in prose_by_source if same_path(where, s)), None)
         if not match:
             continue
         short = re.split(r"[.:#/]", label.split("(")[0].strip())[-1]
-        if not re.fullmatch(r"[A-Za-z_$][\w$]*", short or ""):
+        if not re.fullmatch(r"[A-Za-z_$][\w$-]*", short or ""):
             continue
         compared += 1
-        if not re.search(r"(?<![\w$])" + re.escape(short) + r"(?![\w$])", prose_by_source[match]):
+        if not re.search(r"(?<![\w$-])" + re.escape(short) + r"(?![\w$-])", prose_by_source[match]):
             fails.append(f"graph: '{short}' is in {match} but its note never names it outside the copied code")
     for s in noted:
-        if not any(f.endswith(s) or s.endswith(f) for f in files_in_graph):
+        if not any(same_path(f, s) for f in files_in_graph):
             warns.append(f"graph: {s} is not in the graph (not parsed?); find its callers by text search and say so")
     print(f"INFO graph: {len(nodes)} nodes, {compared} functions or classes compared with notes")
 
@@ -280,7 +302,7 @@ def main():
     ap.add_argument("--source", required=True, help="source root; each File note's 'source' property is relative to it")
     ap.add_argument("--scope", action="append", default=[],
                     help="a folder or file under the source root that is in scope; repeatable. Only source files "
-                         "in scope count as MISSING. Default: the whole source root")
+                         "in scope count as MISSING. Default, and '.': the whole source root")
     ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes. Default: --notes, so "
                                     "give it whenever Concept or Library notes are shared with other folders")
     ap.add_argument("--graph", help="graph JSON from graphify, to compare its functions with the notes")
@@ -292,10 +314,7 @@ def main():
     for folder in (notes_dir, root, vault):
         if not folder.is_dir():
             sys.exit(f"not a folder: {folder}")
-    scopes = [s.replace("\\", "/").strip("/") for s in args.scope]
-    for s in scopes:
-        if not (root / s).exists():
-            sys.exit(f"--scope is not under the source root: {s}")
+    scopes = normalize_scopes(root, args.scope)
 
     notes = {}
     for p in sorted(notes_dir.rglob("*.md")):
@@ -314,15 +333,19 @@ def main():
         kinds[name] = props.get("type", "")
         if not kinds[name]:
             warns.append(f"{name}: no 'type' property")
-        prose = outside_fences(text)
+        lines = text.split("\n")
+        mask = fence_mask(lines)
+        prose = [(i + 1, line) for i, line in enumerate(lines) if not mask[i]]
         if kinds[name] == "file":
             src = check_file_note(name, text, props, root)
             if src:
                 noted.add(src)
                 prose_by_source[src] = "\n".join(line for _, line in prose)
-                check_stale(name, props, root)
-        if kinds[name] == "mechanism" and not re.search(r"^`{3,}mermaid\s*$", text, re.M):
-            fails.append(f"{name}: a Mechanism note needs a mermaid sequence diagram")
+                check_stale(name, props, root, "file")
+        if kinds[name] in ("mechanism", "flow"):
+            if not any(mask[i] and re.match(r"^`{3,}mermaid\s*$", line) for i, line in enumerate(lines)):
+                fails.append(f"{name}: a {kinds[name].capitalize()} note needs a mermaid diagram")
+            check_stale(name, props, root, kinds[name])
         for number, line in prose:
             for target in LINK.findall(line):
                 target = target.rstrip("\\").strip()
@@ -338,7 +361,12 @@ def main():
         if name not in linked and kinds.get(name) != "start" and not name.endswith("Start Here"):
             fails.append(f"{name}: no note links to it")
 
-    missing.extend(src for src in source_files(root, args.include_tests, scopes) if src not in noted)
+    code_files, unknown = inventory(root, args.include_tests, scopes)
+    missing.extend(src for src in code_files if src not in noted)
+    if unknown:
+        kinds_text = ", ".join(f"{ext} ({count})" for ext, count in sorted(unknown.items()))
+        warns.append(f"files in scope of a kind this check does not know, not counted as code: {kinds_text}. "
+                     f"If they hold code, they need File notes too; say so in the report")
     if args.graph:
         check_graph(args.graph, noted, prose_by_source)
 
