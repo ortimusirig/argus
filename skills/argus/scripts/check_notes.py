@@ -457,6 +457,9 @@ def main():
     witness("options", json.dumps({"scope": scopes, "include_tests": args.include_tests,
                                    "allow_missing": args.allow_missing, "graph": args.graph or None,
                                    "notes": str(notes_dir), "source": str(root), "vault": str(vault)}, sort_keys=True))
+    # The Python that runs the check: its version and the settings that can change how a file is parsed.
+    witness("runtime", sys.version, sys.platform, sys.getdefaultencoding(),
+            getattr(sys, "get_int_max_str_digits", lambda: "no limit")(), tuple(sys.flags))
     for script in ("check_notes.py", "_common.py"):
         witness("checker", script, hashlib.sha256((Path(__file__).resolve().parent / script).read_bytes()).hexdigest())
 

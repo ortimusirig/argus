@@ -8,10 +8,10 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.9.0 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
-| In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 10 and in Codex round 10. Findings per round so far: 8, 4, 4, 2, 1, 2, 1, 1, 1 (round 9: no P1, one P2), all accepted; since round 2 they are all about when a stored check result may still be shown as "checked". Skill: Codex round 4 is still owed |
+| Released | 2.9.1 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| In progress | Extension: the design stage is CLOSED (design note revision 11 on branch `vscode-extension`, worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`; ten Codex rounds, findings 8, 4, 4, 2, 1, 2, 1, 1, 1, 1; the last P2 fixed in skill 2.9.1 and to be confirmed in the plan review). The plan note (`docs/plans/` on the branch) is being written. Skill: Codex round 4 on the skill itself is still owed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
+| Next step | 1. Plan note for the extension on the branch, then Codex review of it (`xreview.sh plan <plan note> <outdir> --source <design note> --source skills/argus/scripts/check_notes.py --source skills/argus/scripts/_common.py`). 2. Build on the branch, core first (`vscode/src/core/`), tests next to the code. 3. Codex round 4 on the skill when the Codex slot is free |
 | Stop rule | The owner (2026-11-15, latest word): continue until all features are complete or plan usage reaches 30% (weekly, all models; first 40%, then 20%, then 30%). It was 11% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
