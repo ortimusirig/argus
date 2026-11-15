@@ -8,7 +8,7 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.8.4 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| Released | 2.9.0 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
 | In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 10 and in Codex round 10. Findings per round so far: 8, 4, 4, 2, 1, 2, 1, 1, 1 (round 9: no P1, one P2), all accepted; since round 2 they are all about when a stored check result may still be shown as "checked". Skill: Codex round 4 is still owed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
@@ -116,6 +116,7 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | 2026-11-15 | The same notes broken in 11 ways | Every defect reported, exit code 1 |
 | 2026-11-15 | Fresh agent, skill only, graphify absent | Stopped at preflight, wrote nothing |
 | 2026-11-15 | Fresh agent, skill only, hand-made graph, one 19-line file, depth `full` | 30 notes, check passed first run; 30 gaps reported, fixed in 2.0.1 |
+| 2026-11-15 | Fresh agent runs skill 2.8.1 end to end on the helper's `keystore` folder (5 files, 613 lines, one of them PowerShell), depth `map`, real graphify, into the owner's vault | 30 new notes (27,400 words), 23 existing notes extended, check passed at the first run (55 notes, graph covers 7 of 7), tour rebuilt with 96 steps, source untouched, 15 minutes. 18 gaps reported; fixed in 2.9.0. Not seen: the notes in Obsidian, the tour in VS Code |
 | 2026-11-15 | Fresh agent probes the scripts adversarially (52 probes) | 20 findings and 7 minor ones; check script rewritten; 55 tests pass; the real example notes still pass with the real graph |
 | 2026-11-15 | graphify 0.9.103 on a copy of the helper code (42 files) | 1,329 nodes, 3,529 edges, no LLM; callers of one file match a text search; `install.ps1` gave no symbols; a `require` inside a function is missing from the graph |
 
@@ -195,7 +196,7 @@ Round 1 findings, in short:
 
 | # | Item | Source |
 |---|---|---|
-| 1 | Run the skill on the whole helper build at depth `map` (42 files, about 20,900 lines) and record what breaks | Untested scale |
+| 1 | Run the skill on the whole helper build at depth `map`: 7 of 42 files are done (2 at `full`, 5 at `map`). Estimate from the measured run: about 500,000 words of File notes and about 40 times the keystore run (roughly 10 hours of agent time). Large: the owner decides whether and when | Measured 2026-11-15 |
 | 2 | Open the example notes in Obsidian: tables, Mermaid diagrams, links | Never viewed rendered |
 | 3 | `SKILL.md` is about 2,400 words; the skill-writing guidance aims for far less. Move detail into `note-templates.md` or a rules file | Size |
 | 4 | Bases view and canvas map through obsidian-skills | Not tried |

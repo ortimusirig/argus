@@ -79,6 +79,7 @@ def main():
                     help="folder or file to limit the plan to, relative to --source; repeatable")
     ap.add_argument("--include-tests", action="store_true", help="tests count as code too")
     ap.add_argument("--json", action="store_true", help="print the plan as JSON")
+    ap.add_argument("--out", help="write the plan as JSON to this file (for make_tour.py --plan) and print the text as usual")
     args = ap.parse_args()
     try:
         data = json.loads(read_text(args.graph)[0])
@@ -171,6 +172,8 @@ def main():
         "no_symbols": no_symbols,
         "graph_paths_not_on_disk": unresolved,
     }
+    if args.out:
+        Path(args.out).write_text(json.dumps(plan, indent=2), encoding="utf-8")
     if args.json:
         json.dump(plan, sys.stdout, indent=2)
         return
