@@ -2,16 +2,16 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, version 2.5.0 (fixes for Codex round 3).
+Last updated: 2026-11-15, version 2.6.0 (check script rewritten after the own probe).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.5.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
-| In progress | Own adversarial probe of the scripts (a fresh agent), then Codex review round 4 of the skill. See "Codex review record". The VS Code extension design is drafted on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`), not yet reviewed |
+| Released | 2.6.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
+| In progress | Skill: Codex review round 4 comes next (after the probe fixes of 2.6.0). Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) has had two Codex rounds (8 findings, then 4); revision 3 answers round 2 and goes back to Codex |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Fix what the adversarial probe confirms (each with a test), commit, then Codex round 4; repeat until clean. 2. Codex review of the extension design note. 3. Plan note, Codex review. 4. Build on branch `vscode-extension` |
+| Next step | 1. Codex round 3 on the extension design, then round 4 on the skill (one Codex run at a time). 2. When the design is clean: plan note (`docs/plans/`), Codex review. 3. Build on branch `vscode-extension`, core first (`vscode/src/core/`), tests next to the code |
 | Stop rule | The owner (2026-11-15): continue until all features are complete or plan usage reaches 20% (weekly, all models). It was 8% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
@@ -114,6 +114,7 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | 2026-11-15 | The same notes broken in 11 ways | Every defect reported, exit code 1 |
 | 2026-11-15 | Fresh agent, skill only, graphify absent | Stopped at preflight, wrote nothing |
 | 2026-11-15 | Fresh agent, skill only, hand-made graph, one 19-line file, depth `full` | 30 notes, check passed first run; 30 gaps reported, fixed in 2.0.1 |
+| 2026-11-15 | Fresh agent probes the scripts adversarially (52 probes) | 20 findings and 7 minor ones; check script rewritten; 55 tests pass; the real example notes still pass with the real graph |
 | 2026-11-15 | graphify 0.9.103 on a copy of the helper code (42 files) | 1,329 nodes, 3,529 edges, no LLM; callers of one file match a text search; `install.ps1` gave no symbols; a `require` inside a function is missing from the graph |
 
 Not yet tested: a whole project, depth `map`, the notes rendered in Obsidian, more than one agent run per case.
@@ -131,6 +132,22 @@ Run with `bash ~/.claude/skills/cross-model-review/scripts/xreview.sh plan <SKIL
 | 3 | `SKILL.md` and the repository at `633ec6a` (2.4.0) | P0=0 P1=3 P2=5 P3=0; coverage complete | All 8 confirmed and fixed in 2.5.0 with tests |
 
 Trend: 9, 8, 8 findings. The review skill says to step back after three rounds without a downward trend. Change of approach (2026-11-15): before each further Codex round, a fresh agent probes the scripts adversarially with probes it must actually run, and its confirmed findings are fixed first. The Codex rounds had each found a new layer of the same kinds of hole (false pass, false fail, files missing from coverage, paths and letter case, Markdown parsing); a broad own probe is cheaper than one Codex round per layer.
+
+Own adversarial probe (2026-11-15, on 2.5.0): a fresh agent with no other context wrote and ran 52 probes (scripts kept in the session's scratch folder, not in the repository). 20 findings and 7 minor ones, all confirmed. Instead of 27 more patches, `check_notes.py` was rewritten around a clearer model, and `_common.py` and `graph_plan.py` were reworked (2.6.0). What changed:
+
+| Area | Before | Now |
+|---|---|---|
+| Masks | Any line could be masked; a note with no real code could pass | Every masked line must be listed in `masked_lines`; at most a quarter of a file; what a mask hides may not appear elsewhere in the note; masked lines are printed for a person to confirm |
+| Code cell of a line row | Any piece of any line in the range | The row's first non-blank line, whole or its start followed by `…` |
+| Source encodings | UTF-8 only: a UTF-16, BOM or Windows-1252 file could never pass | Read as an editor shows them; notes with a BOM too |
+| Graph paths | A leading folder in graph paths could skip files silently | The leading folders are dropped once for the whole graph, then exact match; a graph that covers no explained file fails; the result line says how many it covers |
+| Tables | Only `\| 1 \|` with single spaces | Any spacing |
+| Links | `[[` inside code read as a link; canvas links failed | Code spans are ignored; links to other file kinds and with folders resolve; a note linking only to itself is an orphan |
+| Tests and dependencies | Exact lower-case folder names only | Any letter case; test files by name; all reported |
+| Unenforced rules | Lens on Mechanism, Library, Start Here; Trace and questions at `full`; empty diagram | Checked |
+| Output on Windows | A non-Latin character in a message stopped the script | UTF-8 output |
+| Scope without code | PASS | FAIL |
+| Plan script | Missed `re_exports`, `inherits` and similar; ambiguous edges counted as certain; a scope matching nothing was silent | Fixed |
 
 Round 3 findings, in short:
 

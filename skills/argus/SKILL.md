@@ -49,7 +49,7 @@ In a named-file run, files without a note appear in Start Here, Map and Mechanis
 
 ## The lens
 
-Every project, file, mechanism and library gets these rows. Concept notes use the shorter six-row form in `note-templates.md`.
+Every project, file, mechanism and library gets these rows, each as a table row of its own with an answer; the check looks for them in File, Mechanism, Library and Start Here notes. Concept notes use the shorter six-row form in `note-templates.md`.
 
 | Row | Question |
 | --- | --- |
@@ -75,7 +75,7 @@ Do the steps in order. Do not write notes before step 4 is done.
 7. **Write the End-to-End Flow note** when the depth is `full <flow>` or the user asks. REQUIRED SUB-SKILL when installed: `archify`, for tracing from the real entry point to the real result.
 8. **Write Start Here, Map and Glossary last**, from the notes below them. When the `obsidian-bases` skill is installed, use it for a view of all File notes by `status` and `depth`; otherwise keep a table in Start Here. When `obsidian-markdown` or `json-canvas` are installed, use them for syntax and for a canvas map.
 9. **Run the check.** `python -B <this skill's folder>/scripts/check_notes.py --notes <folder> --source <root> --scope <what is in scope> --graph <graph JSON>`. The graph is part of the check: `--no-graph` exists only for a run where graphify could not parse any file in scope, and the result line then says `PASS WITHOUT THE GRAPH CHECK`, which you report as such. Add `--include-tests` when the user asked for tests to be explained. Add `--vault <vault root>` whenever the notes folder is inside a vault: without it, links to shared Concept and Library notes elsewhere in the vault are reported as broken. `--help` lists the options. `--scope .` means the whole source root. A WARN about "folders left out" lists the dependency, build, tool and test folders it skipped and how many code files each holds: when the user asked for code in one of them, name it with `--scope` (tests: `--include-tests`). A WARN about files "of a kind this check does not know" names file types it did not count as code: look at them, and when they hold code, explain them too and say so in the report. Fix every FAIL and MISSING and run it again. Do not report success while the last line says NOT PASSED. Do not use `--allow-missing` to get a pass; narrow `--scope` to what the user asked for.
-10. **Report.** Notes added, updated, removed; files still without a note; files the graph did not parse; cells left "not recorded"; the check's last line.
+10. **Report.** Notes added, updated, removed; files still without a note; files the graph did not parse; every masked line the check listed; the folders and file kinds the check left out or did not count as code; cells left "not recorded"; the check's last line, word for word.
 
 ## Later runs
 
@@ -121,14 +121,15 @@ When unsure whether a reader who has never programmed knows a word, explain it.
 | No guessing | When the code, the design notes and the history do not say, write "not recorded" and where you looked |
 | Real values | Each value in a line table or trace says where it comes from. A value from running the real code with a made-up input is given plainly, with the run described in the Trace section. A value written in the source or in a test is given with "from the code" and the place. A value that follows from the language's rules is given with "by reading". Anything else is "not run". A line that produces no value is "none" |
 | Running code | Only when the project's rules allow it, never with real credentials, never anything that writes, installs, builds or calls a network |
-| No secrets | Never copy a token, key or password value. Skip `.env` and key files. A source line that holds one is copied with only the secret value replaced by `[masked]`; everything else on the line stays exactly as in the source, and the check compares it. When a whole line is secret (an inner line of a key that spans lines), write the line as `[masked]` alone and list its line number in the note's `masked_lines` property; the check accepts a fully masked line only there, and prints how many there are |
+| No secrets | Never copy a token, key or password value. Skip `.env` and key files; a file that is mostly secrets is left out, not explained. On a source line that holds a secret, replace only the secret value with `[masked]`; a whole secret line (an inner line of a key that spans lines) becomes `[masked]` alone. List every line that holds a mask in the note's `masked_lines` property. The check enforces: every masked line is listed; the text around a mask equals the source; what a mask hides appears nowhere else in the note; at most a quarter of a file's lines are masked (two are always allowed). It prints the masked lines; name them in your report so a person can confirm each hides a secret and nothing else |
 | No new destination for the code | You, the agent running this skill, read the code; the person chose you and your provider knowing that. The skill adds no other destination: no upload, no web service, no other model or agent, no graphify command other than `update`. When the code belongs to a client or carries a rule about where it may be processed, ask the user before reading it |
 | Read-only | Never change the source or its git state. Never change a note that does not carry `written_by: argus` in its properties, whatever its name. The check reads only notes with that property, so a person's own notes in the same folder can neither fail it nor be counted as explanations |
 | Compact | Tables first. A table cell holds at most about 25 words; anything longer goes into a linked note. A line too rich for one cell gets a small extra table directly under the block's line table, one row per part of the line; its rows must not start with a number |
 | Link at each use | Every block names its concepts as `[[links]]`, in every file, not only at first use: a reader may open any note first |
 | Examples from this project | Concept notes use the smallest real example from the code in scope, with file and line |
-| Unique names | `[[links]]` resolve by name. Use the prefixes in `note-templates.md` |
-| Tests | Not explained unless the user asks |
+| Unique names | `[[links]]` resolve by name. Use the prefixes in `note-templates.md`. In a note's name, write `-` for each of `[ ] # ^ \|`, which a link cannot hold |
+| Nothing hidden | No Obsidian comments (`%% ... %%`) in a note: the reader would not see what is inside |
+| Tests | Not explained unless the user asks. Test folders (`test`, `tests`, `__tests__`, `spec`) and files named as tests (`*_test.*`, `test_*.*`, `*.test.*`, `*.spec.*`) are left out, and the check says how many |
 
 ## Common mistakes
 
@@ -142,7 +143,7 @@ When unsure whether a reader who has never programmed knows a word, explain it.
 | `\|` inside code in a table cell | Write `\|` |
 | A backtick inside code in a table cell | Wrap the code in double backticks with a space inside each end |
 | A link with an alias inside a table (`[[Name\|shown text]]`) | Use the plain `[[Name]]` in tables |
-| A line row whose Code cell paraphrases the line | Quote the line, or its start followed by `…`; the check compares it with the source |
+| A line row whose Code cell paraphrases the line, or quotes a piece from its middle | Quote the line whole, or its start followed by `…`. A row for several lines quotes the first of them. The check compares it with the source |
 | Passing the check with `--allow-missing` | Narrow `--scope` to what was asked for |
 | Reporting "done" without running the check | Step 9 is not optional |
 

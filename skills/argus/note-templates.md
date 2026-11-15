@@ -13,6 +13,7 @@ One template per note type. Text in `<angle brackets>` is replaced. Everything e
 | File | `Files/` | `<Project> file - <file name>`. When another file of the same project has that file name, or the name is a generic one (`index`, `main`, `utils`, `common`, `__init__`), put the parent folder in front with ` - ` in place of `/`: `<Project> file - setup - common.js` |
 | Mechanism | `Mechanisms/` | `<Project> mechanism - <what it does>` |
 | Concept | `Concepts/` | `Concept - <term>` |
+| any | | In every note name, write `-` for each of `[ ] # ^ \|` (a file `pages/[id].tsx` gives `<Project> file - pages - -id-.tsx`) |
 | Library | `Libraries/` | `Library - <name>` |
 
 Concept and Library notes are shared by every project in the vault. Before writing one, look for an existing note of that name:
@@ -25,7 +26,7 @@ Concept and Library notes are shared by every project in the vault. Before writi
 
 ## Properties
 
-Every note starts with properties. The check reads `type`, `source`, `commit` and `depth`.
+Every note starts with properties. The check reads `written_by`, `type`, `source`, `commit`, `depth`, `masked_lines` and, on Mechanism and Flow notes, `sources`.
 
 ```markdown
 ---
@@ -120,13 +121,15 @@ Rules the check enforces on a File note:
 | Block heading | `### Block <id>: <purpose> (lines a-b)` or `(line a)`. The id is a number, or a number and a letter for sub-blocks |
 | Code fence | The first fence after the heading holds exactly source lines a to b |
 | Coverage | The block ranges together contain every non-blank line once |
-| Line tables (`depth: full`) | Inside each block, the rows that start with a line number or range cover every non-blank line of that block once. Each has four cells; "What happens" and "Real value" are not empty; the Code cell quotes text that is on that line |
+| Line tables (`depth: full`) | Inside each block, the rows whose first cell is a line number or range cover every non-blank line of that block once. Each has four cells; "What happens" and "Real value" are not empty. The Code cell quotes the row's first non-blank line: whole, or its start followed by `…` |
+| Sections (`depth: full`) | `## Trace` and `## Check your understanding` are present |
 | Lens | All eight lens rows are present in Level 1, each with an answer |
 | Concepts | Every row of the Level 2 table has at least one `[[link]]` in its last cell |
 | Graph | Every function or class the graph places in the file is named in the note's own words, outside the copied code (a block purpose or a row) |
-| Masked secrets | On a code line that contains `[masked]`, everything around each `[masked]` must equal the source line; only the secret value itself may be replaced. A line that is `[masked]` alone must be listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`) |
+| Masked secrets | Every line with `[masked]` is listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`). Around each mask the line equals the source; a line may be `[masked]` alone. What a mask hides appears nowhere else in the note. At most a quarter of the file's non-blank lines are masked (two always allowed) |
 | Empty file | A source with no non-blank line: lens table, "The file is empty." under Level 2, no block |
 | Ownership | Only notes with `written_by: argus` are read by the check |
+| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. No note holds an Obsidian comment (`%%`). Every note is linked from another note |
 | Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
 ## Concept note
