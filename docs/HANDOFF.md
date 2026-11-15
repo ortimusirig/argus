@@ -8,7 +8,7 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.7.1 on `main` (`make_tour.py` for CodeTour; fingerprint counts every note file; 64 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| Released | 2.8.0 on `main` (`setup_tools.py` installs graphify and CodeTour; the tour goes into the project's `.tours`; 67 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
 | In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 4 and in Codex round 4. Rounds so far: 8, 4, 4 findings, all accepted; the note records each round at its end. Skill: Codex round 4 is still owed (after 2.6.0 and 2.6.1) |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
@@ -90,7 +90,8 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 |---|---|
 | This repository | `C:\dev\argus`, remote `https://github.com/ortimusirig/code-explainer.git`, branch `main`, private |
 | The skill | `skills/argus/` (`SKILL.md`, `note-templates.md`, `scripts/`) |
-| graphify | Version 0.9.103 in its own environment: `C:\Users\aiuser4\.venvs\graphify\Scripts\graphify.exe`. Not on PATH |
+| graphify | Version 0.9.103 in its own environment: `C:\Users\aiuser4\.venvs\graphify\Scripts\graphify.exe`. Not on PATH; remembered in `~/.argus/config.json`, and `setup_tools.py` prints it. On a new computer `setup_tools.py --install` puts graphify in `~/.argus/venv` |
+| CodeTour | VS Code extension `vsls-contrib.codetour` 0.0.61, installed by the owner on 2026-11-15 |
 | Example notes written by hand | Obsidian vault, `Applexus GPT\01.01 Helper Build` (25 notes on the AURA helper's `errors.js` and `secretbox.js`). They describe AURA internals: never push them to this repository |
 | Code the examples explain | `C:\dev\applexus-chat\aura-helper` and `aura-setup` (the "helper build", version 0.6.12 on `master`) |
 | Review helper | `~/.claude/skills/cross-model-review/scripts/xreview.sh` (`detect`, `plan`, `code`, `gate`) |
@@ -215,4 +216,5 @@ Round 1 findings, in short:
 | 2026-11-15 | Name: argus | Owner's choice |
 | 2026-11-15 | VS Code extension first, localhost page in the next release | Owner's choice |
 | 2026-11-15 | Guided walk through CodeTour, by exporting a tour file; the custom extension stays for select-and-explain with states | Owner: "for guided walk add codetour". CodeTour plays steps in order and knows nothing of stale, unexplained or checked; the two serve different needs |
-| 2026-11-15 | The tour file is written outside the source tree; the person opens it with "CodeTour: Open Tour File..." | The skill never writes into the code it explains |
+| 2026-11-15 | The tour file was first written outside the source tree. The owner then decided (same day): the tour goes into `<source root>/.tours/` so CodeTour lists it by itself, and it is made again at every run. The script keeps the folder out of git with a line in `.git/info/exclude` | Owner: "make the folder etc also synced so that codetour issue also doesn't come" |
+| 2026-11-15 | The skill installs its own add-ons (graphify in `~/.argus/venv`, CodeTour) through `setup_tools.py --install` instead of stopping; Python, git and VS Code are installed by the agent with the printed command when the user agrees | Owner: "these dependencies also need installations from that single skill itself automatically"; "these can be instructions also", since most people will have Claude install the skill |

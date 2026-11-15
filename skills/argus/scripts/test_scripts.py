@@ -12,6 +12,7 @@ HERE = Path(__file__).resolve().parent
 CHECK = HERE / "check_notes.py"
 PLAN = HERE / "graph_plan.py"
 TOUR = HERE / "make_tour.py"
+SETUP = HERE / "setup_tools.py"
 LENS = ["In one sentence", "What we gain", "What we lose", "What was not possible without it", "Issues today",
         "What it makes possible", "Open source used", "Risks"]
 
@@ -688,6 +689,45 @@ class Tour(unittest.TestCase):
             out = Path(tmp) / "walk.tour"
             run(TOUR, "--notes", nd, "--source", src, "--out", out, "--obsidian-vault", "My Vault")
             self.assertIn("obsidian://open?vault=My%20Vault&file=Concept%20-%20x", out.read_text(encoding="utf-8"))
+
+
+class TourInProject(unittest.TestCase):
+    def test_tour_in_the_project_is_kept_out_of_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            git = lambda *a: subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                            capture_output=True, text=True)
+            if git("init", "-q").returncode != 0:
+                self.skipTest("git not available")
+            git("add", "-A"); git("commit", "-q", "-m", "one")
+            code_, text = run(TOUR, "--notes", nd, "--source", src, "--in-project")
+            self.assertEqual(code_, 0, text)
+            tour = src / ".tours" / "P.tour"
+            self.assertTrue(tour.is_file(), text)
+            self.assertIn("at commit", json.loads(tour.read_text(encoding="utf-8"))["description"])
+            self.assertEqual(git("status", "--short").stdout.strip(), "")  # git sees no change
+            code_, text = run(TOUR, "--notes", nd, "--source", src, "--in-project")  # a second run adds nothing
+            self.assertIn("already ignored", text)
+
+    def test_one_of_out_and_in_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            self.assertEqual(run(TOUR, "--notes", nd, "--source", src)[0], 2)
+
+
+class Setup(unittest.TestCase):
+    def test_report_without_installing(self):
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, ARGUS_HOME=str(Path(tmp) / "argus-home"))
+            out = subprocess.run([sys.executable, "-B", str(SETUP), "--json"], capture_output=True, text=True, env=env)
+            report = json.loads(out.stdout)
+            self.assertEqual(sorted(report["tools"]), ["codetour", "git", "graphify", "python", "vscode"])
+            self.assertTrue(report["tools"]["python"]["ok"])
+            for item in report["tools"].values():
+                self.assertTrue(item["ok"] or item["fix"])  # everything missing comes with what to do
+            self.assertEqual(out.returncode, 0 if report["ready"] else 1)
+            self.assertEqual(report["actions"], [])  # nothing is installed without --install
 
 
 class GraphPlanProbe(unittest.TestCase):

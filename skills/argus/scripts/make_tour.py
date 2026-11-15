@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Guided walk for the CodeTour extension, made from argus File notes. Python 3.10+, standard library only.
 
-  python -B make_tour.py --notes <notes folder> --source <source root> --out <file.tour> [--plan <plan.json>]
+  python -B make_tour.py --notes <notes folder> --source <source root> --in-project [--plan <plan.json>]
+  python -B make_tour.py --notes <notes folder> --source <source root> --out <file.tour>
 
 Writes one tour file: a first step with the project's purpose, then for each explained file a step with its
-purpose and one step per block, the block's lines selected and its explanation beside them. A person opens it in
-VS Code with the CodeTour extension: command "CodeTour: Open Tour File...", with the source root open as the
-workspace.
+purpose and one step per block, the block's lines selected and its explanation beside them.
 
-Reads the notes and the source; writes only --out, and refuses an --out inside the source root. A block whose
-copied code no longer equals the source is left out and listed: run check_notes.py and refresh the note first.
+--in-project writes <source>/.tours/<project>.tour: CodeTour lists it by itself when the source root is the open
+workspace. It is the one file argus ever writes into a project, and git on this computer is told to ignore that
+folder (.git/info/exclude; no tracked file changes). --out writes anywhere outside the source; the person then opens
+the file with the command "CodeTour: Open Tour File...".
+
+A block whose copied code no longer equals the source is left out and listed: run check_notes.py and refresh the
+note first. Run this script again after every change to the code or the notes: the tour is made new each time.
 """
 import argparse
 import json
@@ -109,12 +113,39 @@ def file_steps(name, text, props, root, prefix, vault, skipped):
     return src, steps
 
 
+def keep_out_of_git(root):
+    """Makes git on this computer ignore <root>/.tours/, unless the project already tracks or ignores it. Uses
+    .git/info/exclude, which is never committed, so no tracked file changes. Returns what was done, as a sentence."""
+    if cn.git(root, "rev-parse", "--is-inside-work-tree") != "true":
+        return "the source is not a git repository; nothing to keep out of git"
+    if cn.git(root, "ls-files", "--", ".tours"):
+        return "the project already tracks files in .tours; git settings left as they are"
+    if cn.git(root, "check-ignore", "-q", ".tours/x.tour") is not None:
+        return ".tours/ is already ignored by git"
+    exclude = cn.git(root, "rev-parse", "--git-path", "info/exclude")
+    prefix = cn.git(root, "rev-parse", "--show-prefix") or ""
+    if not exclude:
+        return "could not find .git/info/exclude; .tours/ will show as untracked in git"
+    path = Path(exclude) if Path(exclude).is_absolute() else Path(root) / exclude
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"\n# argus: guided-walk files for the CodeTour extension, made on this computer\n/{prefix}.tours/\n")
+    except OSError as error:
+        return f"could not write {path} ({error}); .tours/ will show as untracked in git"
+    return f"git on this computer now ignores {prefix}.tours/ (one line added to {path}; no tracked file changed)"
+
+
 def main():
     utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--notes", required=True, help="folder that holds the argus notes")
     ap.add_argument("--source", required=True, help="source root; the notes' 'source' paths are relative to it")
-    ap.add_argument("--out", required=True, help="the tour file to write (name it <something>.tour); never inside --source")
+    ap.add_argument("--out", help="the tour file to write (name it <something>.tour), somewhere outside --source")
+    ap.add_argument("--in-project", action="store_true",
+                    help="write the tour to <source>/.tours/<project>.tour, where CodeTour finds it by itself, and "
+                         "keep that folder out of git on this computer (.git/info/exclude). This is the one file "
+                         "argus writes into the project. Give exactly one of --out and --in-project")
     ap.add_argument("--scope", action="append", default=[], help="only files under this path; repeatable")
     ap.add_argument("--plan", help="JSON written by 'graph_plan.py --json': its order becomes the order of the walk")
     ap.add_argument("--title", help="the tour's title. Default: '<project>: guided walk'")
@@ -123,18 +154,22 @@ def main():
     ap.add_argument("--obsidian-vault", help="the vault's name: concept links then open in Obsidian")
     ap.add_argument("--strict", action="store_true", help="exit with 1 when any note or block had to be left out")
     args = ap.parse_args()
-    notes_dir, root, out = Path(args.notes), Path(args.source), Path(args.out)
+    if bool(args.out) == bool(args.in_project):
+        ap.error("give exactly one of --out <file.tour> and --in-project")
+    notes_dir, root = Path(args.notes), Path(args.source)
     for folder in (notes_dir, root):
         if not folder.is_dir():
             sys.exit(f"not a folder: {folder}")
-    if out.suffix != ".tour":
-        sys.exit("--out must end in .tour")
-    try:
-        out.resolve().relative_to(root.resolve())
-        sys.exit("--out is inside the source root. This script never writes into the code it explains: write the "
-                 "tour elsewhere and open it with 'CodeTour: Open Tour File...', or copy it into .tours yourself")
-    except ValueError:
-        pass
+    out = Path(args.out) if args.out else None
+    if out is not None:
+        if out.suffix != ".tour":
+            sys.exit("--out must end in .tour")
+        try:
+            out.resolve().relative_to(root.resolve())
+            sys.exit("--out is inside the source root. To put the tour where CodeTour finds it by itself, use "
+                     "--in-project, which writes only <source>/.tours/ and keeps it out of git")
+        except ValueError:
+            pass
     scopes = normalize_scopes(root, args.scope)
 
     skipped, by_source, project, intro = [], {}, "", ""
@@ -170,16 +205,25 @@ def main():
               f"depend on come first. Each step selects a block of code and explains it.\n\n{intro}".rstrip()}]
     for src in order:
         steps.extend(by_source[src])
+    commit = cn.git(root, "rev-parse", "--short", "HEAD")
+    made = f"Made by argus from {len(order)} File note(s)" + (f", for the code at commit {commit}" if commit else "")
     tour = {"$schema": SCHEMA, "title": title,
-            "description": f"Made by argus from {len(order)} File note(s). Regenerate after the code or the notes change.",
-            "steps": steps}
+            "description": f"{made}. Regenerate after the code or the notes change.", "steps": steps}
+    steps[0]["description"] += f"\n\n_{made}. If the code has changed since, make the tour again._"
+    how = "command 'CodeTour: Open Tour File...'"
+    if args.in_project:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", project or root.name).strip("-") or "argus"
+        out = root / ".tours" / f"{slug}.tour"
+        how = "it is listed in the CodeTour view of the side bar"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(tour, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"INFO wrote {out}: {len(steps)} steps for {len(order)} files")
+    if args.in_project:
+        print(f"INFO {keep_out_of_git(root)}")
     for item in skipped:
         print(f"SKIPPED {item}")
-    print(f"RESULT {len(steps)} steps, {len(skipped)} left out. Open with the CodeTour extension: command "
-          f"'CodeTour: Open Tour File...', with {root} open as the workspace")
+    print(f"RESULT {len(steps)} steps, {len(skipped)} left out. To play it in VS Code with the CodeTour extension, "
+          f"open {root} as the workspace: {how}")
     sys.exit(1 if skipped and args.strict else 0)
 
 

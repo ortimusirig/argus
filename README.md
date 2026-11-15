@@ -34,15 +34,21 @@ Every project, file, mechanism and library answers the same questions: what we g
 
 ## Install
 
-Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin.
+Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin. Then, once per computer:
+
+```bash
+python -B skills/argus/scripts/setup_tools.py --install
+```
+
+It reports what is present and installs what it can without touching the rest of the computer: graphify, into its own environment at `~/.argus/venv`, and the CodeTour extension, when VS Code is installed. For Python, git and VS Code it prints the install command. The skill runs the same script at the start of every run, so asking Claude to use the skill is enough.
 
 ## Guided walk in VS Code (CodeTour)
 
 ```bash
-python -B skills/argus/scripts/make_tour.py --notes <notes folder> --source <source root> --out <notes folder>/<Project>.tour
+python -B skills/argus/scripts/make_tour.py --notes <notes folder> --source <source root> --in-project
 ```
 
-Writes one tour file for the [CodeTour](https://github.com/microsoft/codetour) extension: a step per explained file with its purpose, then a step per block, the block's lines selected in the editor and its explanation beside them, in reading order (`--plan` takes the order from `graph_plan.py --json`). Open it in VS Code with the command "CodeTour: Open Tour File..." while the source root is the open workspace. The script never writes into the source; copy the file into `.tours/` yourself if you want CodeTour to find it on its own.
+Writes `<source root>/.tours/<Project>.tour` for the [CodeTour](https://github.com/microsoft/codetour) extension: a step per explained file with its purpose, then a step per block, the block's lines selected in the editor and its explanation beside them, in reading order (`--plan` takes the order from `graph_plan.py --json`). Open the source root in VS Code and the tour is listed in the CodeTour view. It is the only file argus writes into a project; git on that computer is told to ignore the folder through `.git/info/exclude`, so no tracked file changes. With `--out <file.tour>` the tour is written elsewhere and opened with the command "CodeTour: Open Tour File...". The tour holds line numbers: make it again after the code or the notes change (the skill does so at the end of every run).
 
 ## The check
 
@@ -54,7 +60,7 @@ It fails when a source file in scope has no note, a non-blank line is in no bloc
 
 ## Status
 
-Version 2.7.1. Replaces the DOCX generator of version 1.
+Version 2.8.0. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
