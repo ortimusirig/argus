@@ -8,7 +8,7 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.6.2 on `main` (`--fingerprint` added; 60 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| Released | 2.7.0 on `main` (`make_tour.py` for CodeTour added; 64 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
 | In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 4 and in Codex round 4. Rounds so far: 8, 4, 4 findings, all accepted; the note records each round at its end. Skill: Codex round 4 is still owed (after 2.6.0 and 2.6.1) |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
@@ -56,6 +56,7 @@ When the owner's instructions and a skill disagree, the owner's instructions win
 |---|---|---|
 | 2.x | The skill: Obsidian notes, three levels, lens, concepts from zero, graphify required, coverage check | Released |
 | 3.0 | VS Code extension: select lines, the explanation appears beside them; fetched from the notes when they exist and are current, otherwise created then and saved | Design not started |
+| 2.7 | Guided walk: a CodeTour tour file made from the File notes (`make_tour.py`) | Released |
 | 3.1 | The same as a localhost page (code left, explanation right), reusing the extension's lookup | After 3.0 |
 
 Design points already agreed with the owner for 3.0:
@@ -200,7 +201,7 @@ Round 1 findings, in short:
 | 5 | A second fresh-agent run per case, to see variance | One run each so far |
 | 6 | VS Code extension (3.0) | Owner request |
 | 7 | Localhost page (3.1) | Owner request |
-| 8 | CodeTour export: a script in the skill that writes a `.tour` file from the File notes (one step per block, in the reading order), so a person with the CodeTour extension gets a guided walk with no extension of ours. Check CodeTour's schema first; the tour file must not be written into the source tree unless the owner says so | Owner's question "why aren't we using CodeTour" (2026-11-15) |
+| 8 | CodeTour export: DONE in 2.7.0 (`scripts/make_tour.py`, 4 tests). Open: try the tour in VS Code with the CodeTour extension (not installed on this computer on 2026-11-15; install: `code --install-extension vsls-contrib.codetour`); CodeTour's README does not say whether tables render in step text, so the script writes lists | Owner: "for guided walk add codetour" (2026-11-15) |
 | 9 | Localhost page ideas given to the owner (2026-11-15): reading path with progress and gates, depth dial, review mode with a "review prompts" row per block, Quartz over the notes folder as a first cheap step, own page on the extension's core for code beside explanation. Not decided | Owner asked for ideas |
 
 ## Decisions log
@@ -213,3 +214,5 @@ Round 1 findings, in short:
 | 2026-11-15 | A graphify release at least 10 days old was installed, in its own environment | The newest release was hours old; caution with new packages |
 | 2026-11-15 | Name: argus | Owner's choice |
 | 2026-11-15 | VS Code extension first, localhost page in the next release | Owner's choice |
+| 2026-11-15 | Guided walk through CodeTour, by exporting a tour file; the custom extension stays for select-and-explain with states | Owner: "for guided walk add codetour". CodeTour plays steps in order and knows nothing of stale, unexplained or checked; the two serve different needs |
+| 2026-11-15 | The tour file is written outside the source tree; the person opens it with "CodeTour: Open Tour File..." | The skill never writes into the code it explains |

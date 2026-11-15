@@ -36,6 +36,14 @@ Every project, file, mechanism and library answers the same questions: what we g
 
 Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin.
 
+## Guided walk in VS Code (CodeTour)
+
+```bash
+python -B skills/argus/scripts/make_tour.py --notes <notes folder> --source <source root> --out <notes folder>/<Project>.tour
+```
+
+Writes one tour file for the [CodeTour](https://github.com/microsoft/codetour) extension: a step per explained file with its purpose, then a step per block, the block's lines selected in the editor and its explanation beside them, in reading order (`--plan` takes the order from `graph_plan.py --json`). Open it in VS Code with the command "CodeTour: Open Tour File..." while the source root is the open workspace. The script never writes into the source; copy the file into `.tours/` yourself if you want CodeTour to find it on its own.
+
 ## The check
 
 ```bash
@@ -46,7 +54,7 @@ It fails when a source file in scope has no note, a non-blank line is in no bloc
 
 ## Status
 
-Version 2.6.2. Replaces the DOCX generator of version 1.
+Version 2.7.0. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |

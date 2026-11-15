@@ -11,6 +11,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECK = HERE / "check_notes.py"
 PLAN = HERE / "graph_plan.py"
+TOUR = HERE / "make_tour.py"
 LENS = ["In one sentence", "What we gain", "What we lose", "What was not possible without it", "Issues today",
         "What it makes possible", "Open source used", "Risks"]
 
@@ -630,6 +631,59 @@ class Fingerprint(unittest.TestCase):
             graph.write_text(graph.read_text(encoding="utf-8") + " ", encoding="utf-8")
             changed("the graph changed")
             self.assertNotIn(fp("--include-tests"), seen, "an option changed")
+
+
+class Tour(unittest.TestCase):
+    """make_tour.py: a guided walk for the CodeTour extension."""
+
+    def test_tour_has_a_step_per_block_with_its_lines_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = ["x = 1", "y = 22"], ["def f():", "    return 1"]
+            src, nd = project(tmp, {"a.py": a, "pkg/b.py": b},
+                              {"P file - a.py": file_note("a.py", a), "P file - b.py": file_note("pkg/b.py", b, depth="map")})
+            out = Path(tmp) / "walk.tour"
+            plan = Path(tmp) / "plan.json"
+            plan.write_text(json.dumps({"order": ["pkg/b.py", "a.py"]}), encoding="utf-8")
+            code_, text = run(TOUR, "--notes", nd, "--source", src, "--out", out, "--plan", plan)
+            self.assertEqual(code_, 0, text)
+            tour = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(tour["$schema"], "https://aka.ms/codetour-schema")
+            self.assertTrue(tour["title"])
+            steps = tour["steps"]
+            self.assertEqual([s.get("file") for s in steps], [None, "pkg/b.py", "pkg/b.py", "a.py", "a.py"])  # plan order
+            for s in steps:
+                self.assertTrue(s["description"])  # the one field CodeTour requires
+            block = steps[4]
+            self.assertEqual(block["selection"], {"start": {"line": 1, "character": 1}, "end": {"line": 2, "character": 7}})
+            self.assertIn("**Line 1**", block["description"])
+            self.assertIn("gain", steps[3]["description"].lower())  # the file step carries the lens
+            self.assertNotIn("[[", json.dumps(tour))  # wikilinks mean nothing to CodeTour
+            self.assertIn("*Concept - x*", block["description"])
+
+    def test_tour_is_never_written_into_the_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            code_, text = run(TOUR, "--notes", nd, "--source", src, "--out", src / ".tours" / "walk.tour")
+            self.assertNotEqual(code_, 0, text)
+            self.assertFalse((src / ".tours").exists())
+
+    def test_block_that_no_longer_matches_is_left_out_and_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            (src / "a.py").write_text("x = 2\n", encoding="utf-8")
+            out = Path(tmp) / "walk.tour"
+            code_, text = run(TOUR, "--notes", nd, "--source", src, "--out", out)
+            self.assertEqual(code_, 0, text)
+            self.assertIn("SKIPPED P file - a.py: block 1", text)
+            self.assertEqual(len(json.loads(out.read_text(encoding="utf-8"))["steps"]), 2)  # start and the file step
+            self.assertEqual(run(TOUR, "--notes", nd, "--source", src, "--out", out, "--strict")[0], 1)
+
+    def test_links_can_open_obsidian(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            out = Path(tmp) / "walk.tour"
+            run(TOUR, "--notes", nd, "--source", src, "--out", out, "--obsidian-vault", "My Vault")
+            self.assertIn("obsidian://open?vault=My%20Vault&file=Concept%20-%20x", out.read_text(encoding="utf-8"))
 
 
 class GraphPlanProbe(unittest.TestCase):
