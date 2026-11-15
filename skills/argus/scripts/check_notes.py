@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (all_files, inventory, is_callable_node, normalize_scopes, on_disk, read_text,  # noqa: E402
-                     resolve_graph_paths, source_lines, utf8_output)
+from _common import (all_files, fingerprint, inventory, is_callable_node, normalize_scopes, on_disk,  # noqa: E402
+                     read_text, resolve_graph_paths, source_lines, utf8_output, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 LENS_BY_TYPE = {"file": LENS, "mechanism": LENS, "start": LENS, "library": LENS[1:]}
@@ -132,11 +132,14 @@ def lens_missing(rows, wanted):
 
 
 def git(root, *args):
+    """What git answers, or None. The question and the answer go into the run's fingerprint."""
     try:
         out = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=30)
+        answer = out.stdout.strip() if out.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout.strip() if out.returncode == 0 else None
+        answer = None
+    witness("git", root, *args, answer)
+    return answer
 
 
 # ---------------------------------------------------------------- one File note
@@ -395,51 +398,13 @@ def note_files(folder):
             yield p
 
 
-def fingerprint(notes_dir, notes, targets, root, graph, settings):
-    """One hash over everything a run of this check reads or depends on. Two runs with the same fingerprint give
-    the same result; any change to a note, a linked name, a source file, the file list, the graph, the git commit,
-    the options or these scripts changes it. Notes and explained sources go in by content, other files by path,
-    size and time of change."""
-    h = hashlib.sha256()
-
-    def add(*parts):
-        h.update(("\x1f".join(str(p) for p in parts) + "\x1e").encode("utf-8", "backslashreplace"))
-
-    def digest(path):
-        try:
-            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        except OSError:
-            return "unreadable"
-
-    # Every note file found, by path: two notes with one name are two entries, though only one is checked.
-    for p in sorted(notes, key=lambda q: q.relative_to(notes_dir).as_posix()):
-        add("note", p.relative_to(notes_dir).as_posix(), digest(p))
-        props = frontmatter(read_text(p)[0])
-        if props.get("written_by", "").lower() == "argus" and props.get("type") == "file" and props.get("source"):
-            src = on_disk(root, props["source"])
-            add("source", props["source"], src or "none", digest(Path(root) / src) if src else "none")
-    for name in sorted(targets):
-        add("target", name)
-    for rel in all_files(root):
-        try:
-            st = (Path(root) / rel).stat()
-            add("file", rel, st.st_size, st.st_mtime_ns)
-        except OSError:
-            add("file", rel, "gone")
-    add("graph", digest(graph) if graph else "none")
-    add("head", git(root, "rev-parse", "HEAD") or "no git")
-    add("settings", json.dumps(settings, sort_keys=True))
-    for script in ("check_notes.py", "_common.py"):
-        add("checker", script, digest(Path(__file__).resolve().parent / script))
-    return h.hexdigest()
-
-
 def main():
     utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fingerprint", action="store_true",
-                    help="check nothing: print {\"fingerprint\": ...} for the given options and stop. The same value "
-                         "is in the --json result; while it stays the same, a new run would give the same result")
+                    help="print only {\"fingerprint\": ...}: one hash over everything the run read, listed and asked "
+                         "git, taken while it ran. The same value is in the --json result; while it stays the same, "
+                         "a new run gives the same result. Costs one full run")
     ap.add_argument("--notes", required=True, help="folder that holds the notes this skill wrote")
     ap.add_argument("--source", required=True, help="source root; each File note's 'source' property is relative to it")
     ap.add_argument("--scope", action="append", default=[],
@@ -476,14 +441,15 @@ def main():
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
             targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
 
-    print_of_inputs = None
-    if args.fingerprint or args.json:
-        print_of_inputs = fingerprint(notes_dir, list(note_files(notes_dir)), targets, root, args.graph, {
-            "scope": scopes, "include_tests": args.include_tests, "allow_missing": args.allow_missing,
-            "graph": bool(args.graph)})
-    if args.fingerprint:
-        json.dump({"fingerprint": print_of_inputs}, sys.stdout)
-        sys.exit(0)
+    # What the run was told and what it found in the folders goes into its fingerprint; file contents and git
+    # answers are added where they are read.
+    witness("options", json.dumps({"scope": scopes, "include_tests": args.include_tests,
+                                   "allow_missing": args.allow_missing, "graph": args.graph or None,
+                                   "notes": str(notes_dir), "source": str(root), "vault": str(vault)}, sort_keys=True))
+    witness("note files", *[q.relative_to(notes_dir).as_posix() for q in note_files(notes_dir)])
+    witness("link targets", *sorted(targets))
+    for script in ("check_notes.py", "_common.py"):
+        witness("checker", script, hashlib.sha256((Path(__file__).resolve().parent / script).read_bytes()).hexdigest())
 
     explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
     for name, p in notes.items():
@@ -569,6 +535,10 @@ def main():
     bad = len(fails) + (0 if args.allow_missing else len(missing))
     where = ", ".join(scopes) if scopes else "whole source root"
     verdict = "NOT PASSED" if bad else "PASS" if args.graph else "PASS WITHOUT THE GRAPH CHECK"
+    print_of_inputs = fingerprint()  # everything this run read, listed or asked git
+    if args.fingerprint:
+        json.dump({"fingerprint": print_of_inputs}, sys.stdout)
+        sys.exit(0)
     if args.json:
         def about(line):
             """The note a line is about (its text starts with '<note name>: ' or '<note name> line N: '), or None."""

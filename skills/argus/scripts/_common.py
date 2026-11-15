@@ -1,4 +1,5 @@
 """Shared by check_notes.py and graph_plan.py: reading files, which files count as source, scopes, graph paths."""
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -37,6 +38,21 @@ DOC_NAMES = {"license", "licence", "readme", "notice", "authors", "changelog", "
 WINDOWS = os.name == "nt"
 
 
+_WITNESS = hashlib.sha256()
+
+
+def witness(*parts):
+    """Adds something a run read or was told to the run's fingerprint. Every file read, every folder listing and
+    every answer from git goes through here, so the fingerprint cannot miss an input: it is built from what the run
+    actually used, not from a list someone has to keep complete."""
+    _WITNESS.update(("\x1f".join(str(p) for p in parts) + "\x1e").encode("utf-8", "backslashreplace"))
+
+
+def fingerprint():
+    """The hash of everything witnessed so far in this run."""
+    return _WITNESS.hexdigest()
+
+
 def utf8_output():
     """Print in UTF-8 whatever the console's code page, so a non-ASCII name in a message cannot stop the run."""
     for stream in (sys.stdout, sys.stderr):
@@ -50,6 +66,7 @@ def read_text(path):
     """(text, encoding name). Reads UTF-8 with or without a mark, UTF-16 with a mark, and falls back to
     Windows-1252 for anything else, so a file is compared as an editor would show it."""
     data = Path(path).read_bytes()
+    witness("read", path, hashlib.sha256(data).hexdigest())
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8", errors="replace"), "utf-8 with BOM"
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -94,10 +111,12 @@ def kind_of(path):
         return "other"
     try:
         with open(path, "rb") as handle:
-            if handle.read(2) == b"#!":
-                return "code"  # a script that names its own interpreter, with or without a leading dot
+            start = handle.read(2)
+        witness("first bytes", path, start.hex())
+        if start == b"#!":
+            return "code"  # a script that names its own interpreter, with or without a leading dot
     except OSError:
-        pass
+        witness("first bytes", path, "unreadable")
     return "other" if dotfile else f"no extension: {path.name}"
 
 
@@ -137,11 +156,11 @@ def on_disk(root, rel):
     base = Path(root).resolve()
     try:
         path = (base / str(rel).replace("\\", "/")).resolve()
-        if not path.is_file():
-            return None
-        return path.relative_to(base).as_posix()
+        found = path.relative_to(base).as_posix() if path.is_file() else None
     except (OSError, ValueError):
-        return None
+        found = None
+    witness("on disk", root, rel, found)
+    return found
 
 
 def all_files(root):
@@ -153,7 +172,9 @@ def all_files(root):
             parts = p.relative_to(root).parts
             if ".git" not in parts[:-1]:
                 result.append("/".join(parts))
-    return sorted(result)
+    result.sort()
+    witness("files under", root, hashlib.sha256("\n".join(result).encode("utf-8", "backslashreplace")).hexdigest())
+    return result
 
 
 def inventory(root, include_tests, scopes):

@@ -730,6 +730,54 @@ class Setup(unittest.TestCase):
             self.assertEqual(report["actions"], [])  # nothing is installed without --install
 
 
+class FingerprintByWitness(unittest.TestCase):
+    """The fingerprint is built from what the run reads (extension design review, round 6)."""
+
+    def test_note_with_cr_only_line_endings_and_a_source_change_of_the_same_size(self):
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {})
+            note = nd / "P file - a.py.md"
+            note.write_bytes(file_note("a.py", code).replace("\n", "\r").encode("utf-8"))
+            (nd / "P - Start Here.md").write_text((nd / "P - Start Here.md").read_text(encoding="utf-8") + "[[P file - a.py]]\n", encoding="utf-8")
+            base = ["--notes", nd, "--source", src]
+            self.assertEqual(run(CHECK, *base)[0], 0)
+            first = json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"]
+            stat = (src / "a.py").stat()
+            (src / "a.py").write_text("x = 2\n", encoding="utf-8")       # same size
+            os.utime(src / "a.py", ns=(stat.st_atime_ns, stat.st_mtime_ns))  # same time of change
+            self.assertEqual(run(CHECK, *base)[0], 1)                      # the check now fails ...
+            second = json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"]
+            self.assertNotEqual(first, second)                             # ... and the fingerprint moved with it
+
+    def test_git_history_of_a_file_changes_the_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code, "other.txt": ["one"]}, {})
+            git = lambda *a: subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                            capture_output=True, text=True)
+            if git("init", "-q").returncode != 0:
+                self.skipTest("git not available")
+            git("add", "-A"); git("commit", "-q", "-m", "one")
+            commit = git("log", "-1", "--format=%h").stdout.strip()
+            (nd / "P file - a.py.md").write_text(file_note("a.py", code, extra_props=f"commit: {commit}\n"), encoding="utf-8")
+            (nd / "P - Start Here.md").write_text((nd / "P - Start Here.md").read_text(encoding="utf-8") + "[[P file - a.py]]\n", encoding="utf-8")
+            base = ["--notes", nd, "--source", src]
+            first = json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"]
+            self.assertEqual(first, json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"])
+            # A commit that touches nothing the run asks about changes no answer, so the fingerprint stays.
+            git("commit", "-q", "--allow-empty", "-m", "two")
+            self.assertEqual(first, json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"])
+            # The file is changed and changed back in two commits: its content and the folder are as before, but
+            # git now names a newer commit for it, the note is stale, and the fingerprint moves.
+            (src / "a.py").write_text("x = 2\n", encoding="utf-8"); git("commit", "-q", "-am", "three")
+            (src / "a.py").write_text("x = 1\n", encoding="utf-8"); git("commit", "-q", "-am", "four")
+            code_, out = run(CHECK, *base)
+            self.assertIn("STALE P file - a.py", out)
+            self.assertNotEqual(first, json.loads(run(CHECK, *base, "--fingerprint")[1])["fingerprint"])
+
+
 class GraphPlanProbe(unittest.TestCase):
     def test_graph_paths_with_a_leading_folder_and_scope(self):  # 14
         with tempfile.TemporaryDirectory() as tmp:
