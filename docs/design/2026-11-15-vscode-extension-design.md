@@ -98,8 +98,9 @@ The panel, top to bottom: the file's name and note state (current, changed, none
 
 | Risk | Handling |
 |---|---|
-| A workspace sets `argus.createCommand` to run something harmful | The setting is read from user settings only (`"scope": "machine"`), and the create command is disabled in an untrusted workspace (VS Code workspace trust) |
-| A note contains HTML or script | The webview has a content security policy that allows no remote content and no script except the extension's own, identified by a nonce; note text is put into the page as text or through a small Markdown renderer that escapes HTML |
+| A workspace sets `argus.createCommand` to run something harmful | `package.json` declares `capabilities.untrustedWorkspaces` as `{"supported": "limited", "restrictedConfigurations": ["argus.createCommand", "argus.notesFolder", "argus.vaultFolder", "argus.sourceRoot"]}`: in Restricted Mode VS Code gives the extension only the user's own value of those settings, never the workspace's. The create command is also switched off until the workspace is trusted. In a trusted workspace the workspace value of `argus.createCommand` is still ignored: the extension reads only the user-level value (`inspect().globalValue`) |
+| A note contains HTML or script | The webview's content security policy is `default-src 'none'`, styles and images from the extension's own `media` folder only (`webview.cspSource`), scripts only with a nonce made new for each render. `localResourceRoots` is the `media` folder alone. Note text reaches the page through a small Markdown renderer that escapes HTML first |
+| A message from the page to the extension | Only three message kinds are accepted (open a note by name, open in Obsidian, create); each is checked against the index before anything is done. A note name that is not in the index is refused |
 | Links in notes | `[[links]]` open notes inside the panel; `obsidian://` links open Obsidian; any other link is shown as text with its address and opened only on a click, through VS Code's own "open external" prompt |
 | Secrets | The extension shows what the notes hold; the skill's rule keeps secrets out of notes. The extension sends nothing anywhere |
 | Source code leaving the computer | Only through the coding agent the person has set up, as in any use of that agent |
@@ -129,6 +130,13 @@ The panel, top to bottom: the file's name and note state (current, changed, none
 | Tests | Plain Node tests of the core, next to the code; the extension itself is tried by hand in VS Code | Owner rule: small tests next to the code, no test machinery |
 | Where the code lives | `vscode/` in the Argus repository | One repository, one handoff |
 | Release form | `argus-<version>.vsix`, built with `@vscode/vsce`, attached to the repository; installed with "Install from VSIX" | No Marketplace account needed |
+
+## Interface work
+
+| Skill the owner named | Use in 3.0 |
+|---|---|
+| `ui-ux-pro-max` | The panel's layout, type, spacing and colour, following VS Code's theme variables so it fits light and dark themes; accessibility (keyboard reach, contrast, labels) |
+| `a2ui` | Not used in 3.0. A2UI is for interfaces an agent generates at run time; this panel shows stored notes with a fixed layout. To be looked at again when "create" should show its progress as agent-made interface |
 
 ## Build order (for the plan)
 
