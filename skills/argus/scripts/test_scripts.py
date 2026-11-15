@@ -531,6 +531,57 @@ class ProbeFindings(unittest.TestCase):
             self.assertNotIn("does not exist", out)
 
 
+class ForPrograms(unittest.TestCase):
+    """What the VS Code extension relies on (design review of 2026-11-15)."""
+
+    def test_json_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = ["def fa():", "    return 1"], ["def fb():", "    return 2"]
+            notes = {"P file - a.py": file_note("a.py", a).replace("does it (lines", "defines fa (lines"),
+                     "P file - b.py": file_note("b.py", b)}
+            src, nd = project(tmp, {"a.py": a, "b.py": b}, notes)
+            graph = write_graph(tmp, [{"id": "f", "label": "a.py", "source_file": "a.py"},
+                                      {"id": "g", "label": "fa()", "source_file": "a.py", "_callable": True}])
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph, "--json")
+            self.assertEqual(code_, 0, out)
+            result = json.loads(out)
+            self.assertEqual(result["result"], "PASS")
+            self.assertEqual(result["graph"], {"used": True, "covered": ["a.py"], "not_covered": ["b.py"]})
+            self.assertEqual(result["explained"]["b.py"], "P file - b.py")
+            self.assertTrue(any(w["graph"] and "b.py" in w["text"] for w in result["warns"]))
+
+    def test_json_failure_names_the_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            bad = file_note("a.py", code, code_in_note=["x = 2"])
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": bad})
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--json")
+            self.assertEqual(code_, 1, out)
+            result = json.loads(out)
+            self.assertEqual(result["result"], "NOT PASSED")
+            self.assertEqual(result["fails"][0]["note"], "P file - a.py")
+            self.assertFalse(result["graph"]["used"])
+
+    def test_source_outside_the_root_is_refused_unread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})
+            (Path(tmp) / "private.txt").write_text("SECRET OUTSIDE\n", encoding="utf-8")
+            outside = file_note("../private.txt", ["SECRET OUTSIDE"]).replace("# P file - private.txt", "# P file - outside")
+            (nd / "P file - outside.md").write_text(outside, encoding="utf-8")
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("names no file under the source root", out)
+            self.assertNotIn("private.txt:", out)  # no INFO line: the file was not read
+
+    def test_source_that_says_masked_itself(self):
+        code = ['MASK = "[masked]"']
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+            self.assertIn("0 masked lines", out)
+
+
 class GraphPlanProbe(unittest.TestCase):
     def test_graph_paths_with_a_leading_folder_and_scope(self):  # 14
         with tempfile.TemporaryDirectory() as tmp:

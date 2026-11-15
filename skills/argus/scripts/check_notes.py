@@ -346,16 +346,16 @@ def check_stale(name, props, root, kind, src=None):
 
 def check_graph(graph_path, own_words, files):
     """Every function, method or class the graph places in an explained file must be named in that file's note, in
-    the note's own words. Returns how many explained files the graph covers."""
+    the note's own words. Returns the explained files the graph covers."""
     try:
         data = json.loads(read_text(graph_path)[0])
     except (OSError, ValueError) as error:
         fails.append(f"graph: cannot read {graph_path}: {error}")
-        return 0
+        return set()
     nodes = data.get("nodes") if isinstance(data, dict) else data
     if not isinstance(nodes, list) or not any(isinstance(n, dict) and n.get("source_file") for n in nodes):
         fails.append(f"graph: {graph_path} has no list of nodes with a source_file; the graph check could not run")
-        return 0
+        return set()
     nodes = [n for n in nodes if isinstance(n, dict) and isinstance(n.get("source_file"), str)]
     where = resolve_graph_paths([n["source_file"] for n in nodes], files)
     covered, compared = set(), 0
@@ -381,7 +381,7 @@ def check_graph(graph_path, own_words, files):
                      "do not match the source root")
     infos.append(f"graph: {len(nodes)} nodes, {len(covered)} of {len(own_words)} explained files in it, "
                  f"{compared} functions or classes compared with notes")
-    return len(covered)
+    return covered
 
 
 # ---------------------------------------------------------------- main
@@ -410,6 +410,8 @@ def main():
                          "must be given")
     ap.add_argument("--include-tests", action="store_true", help="tests need File notes too")
     ap.add_argument("--allow-missing", action="store_true", help="source files without a note do not fail the check")
+    ap.add_argument("--json", action="store_true",
+                    help="print one JSON object instead of lines, for a program that reads the result")
     args = ap.parse_args()
     if bool(args.graph) == bool(args.no_graph):
         ap.error("give exactly one of --graph <graph.json> and --no-graph")
@@ -431,7 +433,7 @@ def main():
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
             targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
 
-    explained, own_words, kinds, linked_by, unowned, masked_total = {}, {}, {}, {}, [], 0
+    explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
     for name, p in notes.items():
         text = read_text(p)[0].replace("\r\n", "\n").replace("\r", "\n")
         props = frontmatter(text)
@@ -447,6 +449,8 @@ def main():
         if kind == "file":
             src, masked = check_file_note(name, text, props, root)
             masked_total += masked
+            if masked:
+                masked_by_note[name] = masked
             if src:
                 if src in explained:
                     fails.append(f"{name}: {src} is also explained by the note '{explained[src]}'")
@@ -505,10 +509,34 @@ def main():
     if found["other"]:
         other_text = ", ".join(f"{ext} {count}" for ext, count in sorted(found["other"].items(), key=lambda kv: -kv[1])[:15])
         infos.append(f"in scope but not code (documents, data, settings, media): {other_text}")
-    graph_note = "graph check not run"
+    graph_note, covered = "graph check not run", set()
     if args.graph:
         covered = check_graph(args.graph, own_words, all_files(root))
-        graph_note = f"graph covers {covered} of {len(own_words)} explained files"
+        graph_note = f"graph covers {len(covered)} of {len(own_words)} explained files"
+
+    bad = len(fails) + (0 if args.allow_missing else len(missing))
+    where = ", ".join(scopes) if scopes else "whole source root"
+    verdict = "NOT PASSED" if bad else "PASS" if args.graph else "PASS WITHOUT THE GRAPH CHECK"
+    if args.json:
+        def about(line):
+            """The note a line is about (its text starts with '<note name>: ' or '<note name> line N: '), or None."""
+            return next((n for n in sorted(kinds, key=len, reverse=True)
+                         if line.startswith(n + ": ") or line.startswith(n + " line ")), None)
+
+        json.dump({
+            "result": verdict, "exit_code": 0 if bad == 0 else 1, "scope": scopes,
+            "notes_checked": sorted(kinds), "notes_not_checked": sorted(unowned),
+            "explained": {src: note for src, note in sorted(explained.items())},
+            "missing": missing,
+            "fails": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in fails],
+            "stale": [{"note": about(line), "text": line} for line in stale],
+            "warns": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in warns],
+            "infos": infos,
+            "masked_lines": masked_by_note,
+            "graph": {"used": bool(args.graph), "covered": sorted(covered),
+                      "not_covered": sorted(set(own_words) - covered) if args.graph else []},
+        }, sys.stdout, indent=2, ensure_ascii=False)
+        sys.exit(0 if bad == 0 else 1)
 
     for item in infos:
         print(f"INFO {item}")
@@ -521,9 +549,6 @@ def main():
     for label, items in (("STALE", stale), ("WARN", warns)):
         for item in items:
             print(f"{label} {item}")
-    bad = len(fails) + (0 if args.allow_missing else len(missing))
-    where = ", ".join(scopes) if scopes else "whole source root"
-    verdict = "NOT PASSED" if bad else "PASS" if args.graph else "PASS WITHOUT THE GRAPH CHECK"
     print(f"RESULT scope {where}: {len(kinds)} notes checked, {len(explained)} source files explained, "
           f"{len(missing)} without a note, {len(fails)} fail, {len(stale)} stale, {len(warns)} warn, "
           f"{masked_total} masked lines, {graph_note}: {verdict}")
