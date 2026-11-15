@@ -2,17 +2,17 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, version 2.6.0 (check script rewritten after the own probe).
+Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.6.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
-| In progress | Skill: Codex review round 4 comes next (after the probe fixes of 2.6.0). Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) has had two Codex rounds (8 findings, then 4); revision 3 answers round 2 and goes back to Codex |
+| Released | 2.6.1 on `main`: the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 4 and in Codex round 4. Rounds so far: 8, 4, 4 findings, all accepted; the note records each round at its end. Skill: Codex round 4 is still owed (after 2.6.0 and 2.6.1) |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Codex round 3 on the extension design, then round 4 on the skill (one Codex run at a time). 2. When the design is clean: plan note (`docs/plans/`), Codex review. 3. Build on branch `vscode-extension`, core first (`vscode/src/core/`), tests next to the code |
-| Stop rule | The owner (2026-11-15): continue until all features are complete or plan usage reaches 20% (weekly, all models). It was 8% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
+| Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
+| Stop rule | The owner (2026-11-15, latest word): continue until all features are complete or plan usage reaches 30% (weekly, all models; first 40%, then 20%, then 30%). It was 11% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
 ## What Argus is
