@@ -7,6 +7,7 @@
 - 2026-11-15: revision 3, after Codex review round 2 (no P1; 3 P2, all accepted). See "Review round 2" at the end.
 - 2026-11-15: revision 4, after Codex review round 3 (no P1; 2 P2, both accepted). See "Review round 3" at the end.
 - 2026-11-15: revision 5, after Codex review round 4 (1 P1, 1 P2, both accepted; the round 3 fixes hold). See "Review round 4" at the end.
+- 2026-11-15: revision 6, after Codex review round 5 (no P1; 2 P2, both accepted; the generation fix holds). See "Review round 5" at the end.
 - Design: `docs/design/2026-11-15-vscode-extension-design.md`. This plan builds exactly that design; where the two differ, the design wins and the plan is wrong.
 - Carried from the design review: P2 FIXED design round 10 #1 (Python runtime in the checker's fingerprint, skill 2.9.1), to be confirmed by the review of this plan.
 
@@ -18,6 +19,7 @@
 | 2 | P0=0 P1=0 P2=3 P3=0, coverage complete | All 3 accepted; revision 3 |
 | 3 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 4 |
 | 4 | P0=0 P1=1 P2=1 P3=0, coverage complete | Both accepted; revision 5 |
+| 5 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 6 |
 
 ## What is built
 
@@ -60,7 +62,9 @@ vscode/
 
 ```ts
 export interface NoteProps { writtenBy: string; type: string; project?: string; source?: string;
-  commit?: string; depth?: "map" | "full"; maskedLines: Set<number>; }
+  commit?: string; depth?: "map" | "full";
+  maskedRanges: [number, number][]; }   // as written: "3, 7-9" is [[3,3],[7,9]]; never expanded into single numbers
+export function isMasked(props: NoteProps, line: number): boolean   // true when a range holds the line
 export interface LineRow { from: number; to: number; code: string; what: string; value: string; }
 export interface Block { id: string; purpose: string; from: number; to: number;   // recorded lines, 1-based
   code: string[];            // the lines of the first fence
@@ -78,7 +82,7 @@ export interface OtherNote { name: string; path: string; props: NoteProps; body:
 
 | Function | Behaviour |
 |---|---|
-| `parseProps(text)` | The properties between the first two `---` lines. `masked_lines: 3, 7-9` becomes a set. Line endings CRLF, LF and CR are all accepted |
+| `parseProps(text)` | The properties between the first two `---` lines. `masked_lines: 3, 7-9` becomes the ranges `[[3,3],[7,9]]`: at most one pair per item written, whatever the numbers, so `1-1000000000` costs one pair. `isMasked(props, line)` looks the line up in the ranges; nothing ever builds a set of all masked line numbers. Line endings CRLF, LF and CR are all accepted |
 | `fenceMask(lines)` | True for fence lines and lines inside a fence; a fence closes only on a fence at least as long. Same rule as `fence_mask` in `check_notes.py` |
 | `parseFileNote(name, path, text)` | Level 1 lens rows; block headings matched by the same pattern as `BLOCK` in `check_notes.py`, outside fences only; the first fence after a heading is the code; table rows whose first cell is a line number or range are line rows (cells split on `|` not preceded by `\`). Everything else that follows the code inside the block is kept, in order, in `prose`: sentences, further tables (with their header rows) and further fences. Nothing of a block's text is dropped: `rows` plus `prose` hold all of it, and the panel renders the line table first, then `prose`. Anything that cannot be read goes into `problems`, and the note is shown as "cannot be read", never guessed at |
 | `parseOtherNote` | Properties and body, for Concept, Library, Mechanism and Start Here notes |
@@ -95,6 +99,7 @@ Tests (`notes.test.ts`), each on a note text written in the test:
 | `\|` inside a code cell | stays in the cell, comes out as `|` |
 | CRLF and CR-only text | the same result as LF |
 | a note without `written_by: argus` | not indexed |
+| `masked_lines: 1-1000000000` | parsed at once into one range; `isMasked` answers for any line; memory use does not grow with the range |
 | agreement with the checker | For sample notes written to disk in the test's setup (skipped when Python is missing): the checker's `--json` result names each note under `explained` for its source, and its INFO line gives the number of blocks; the core finds the same source and the same number of blocks. Block ids, ranges and code are asserted against values written in the test, not against the checker, which does not print them |
 
 ## Piece 2: assign blocks to text (`match.ts`)
@@ -109,14 +114,14 @@ export function assign(note: FileNote, textLines: string[]): Assignment
 
 | Step | Rule |
 |---|---|
-| Line equality | `sameLine(noteLine, textLine, lineNo, masked)`: equal strings match. Otherwise, only when the note line holds `[masked]` and `lineNo` is in `maskedLines`: a line that is `[masked]` alone matches any line; else the text around each mask must match (the regular expression of `mask_pattern` in the checker, anchored at both ends). The text line has its line ending removed first; nothing else is changed |
-| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). No candidate is ever dropped and there is no cap. How they are found, in time linear in the text for each block: every distinct line string of the text and of the note gets a number once (a map from string to number), so a line comparison is a number comparison. **A block without masks** is a sequence of numbers searched in the text's sequence with the Knuth-Morris-Pratt method: time (text lines + block lines), whatever repeats. **A block with masks** is cut at its masked lines into runs of unmasked lines; each run is searched the same way, giving the starts at which that run fits; a start of the block is a candidate when every run fits at its offset (the sets of starts are intersected), and then only the masked lines are compared at that start with the mask rule. Time: (text lines + block lines) for each run, plus the masked lines for each surviving start. A block made of masked lines only has no run: every start is tried against its masked lines; the checker allows masks on at most a quarter of a file's lines, so such a block is short |
+| Line equality | `sameLine(noteLine, textLine, lineNo, props)`: equal strings match. Otherwise, only when the note line holds `[masked]` and `isMasked(props, lineNo)`: a line that is `[masked]` alone matches any line; else the text around each mask must match (the regular expression of `mask_pattern` in the checker, anchored at both ends). The text line has its line ending removed first; nothing else is changed |
+| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). No candidate is ever dropped and there is no cap. Each line of a block is one of three kinds: **exact** (no usable mask: it must equal the text line), **any** (it is `[masked]` alone and its line is declared: it matches every line), **pattern** (it holds a declared mask with text around it). The candidates of a block are kept as a bit array with one bit for each possible start in the text, first all set, then narrowed: (1) every distinct line string of text and note is numbered once, so comparing lines is comparing numbers; each maximal run of **exact** lines is searched in the text's number sequence with the Knuth-Morris-Pratt method, and the bit array keeps only the starts at which that run fits at its offset; (2) for each distinct **pattern** line, one pass over the text marks the lines that match it (a bit array, made once for the whole note); for each pattern line of the block, the block's bit array is AND-ed with that array shifted by the line's offset; (3) **any** lines narrow nothing. A block of `any` lines only therefore has every start that leaves room for it, taken directly, with no comparison at all |
 | Assignment | Blocks in the order of their recorded `from`. Dynamic programming over (block index, candidate): a block may be placed at a candidate that starts after the end of the previous placed block, or left unplaced. Best = most blocks placed; among those, the smallest sum of distances between placed start and recorded `from` |
 | Ambiguous | After the best is found: for each placed block, if another best solution (same count, same sum) places it elsewhere, its state is `ambiguous` and `candidates` lists the places. Found by counting best solutions per (block, candidate) in the same table |
 | Changed | A block left unplaced. Its marker place: the first start line where the block matches with spaces at line ends ignored (`spacesOnly: true`), else its recorded lines clipped to the text |
 | Masked | A placed block with at least one line matched through a mask is `current-masked` |
 | Unexplained | Non-blank text lines outside every placed block of state `current` or `current-masked` |
-| Cost | As above: linear in the length of the text for each block without masks and for each unmasked run of a block with masks. `match.test.ts` has a test with a 20,000-line text of one repeated line and a 5,000-line block of the same line: it must finish well inside a second, which a compare-at-every-occurrence method cannot |
+| Cost | For one block in a text of N lines: N + (length of the run) for each run of exact lines; N regular-expression tests for each distinct pattern line, once for the note; N/32 word operations for each pattern line of the block; nothing for `any` lines. So a block without masks is linear in N; a block of 5,000 `any` lines in 20,000 lines costs one pass to set its 15,001 starts; and the checker's limit of a quarter of a file's lines for masks bounds the pattern lines. The assignment step works on the bit arrays and their ranges, not on lists of single starts |
 
 Tests (`match.test.ts`):
 
@@ -132,6 +137,8 @@ Tests (`match.test.ts`):
 | a block whose first line is masked (`token = "[masked]"`) | found through a later, unmasked line; `current-masked` |
 | a block of masked lines only, declared | found by trying every start line; `current-masked` |
 | 20,000 identical lines, a block of 5,000 of them | finishes within one second; the candidates are all 15,001 starts; with a second identical block the order rule places both |
+| 20,000 lines, a declared block of 5,000 lines that are all `[masked]` alone | finishes within one second; 15,001 candidates, found without comparing lines |
+| a block of 2,000 pattern lines (`key = "[masked]"`) in 20,000 lines | finishes within one second |
 | a block with a masked line in the middle and repeated unmasked runs | only the starts where both runs fit are candidates |
 | a note line with `[masked]` not declared in `masked_lines`, text differs | `changed` |
 | source text that itself says `[masked]`, copied exactly | `current`, not masked |
@@ -261,3 +268,10 @@ With the notes of the helper sample (7 files) and `C:\dev\applexus-chat` as work
 |---|---|---|---|
 | 1 | P1 | Overlapping calls had no order rule: a check that started before a change could finish last and store its outdated pass | A generation counter per project; a result or a fingerprint answer is used only when the generation is still the one at its start (piece 6 rows "Generation" and "Stored"; `validity.ts` with tests of the event orders) |
 | 2 | P2 | Comparing the whole block at every occurrence of one line is quadratic on repetitive files; the design asks for linear matching | Lines become numbers; Knuth-Morris-Pratt search for unmasked blocks and for each unmasked run of a masked block; no caps; a timing test |
+
+## Review round 5: findings and what changed
+
+| # | Sev | Finding | Change in revision 6 |
+|---|---|---|---|
+| 1 | P2 | A block of masked lines only was matched by trying every start against every line: 75 million comparisons for 5,000 lines in 20,000 | Lines are exact, any or pattern; candidates are a bit array narrowed by run searches and by shifted pattern arrays; `any` lines cost nothing; two timing tests |
+| 2 | P2 | `masked_lines: 1-1000000000` would have been expanded into a set of a billion numbers | Ranges are kept as written; `isMasked` looks a line up; a test |
