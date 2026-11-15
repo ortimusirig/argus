@@ -1,6 +1,6 @@
-# code-explainer-sg
+# argus
 
-A Claude Code skill that explains a codebase for a reader who has never programmed. The output is a set of linked Obsidian notes. The reader never opens a code editor: every line of code is copied into the notes, next to its explanation.
+Argus (after the hundred-eyed watchman of Greek myth; earlier name: code-explainer-sg) is a Claude Code skill that explains a codebase for a reader who has never programmed. The output is a set of linked Obsidian notes. The reader never opens a code editor: every line of code is copied into the notes, next to its explanation.
 
 ## What it writes
 
@@ -34,19 +34,19 @@ Every project, file, mechanism and library answers the same questions: what we g
 
 ## Install
 
-Copy `skills/code-explainer-sg` into `~/.claude/skills/`, or add this repository as a Claude Code plugin.
+Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin.
 
 ## The check
 
 ```bash
-python skills/code-explainer-sg/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope>
+python skills/argus/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope>
 ```
 
 It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options.
 
 ## Status
 
-Version 2.1.0. Replaces the DOCX generator of version 1.
+Version 2.2.0. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |

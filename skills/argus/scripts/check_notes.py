@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coverage check for code-explainer-sg notes. Python 3.10+, standard library only. Reads; never writes.
+"""Coverage check for argus notes. Python 3.10+, standard library only. Reads; never writes.
 
   python check_notes.py --notes <notes folder> --source <source root> [--scope <path under the source root>]
 

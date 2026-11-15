@@ -1,9 +1,9 @@
 ---
-name: code-explainer-sg
-description: Use when the user asks to explain a codebase or part of one for a reader who does not program, to write or update a code walkthrough in an Obsidian vault, or says "explain this code", "update the walkthrough", "explain the new code", "document this for a learner" or "code-explainer-sg".
+name: argus
+description: Use when the user asks to explain a codebase or part of one for a reader who does not program, to write or update a code walkthrough in an Obsidian vault, or says "explain this code", "update the walkthrough", "explain the new code", "document this for a learner", "argus" or the skill's earlier name "code-explainer-sg".
 ---
 
-# Code Explainer: learner-level notes in Obsidian
+# Argus: learner-level code notes in Obsidian
 
 ## Overview
 
