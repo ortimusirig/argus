@@ -6,6 +6,7 @@
 - 2026-11-15: revision 2, after Codex review round 1 (3 P1, 5 P2; all accepted). Changes: the states are defined; validation is separate from freshness and run by the extension itself; block matching is an ordered, non-overlapping assignment; unexplained lines are a state of their own; masked notes match; unsaved files, several projects and duplicate notes are defined; "create" runs in a visible terminal so the agent can ask.
 - 2026-11-15: revision 3, after Codex review round 2 (2 P1, 2 P2; all accepted). Changes: the check's outcome is taken from its exit code and RESULT line, never from per-note lines alone; the checker itself refuses a `source` outside the source root; shared Concept and Library notes in the vault are indexed; masking follows the checker's rule exactly.
 - 2026-11-15: revision 4, after Codex review round 3 (2 P1, 2 P2; all accepted). Changes: a stored check result is tied to everything the check read; a file the graph does not cover is never shown as fully checked; a copied line equal to the source needs no mask declaration even when the source itself says `[masked]`; the index accepts exactly the `source` paths the checker accepts. The extension reads the check's result as JSON (`check_notes.py --json`, added in skill version 2.6.1).
+- 2026-11-15: revision 5, after Codex review round 4 (1 P1, 1 P2; both accepted). Changes: the extension no longer lists the check's inputs itself; the checker computes one fingerprint of everything it reads (`check_notes.py --fingerprint`, skill version 2.6.2) and the extension compares it; every validation state is defined by the exit code and the JSON fields. New section "Alternatives considered" (CodeTour), after the owner's question.
 - Owner's request, in his words: "select the lines of code and explanation comes from the skill (either fetched or created at that time: if I have run the skill once that is fetched, or else created)". VS Code extension first; a localhost page in the next release.
 
 ## Codex review records
@@ -15,6 +16,7 @@
 | 1 | P0=0 P1=3 P2=5 P3=0, coverage complete | All 8 accepted and designed for in revision 2 (see "Review round 1" at the end) |
 | 2 | P0=0 P1=2 P2=2 P3=0, coverage complete | All 4 accepted and designed for in revision 3 (see "Review round 2" at the end) |
 | 3 | P0=0 P1=2 P2=2 P3=0, coverage complete | All 4 accepted and designed for in revision 4 (see "Review round 3" at the end) |
+| 4 | P0=0 P1=1 P2=1 P3=0, coverage complete | Both accepted and designed for in revision 5 (see "Review round 4" at the end) |
 
 ## Goal
 
@@ -78,11 +80,11 @@ flowchart LR
 | Block | changed | Its code is not in the text exactly. This includes a difference only in spaces at line ends | Warning marker; the explanation is shown under "written for earlier code" |
 | Block | ambiguous | Its code occurs at more than one place and the order of the blocks does not decide which | Warning marker at every candidate place; the panel says so and does not call it current |
 | Line | unexplained | A non-blank line of the current text that no current block covers | Its own marker; selecting it offers Create |
-| Note | checked | The stored result is still valid (see "What a stored result is tied to"), it ended with exit code 0 and `PASS`, and the graph covers this file | Badge "checked" |
-| Note | checked, not in the graph | The same, but the result lists this file under the graph's `not_covered`: its functions were not compared with the graph | Badge "checked; this file is not in the graph" |
-| Note | checked without graph | The same, with a RESULT line ending in `PASS WITHOUT THE GRAPH CHECK` | Badge "checked, graph not used" |
-| Note | check failed | The run ended with exit code 1. The panel shows every FAIL and MISSING line, grouped: lines that name this note; lines about the graph (`FAIL graph: ...`); lines about other notes of the same folder. Any of them keeps the badge at "check failed" | Badge "check failed" and the grouped lines |
-| Note | check error | The check could not be run or did not finish: Python missing, exit code 2 (wrong arguments), any other exit code, no RESULT line, or the process was stopped | Badge "check error" and the reason |
+| Note | checked | The stored result is still valid (see "What a stored result is tied to"); its exit code was 0, its `result` is `PASS`, and this file is in its `graph.covered` | Badge "checked" |
+| Note | checked, not in the graph | The same, but this file is in the result's `graph.not_covered`: its functions were not compared with the graph | Badge "checked; this file is not in the graph" |
+| Note | checked without graph | A valid stored result with exit code 0 and `result` equal to `PASS WITHOUT THE GRAPH CHECK` | Badge "checked, graph not used" |
+| Note | check failed | The run ended with exit code 1 and a well-formed JSON result. The panel shows every entry of `fails` and `missing`, grouped: entries about this note; entries about the graph; entries about other notes of the same folder. Any of them keeps the badge at "check failed" | Badge "check failed" and the grouped entries |
+| Note | check error | The check could not be run or did not finish: Python missing, exit code 2 (wrong arguments), any other exit code, output that is not the expected JSON object, or the process was stopped | Badge "check error" and the reason |
 | Note | not checked | No stored result, or the stored result is no longer valid, or Python is not available | Badge "not checked" and why (for example "another note changed since the last check") |
 
 Whatever the badge, the panel also shows, from the same result: how many of the folder's explained files the graph covers, the number of warnings with a way to read them, and the masked lines of this note.
@@ -175,8 +177,8 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | Command | `<argus.python> -B <extension>/scripts/check_notes.py --json --notes <notesFolder> --source <sourceRoot> --scope <file> [--vault <vaultFolder>] (--graph <graph> or --no-graph)`, run as a program with an argument list. `--json` makes the checker print one JSON object: `result`, `exit_code`, `explained`, `missing`, `fails` and `warns` (each with the note it is about, or a `graph` mark), `stale`, `masked_lines`, and `graph` with `used`, `covered` and `not_covered` |
 | Result | Decided by the run as a whole, in this order: (1) the process could not start, was stopped, ended with a code other than 0 or 1, or its output is not the expected JSON object: "check error"; (2) exit code 1: "check failed", with every entry of `fails` and `missing` shown, grouped by the note it is about, the graph, or other notes; (3) exit code 0, `result` is `PASS` and this file is in `graph.covered`: "checked"; (4) exit code 0, `result` is `PASS` and this file is in `graph.not_covered`: "checked, not in the graph"; (5) exit code 0 and `result` is `PASS WITHOUT THE GRAPH CHECK`: "checked without graph". Nothing else counts as success. A failure in another note of the same folder, or in the graph, keeps this note from showing "checked": the check certifies the folder's notes together, and the panel says which entries are not about this note |
 | What the check reads | Every note with `written_by: argus` in the notes folder, not only this file's; the source file of each File note; the graph. The checker resolves each `source` against the source root and reads it only when the result is a file inside the root (`on_disk` in `_common.py`); anything else is a FAIL and is not read. A spelling such as `sub/../file.py` or another letter case that resolves to a file inside the root is accepted |
-| Stored | In the extension's workspace storage: the result object, the time, and a fingerprint of everything the check read (next row) |
-| What a stored result is tied to | A fingerprint made of: the name and text of every `.md` file in the notes folder (so a changed, added or removed note changes it); the text of the source file of every File note there; the graph file's content, or the fact that no graph was used; the settings that shape the run (source root, notes folder, vault folder, graph path, Python program); the shipped checker's own files. The fingerprint is recomputed whenever the notes folder, a noted source file, the graph file or those settings change, and before a badge is shown after such a change. When it differs from the stored one, the result is dropped and the badge is "not checked" with the reason |
+| Stored | In the extension's workspace storage: the JSON result (which carries the checker's `fingerprint`), and the time |
+| What a stored result is tied to | The checker's own fingerprint. `check_notes.py --fingerprint` with the same options prints one hash over everything a run reads or depends on: every note of the notes folder by content; every name a link may point at in the vault; the source file of every File note by content; the list of all files under the source root with size and time of change (the graph check resolves paths against it); the graph file; the git commit of the source (the stale check uses it); the options; the checker's own files. The same value is in every `--json` result. The extension never lists these inputs itself. A stored result is valid only while a fresh `--fingerprint` call returns the stored value. The extension makes that call when the notes folder, the vault folder, the source root, the graph file or the settings report a change (collected over a short quiet period), and before showing a badge after such a change; while the call is pending, or when it fails, the badge is "not checked". A different value drops the stored result |
 | Never | The extension does not change a note to make it pass |
 
 ## Safety
@@ -210,6 +212,14 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 |---|---|
 | `ui-ux-pro-max` | The panel's layout, type, spacing and colour, following VS Code's theme variables so it fits light and dark themes; accessibility (keyboard reach, contrast, labels; states never shown by colour alone) |
 | `a2ui` | Not used in 3.0. A2UI is for interfaces an agent generates at run time; this panel shows stored notes with a fixed layout. To be looked at again when "create" should show its progress as agent-made interface |
+
+## Alternatives considered
+
+| Alternative | What it is | Why it is not the 3.0 design | What is taken from it |
+|---|---|---|---|
+| CodeTour (the VS Code extension `vsls-contrib/code-tour`) | Guided walkthroughs: a tour is a JSON file of steps, each tied to a file and a line or a selection, with a Markdown description shown beside the code; markers in the gutter show where steps are | It plays a tour in a fixed order; it does not look up the explanation for whatever lines a person selects. It has no notion of "this explanation no longer matches the code", "these lines have no explanation" or "this note passed the check", and no create step. Those states are the point of the owner's request and of four review rounds | A cheap companion, outside this design: the skill can write a tour file from the File notes (one step per block, in the reading order), so a person with CodeTour installed gets a guided walk through the same explanations with no extension of ours. Recorded in the handoff backlog as its own small feature |
+| A custom editor or a tab beside the code | The explanation in an editor tab | A side bar view stays open while the person moves between files | Nothing |
+| A hidden agent process for create | `claude -p` without a terminal | It cannot answer the skill's questions (review round 1, finding 7) | Nothing |
 
 ## Decisions made by the agent
 
@@ -275,3 +285,10 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | 2 | P1 | A file the graph does not cover could show "checked" | New state "checked, not in the graph", from the result's `graph.not_covered`; coverage and warnings are always shown |
 | 3 | P2 | Requiring a declaration for every copied line that contains `[masked]` rejects source that says `[masked]` itself | Literal equality first, as in the checker ("Matching") |
 | 4 | P2 | The index refused `..` and absolute paths that the checker accepts when they resolve inside the root | One rule for both: resolve, then containment ("Path rules") |
+
+## Review round 4: findings and what changed
+
+| # | Sev | Finding | Change in revision 5 |
+|---|---|---|---|
+| 1 | P1 | The fingerprint still missed inputs: names of linked notes in the vault, the list of source files used for graph paths, the git history | The checker computes the fingerprint of its own inputs (`--fingerprint`, also in the `--json` result); the extension only compares values ("What a stored result is tied to") |
+| 2 | P2 | The state table still asked for a textual RESULT line, which a `--json` run does not print | Every validation state is defined by the exit code and the JSON fields ("States") |
