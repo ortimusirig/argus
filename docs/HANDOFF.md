@@ -2,16 +2,17 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, version 2.3.0 (fixes for Codex round 1).
+Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.3.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
-| In progress | Codex review, round 2, of the skill at 2.3.0. See "Codex review record" |
+| Released | 2.9.2 on `main` (committed locally; see the push problem under Rules) (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| In progress | Extension: design closed (revision 13) and plan closed (revision 11, ten Codex rounds, findings 9, 3, 2, 2, 2, 1, 2, 1, 1, 1, no P1 since round 4; the last P2 is fixed in the plan and to be confirmed by the first code review). Both notes are on branch `vscode-extension`, worktree `C:\dev\argus-ext`, under `docs/design/` and `docs/plans/`. BUILD has started: pieces 1 to 3 of the plan (the core: `vscode/src/core/notes.ts`, `match.ts`, `projects.ts`, `links.ts`, `markdown.ts`, with tests). Skill: Codex round 4 on the skill itself is still owed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Handle the round 2 findings (fix with a test, or rebut with evidence), commit, review again until clean. 2. Write the design note for the VS Code extension (`docs/design/`) and have Codex review it |
+| Next step | 1. Finish pieces 1 to 3 in `C:\dev\argus-ext\vscode` exactly as the plan says; `npm test` there must pass. 2. Codex code review of the core (`xreview.sh code C:/dev/argus-ext main --note <design note> --note <plan note>`), handle findings. 3. Pieces 4 to 6, review; pieces 7 to 9, review; hand test from the plan; package. 4. Codex round 4 on the skill when the Codex slot is free |
+| Stop rule | The owner (2026-11-15, latest word): continue until all features are complete or plan usage reaches 30% (weekly, all models; first 40%, then 20%, then 30%). It was 11% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
 ## What Argus is
@@ -44,6 +45,7 @@ Skills to use:
 | `cross-model-review` | The Codex review gate (`~/.claude/skills/cross-model-review`, script `scripts/xreview.sh`) | github.com/ortimusirig/cross-review-dev-skill |
 | superpowers | brainstorming, writing-plans, test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review | github.com/obra/superpowers |
 | `ui-ux-pro-max` | Any interface work (the VS Code panel, the later localhost page) | github.com/nextlevelbuilder/ui-ux-pro-max-skill |
+| `a2ui` | Interface that an agent generates at run time. Not needed for the 3.0 panel (fixed layout over stored notes); look again for the create step's progress display | github.com/a2ui-project/a2ui |
 | caveman | Terse replies to the owner in chat. Files, commits and notes stay in normal English | github.com/JuliusBrussee/caveman |
 
 When the owner's instructions and a skill disagree, the owner's instructions win. The owner asked for autonomy: decide, record the decision and its reason here, and carry on; ask only when a decision is his alone (spending, publishing outside his repositories, anything that cannot be undone).
@@ -54,6 +56,7 @@ When the owner's instructions and a skill disagree, the owner's instructions win
 |---|---|---|
 | 2.x | The skill: Obsidian notes, three levels, lens, concepts from zero, graphify required, coverage check | Released |
 | 3.0 | VS Code extension: select lines, the explanation appears beside them; fetched from the notes when they exist and are current, otherwise created then and saved | Design not started |
+| 2.7 | Guided walk: a CodeTour tour file made from the File notes (`make_tour.py`) | Released |
 | 3.1 | The same as a localhost page (code left, explanation right), reusing the extension's lookup | After 3.0 |
 
 Design points already agreed with the owner for 3.0:
@@ -87,7 +90,8 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 |---|---|
 | This repository | `C:\dev\argus`, remote `https://github.com/ortimusirig/code-explainer.git`, branch `main`, private |
 | The skill | `skills/argus/` (`SKILL.md`, `note-templates.md`, `scripts/`) |
-| graphify | Version 0.9.103 in its own environment: `C:\Users\aiuser4\.venvs\graphify\Scripts\graphify.exe`. Not on PATH |
+| graphify | Version 0.9.103 in its own environment: `C:\Users\aiuser4\.venvs\graphify\Scripts\graphify.exe`. Not on PATH; remembered in `~/.argus/config.json`, and `setup_tools.py` prints it. On a new computer `setup_tools.py --install` puts graphify in `~/.argus/venv` |
+| CodeTour | VS Code extension `vsls-contrib.codetour` 0.0.61, installed by the owner on 2026-11-15 |
 | Example notes written by hand | Obsidian vault, `Applexus GPT\01.01 Helper Build` (25 notes on the AURA helper's `errors.js` and `secretbox.js`). They describe AURA internals: never push them to this repository |
 | Code the examples explain | `C:\dev\applexus-chat\aura-helper` and `aura-setup` (the "helper build", version 0.6.12 on `master`) |
 | Review helper | `~/.claude/skills/cross-model-review/scripts/xreview.sh` (`detect`, `plan`, `code`, `gate`) |
@@ -99,7 +103,9 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | `C:\dev\applexus-chat` is read-only for this work: no writes, no git command that changes anything, no builds, installs or tests there | Other sessions build there; the coordinator session set this rule |
 | Run graphify only on a copy of the code, only as `graphify update <folder>`; never `graphify install`, `label`, `add` | `update` uses no LLM and sends nothing out; `install` edits `CLAUDE.md` and adds hooks |
 | No secret values in any note, commit or prompt | Owner rule in the vault and in the review skill |
-| Codex reads what it is given and sends it to OpenAI | Give it this repository only, never client code or the AURA example notes |
+| Codex reads what it is given and sends it to OpenAI | Give it this repository only, never client code, the AURA example notes or a graph made from AURA code |
+| Pushing to GitHub needs the owner (since 2026-11-15, about 14:20) | git's saved sign-in for github.com stopped working without a prompt: `git push` from an agent fails with "could not read Username". Never enter credentials. Commit locally, tell the owner, and ask him to run `git -C C:\dev\argus push origin main` and `git -C C:\dev\argus-ext push -u origin vscode-extension`. Until then `main` on this computer is ahead of GitHub and the branch `vscode-extension` exists only here |
+| Do not change this checkout while a Codex run is in progress | The helper voids the run. Work on another branch in a separate worktree meanwhile |
 | Commit author | The git identity is set in this clone's local config; do not change it |
 | Commits end with the `Co-Authored-By` line of the agent that made them | Attribution |
 
@@ -111,6 +117,8 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | 2026-11-15 | The same notes broken in 11 ways | Every defect reported, exit code 1 |
 | 2026-11-15 | Fresh agent, skill only, graphify absent | Stopped at preflight, wrote nothing |
 | 2026-11-15 | Fresh agent, skill only, hand-made graph, one 19-line file, depth `full` | 30 notes, check passed first run; 30 gaps reported, fixed in 2.0.1 |
+| 2026-11-15 | Fresh agent runs skill 2.8.1 end to end on the helper's `keystore` folder (5 files, 613 lines, one of them PowerShell), depth `map`, real graphify, into the owner's vault | 30 new notes (27,400 words), 23 existing notes extended, check passed at the first run (55 notes, graph covers 7 of 7), tour rebuilt with 96 steps, source untouched, 15 minutes. 18 gaps reported; fixed in 2.9.0. Not seen: the notes in Obsidian, the tour in VS Code |
+| 2026-11-15 | Fresh agent probes the scripts adversarially (52 probes) | 20 findings and 7 minor ones; check script rewritten; 55 tests pass; the real example notes still pass with the real graph |
 | 2026-11-15 | graphify 0.9.103 on a copy of the helper code (42 files) | 1,329 nodes, 3,529 edges, no LLM; callers of one file match a text search; `install.ps1` gave no symbols; a `require` inside a function is missing from the graph |
 
 Not yet tested: a whole project, depth `map`, the notes rendered in Obsidian, more than one agent run per case.
@@ -122,6 +130,54 @@ Run with `bash ~/.claude/skills/cross-model-review/scripts/xreview.sh plan <SKIL
 | Round | Subject | Outcome | Disposition |
 |---|---|---|---|
 | 1 | `SKILL.md` and the repository at `dd81c53` | P0=0 P1=2 P2=7 P3=0. The helper marked the run void because the skill folder was renamed while it ran; the findings were read and are valid | All 9 confirmed against the code and fixed in 2.3.0, each with a test |
+
+| 2 | `SKILL.md` and the repository at `649d685` (2.3.0) | P0=0 P1=4 P2=4 P3=0; coverage marked incomplete because no real graph file was supplied | All 8 confirmed and fixed in 2.4.0, each code fix with a test; a made-up graph in graphify's shape is now in `docs/graph-sample.json` |
+
+| 3 | `SKILL.md` and the repository at `633ec6a` (2.4.0) | P0=0 P1=3 P2=5 P3=0; coverage complete | All 8 confirmed and fixed in 2.5.0 with tests |
+
+Trend: 9, 8, 8 findings. The review skill says to step back after three rounds without a downward trend. Change of approach (2026-11-15): before each further Codex round, a fresh agent probes the scripts adversarially with probes it must actually run, and its confirmed findings are fixed first. The Codex rounds had each found a new layer of the same kinds of hole (false pass, false fail, files missing from coverage, paths and letter case, Markdown parsing); a broad own probe is cheaper than one Codex round per layer.
+
+Own adversarial probe (2026-11-15, on 2.5.0): a fresh agent with no other context wrote and ran 52 probes (scripts kept in the session's scratch folder, not in the repository). 20 findings and 7 minor ones, all confirmed. Instead of 27 more patches, `check_notes.py` was rewritten around a clearer model, and `_common.py` and `graph_plan.py` were reworked (2.6.0). What changed:
+
+| Area | Before | Now |
+|---|---|---|
+| Masks | Any line could be masked; a note with no real code could pass | Every masked line must be listed in `masked_lines`; at most a quarter of a file; what a mask hides may not appear elsewhere in the note; masked lines are printed for a person to confirm |
+| Code cell of a line row | Any piece of any line in the range | The row's first non-blank line, whole or its start followed by `…` |
+| Source encodings | UTF-8 only: a UTF-16, BOM or Windows-1252 file could never pass | Read as an editor shows them; notes with a BOM too |
+| Graph paths | A leading folder in graph paths could skip files silently | The leading folders are dropped once for the whole graph, then exact match; a graph that covers no explained file fails; the result line says how many it covers |
+| Tables | Only `\| 1 \|` with single spaces | Any spacing |
+| Links | `[[` inside code read as a link; canvas links failed | Code spans are ignored; links to other file kinds and with folders resolve; a note linking only to itself is an orphan |
+| Tests and dependencies | Exact lower-case folder names only | Any letter case; test files by name; all reported |
+| Unenforced rules | Lens on Mechanism, Library, Start Here; Trace and questions at `full`; empty diagram | Checked |
+| Output on Windows | A non-Latin character in a message stopped the script | UTF-8 output |
+| Scope without code | PASS | FAIL |
+| Plan script | Missed `re_exports`, `inherits` and similar; ambiguous edges counted as certain; a scope matching nothing was silent | Fixed |
+
+Round 3 findings, in short:
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | P1 | Running the scripts could leave `__pycache__` in the tree being explained | `sys.dont_write_bytecode`; commands use `python -B` |
+| 2 | P1 | An inner line of a secret that spans lines could not be masked and pass | A line that is `[masked]` alone is accepted when the note's `masked_lines` names it; the count is printed |
+| 3 | P1 | `--scope build/compile.py` found nothing: skipped folder names applied before the scope | A scope into such a folder is honoured; left-out folders and their code file counts are reported |
+| 4 | P2 | A graph function in `pkg/a.py` (no note) was charged to `a.py` | Graph paths resolve against every code file, then only explained files are compared |
+| 5 | P2 | The plan showed inferred edges as certain and built a circle from one | Order and circles from confirmed uses; inferred uses listed apart with lines |
+| 6 | P2 | Constants in the graph had to be named like functions | Only functions, methods and classes |
+| 7 | P2 | A person's own empty note in the folder failed the check | Only notes with `written_by: argus` are read; such a File note is also the only kind that counts as an explanation |
+| 8 | P2 | An empty source file had no valid note form | Lens and no block |
+
+Round 2 findings, in short:
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | P1 | On Windows, `--scope SKILLS` (other letter case) passed with no notes | The scope is turned into its spelling on disk |
+| 2 | P1 | `Makefile`, `Dockerfile` and scripts without an extension were not counted | Known build-file names and files starting with `#!` count as code; other files without an extension are reported |
+| 3 | P1 | "Code never leaves the computer" cannot hold when a hosted agent reads the code | Rule reworded: the skill adds no new destination beyond the agent the person chose; client code needs the user's yes first |
+| 4 | P1 | Step 2 always left tests out, though tests can be asked for | Tests are left out only when not asked for; `--include-tests` in both scripts and in the steps |
+| 5 | P2 | `a.py` and `pkg/a.py` could be confused in the graph check | Exact path match; a looser match only when exactly one file fits |
+| 6 | P2 | Without `--graph` the check passed and said nothing | One of `--graph` and `--no-graph` is required; the result says `PASS WITHOUT THE GRAPH CHECK` |
+| 7 | P2 | An empty or mask-only Code cell in a line row passed | The cell must quote code; text around a mask must be on the line |
+| 8 | P2 | "Add to an existing Concept note" clashed with "never change notes the skill did not write" | Notes the skill writes carry `written_by: argus`; only those may be changed; otherwise a separate `(argus)` note is written |
 
 Round 1 findings, in short:
 
@@ -141,13 +197,15 @@ Round 1 findings, in short:
 
 | # | Item | Source |
 |---|---|---|
-| 1 | Run the skill on the whole helper build at depth `map` (42 files, about 20,900 lines) and record what breaks | Untested scale |
+| 1 | Run the skill on the whole helper build at depth `map`: 7 of 42 files are done (2 at `full`, 5 at `map`). Estimate from the measured run: about 500,000 words of File notes and about 40 times the keystore run (roughly 10 hours of agent time). Large: the owner decides whether and when | Measured 2026-11-15 |
 | 2 | Open the example notes in Obsidian: tables, Mermaid diagrams, links | Never viewed rendered |
 | 3 | `SKILL.md` is about 2,400 words; the skill-writing guidance aims for far less. Move detail into `note-templates.md` or a rules file | Size |
 | 4 | Bases view and canvas map through obsidian-skills | Not tried |
 | 5 | A second fresh-agent run per case, to see variance | One run each so far |
 | 6 | VS Code extension (3.0) | Owner request |
 | 7 | Localhost page (3.1) | Owner request |
+| 8 | CodeTour export: DONE in 2.7.0 (`scripts/make_tour.py`, 4 tests). Open: try the tour in VS Code with the CodeTour extension (not installed on this computer on 2026-11-15; install: `code --install-extension vsls-contrib.codetour`); CodeTour's README does not say whether tables render in step text, so the script writes lists | Owner: "for guided walk add codetour" (2026-11-15) |
+| 9 | Localhost page ideas given to the owner (2026-11-15): reading path with progress and gates, depth dial, review mode with a "review prompts" row per block, Quartz over the notes folder as a first cheap step, own page on the extension's core for code beside explanation. Not decided | Owner asked for ideas |
 
 ## Decisions log
 
@@ -159,3 +217,6 @@ Round 1 findings, in short:
 | 2026-11-15 | A graphify release at least 10 days old was installed, in its own environment | The newest release was hours old; caution with new packages |
 | 2026-11-15 | Name: argus | Owner's choice |
 | 2026-11-15 | VS Code extension first, localhost page in the next release | Owner's choice |
+| 2026-11-15 | Guided walk through CodeTour, by exporting a tour file; the custom extension stays for select-and-explain with states | Owner: "for guided walk add codetour". CodeTour plays steps in order and knows nothing of stale, unexplained or checked; the two serve different needs |
+| 2026-11-15 | The tour file was first written outside the source tree. The owner then decided (same day): the tour goes into `<source root>/.tours/` so CodeTour lists it by itself, and it is made again at every run. The script keeps the folder out of git with a line in `.git/info/exclude` | Owner: "make the folder etc also synced so that codetour issue also doesn't come" |
+| 2026-11-15 | The skill installs its own add-ons (graphify in `~/.argus/venv`, CodeTour) through `setup_tools.py --install` instead of stopping; Python, git and VS Code are installed by the agent with the printed command when the user agrees | Owner: "these dependencies also need installations from that single skill itself automatically"; "these can be instructions also", since most people will have Claude install the skill |

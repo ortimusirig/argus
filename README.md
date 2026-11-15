@@ -34,24 +34,38 @@ Every project, file, mechanism and library answers the same questions: what we g
 
 ## Install
 
-Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin.
+Copy `skills/argus` into `~/.claude/skills/`, or add this repository as a Claude Code plugin. Then, once per computer:
+
+```bash
+python -B skills/argus/scripts/setup_tools.py --install
+```
+
+It reports what is present and installs what it can without touching the rest of the computer: graphify, into its own environment at `~/.argus/venv`, and the CodeTour extension, when VS Code is installed. For Python, git and VS Code it prints the install command. The skill runs the same script at the start of every run, so asking Claude to use the skill is enough.
+
+## Guided walk in VS Code (CodeTour)
+
+```bash
+python -B skills/argus/scripts/make_tour.py --notes <notes folder> --source <source root> --in-project
+```
+
+Writes `<source root>/.tours/<Project>.tour` for the [CodeTour](https://github.com/microsoft/codetour) extension: a step per explained file with its purpose, then a step per block, the block's lines selected in the editor and its explanation beside them, in reading order (`--plan` takes the order from `graph_plan.py --json`). Open the source root in VS Code and the tour is listed in the CodeTour view. It is the only file argus writes into a project; git on that computer is told to ignore the folder through `.git/info/exclude`, so no tracked file changes. With `--out <file.tour>` the tour is written elsewhere and opened with the command "CodeTour: Open Tour File...". The tour holds line numbers: make it again after the code or the notes change (the skill does so at the end of every run).
 
 ## The check
 
 ```bash
-python skills/argus/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope>
+python -B skills/argus/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope> --graph <graphify-out/graph.json>
 ```
 
-It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options.
+It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options; `--json` prints the result as one JSON object for a program to read; `--fingerprint` prints one hash over everything the run read, listed and asked git, built while it runs, so a program can tell whether an earlier result still holds.
 
 ## Status
 
-Version 2.3.0. Replaces the DOCX generator of version 1.
+Version 2.9.2. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
 | Note format and check script | Tried on three real files (105 lines): the check passes on the notes and fails on deliberately broken copies (11 kinds of defect) |
 | The skill text | Followed once by a fresh agent with no other context, on one 19-line file at depth `full`: it produced 30 notes that pass the check. A second fresh agent, without graphify, stopped at preflight as the skill requires. Their 30 reported gaps led to version 2.0.1. Not yet tried on a whole project or at depth `map` |
 | graphify step | Run for real with graphify 0.9.103 on a 42-file JavaScript and PowerShell project: 1,329 nodes, 3,529 edges, no LLM used. `scripts/graph_plan.py` turns the graph into the reading order, callers and callees, and mechanism candidates; the callers it gave for one file matched a text search exactly. The check's graph comparison passed on the real graph. Known limits seen: two shell and PowerShell installer scripts gave no symbols, and a `require` inside a function was not in the graph |
-| Codex review | Round 1 (2026-11-15): 2 P1 and 7 P2 findings, all confirmed and fixed in 2.3.0, each with a test in `scripts/test_scripts.py` (14 tests). Round 2 pending |
+| Codex review | Round 1 (2026-11-15): 2 P1 and 7 P2 findings, all confirmed and fixed in 2.3.0, each with a test in `scripts/test_scripts.py` (14 tests). Round 2: 4 P1 and 4 P2, all confirmed and fixed in 2.4.0 with tests (20 tests). Round 3: 3 P1 and 5 P2, all confirmed and fixed in 2.5.0 with tests. After three rounds without fewer findings, a fresh agent probed the scripts adversarially (52 probes it ran itself): 20 findings and 7 minor ones, all confirmed. The check script was rewritten rather than patched (2.6.0); 55 tests. Round 4 pending |
 | Bases view, canvas map | Left to obsidian-skills; not yet tried |

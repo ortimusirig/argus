@@ -1,0 +1,26 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {"id": "app_src_main", "label": "main.js", "_origin": "ast", "community": 0, "community_name": "Community 0", "file_type": "code", "norm_label": "main.js", "source_file": "app/src/main.js", "source_location": "L1"},
+    {"id": "app_src_main_start", "label": "start()", "_callable": true, "_origin": "ast", "community": 0, "community_name": "Community 0", "file_type": "code", "norm_label": "start()", "source_file": "app/src/main.js", "source_location": "L5"},
+    {"id": "app_src_store", "label": "store.js", "_origin": "ast", "community": 1, "community_name": "Community 1", "file_type": "code", "norm_label": "store.js", "source_file": "app/src/store.js", "source_location": "L1"},
+    {"id": "app_src_store_save", "label": "save()", "_callable": true, "_origin": "ast", "community": 1, "community_name": "Community 1", "file_type": "code", "norm_label": "save()", "source_file": "app/src/store.js", "source_location": "L9"},
+    {"id": "app_src_store_store", "label": "Store", "_callable": true, "_callable_class": true, "_origin": "ast", "community": 1, "community_name": "Community 1", "file_type": "code", "norm_label": "store", "source_file": "app/src/store.js", "source_location": "L3"},
+    {"id": "app_src_store_store_load", "label": ".load()", "_callable": true, "_origin": "ast", "community": 1, "community_name": "Community 1", "file_type": "code", "norm_label": ".load()", "source_file": "app/src/store.js", "source_location": "L4"},
+    {"id": "app_src_store_limit", "label": "LIMIT", "_origin": "ast", "community": 0, "community_name": "Community 0", "file_type": "code", "norm_label": "limit", "source_file": "app/src/store.js", "source_location": "L2"},
+    {"id": "app_src_config_port", "label": "PORT", "external": true, "type": "external", "community": 0, "community_name": "Community 0", "file_type": "concept", "norm_label": "port", "source_file": "app/src/config.js"},
+    {"id": "app_tools_setup", "label": "setup.ps1", "_origin": "ast", "community": 2, "community_name": "Community 2", "file_type": "code", "norm_label": "setup.ps1", "source_file": "app/tools/setup.ps1", "source_location": "L1"},
+    {"id": "app_tools_setup_do_install", "label": "Do-Install()", "_origin": "ast", "community": 2, "community_name": "Community 2", "file_type": "code", "norm_label": "do-install()", "source_file": "app/tools/setup.ps1", "source_location": "L12"}
+  ],
+  "links": [
+    {"source": "app_src_main", "target": "app_src_main_start", "relation": "contains", "_origin": "ast", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/src/main.js", "source_location": "L5", "weight": 1.0},
+    {"source": "app_src_main", "target": "app_src_store", "relation": "imports_from", "_origin": "ast", "confidence": "EXTRACTED", "confidence_score": 1.0, "context": "import", "source_file": "app/src/main.js", "source_location": "L2", "weight": 1.0},
+    {"source": "app_src_main_start", "target": "app_src_store_save", "relation": "calls", "_origin": "ast", "confidence": "EXTRACTED", "confidence_score": 1.0, "context": "call", "source_file": "app/src/main.js", "source_location": "L7", "weight": 1.0},
+    {"source": "app_src_store_save", "target": "app_src_main_start", "relation": "indirect_call", "_origin": "ast", "confidence": "INFERRED", "confidence_score": 0.85, "source_file": "app/src/store.js", "source_location": "L11", "weight": 1.0},
+    {"source": "app_src_store", "target": "app_src_store_store", "relation": "contains", "_origin": "ast", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/src/store.js", "source_location": "L3", "weight": 1.0},
+    {"source": "app_src_store_store", "target": "app_src_store_store_load", "relation": "method", "_origin": "ast", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/src/store.js", "source_location": "L4", "weight": 1.0}
+  ],
+  "hyperedges": []
+}
