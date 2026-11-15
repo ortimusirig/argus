@@ -5,6 +5,7 @@
 - 2026-11-15: first version, written after the design stage closed (design note revision 11, ten Codex rounds). Not yet reviewed.
 - 2026-11-15: revision 2, after Codex review round 1 (1 P1, 7 P2, 1 P3; all accepted; the carried design finding was confirmed fixed). See "Review round 1" at the end.
 - 2026-11-15: revision 3, after Codex review round 2 (no P1; 3 P2, all accepted). See "Review round 2" at the end.
+- 2026-11-15: revision 4, after Codex review round 3 (no P1; 2 P2, both accepted). See "Review round 3" at the end.
 - Design: `docs/design/2026-11-15-vscode-extension-design.md`. This plan builds exactly that design; where the two differ, the design wins and the plan is wrong.
 - Carried from the design review: P2 FIXED design round 10 #1 (Python runtime in the checker's fingerprint, skill 2.9.1), to be confirmed by the review of this plan.
 
@@ -14,6 +15,7 @@
 |---|---|---|
 | 1 | P0=0 P1=1 P2=7 P3=1, coverage complete. Carried item (design round 10 #1) confirmed fixed | All 9 accepted; revision 2 |
 | 2 | P0=0 P1=0 P2=3 P3=0, coverage complete | All 3 accepted; revision 3 |
+| 3 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 4 |
 
 ## What is built
 
@@ -61,7 +63,9 @@ export interface LineRow { from: number; to: number; code: string; what: string;
 export interface Block { id: string; purpose: string; from: number; to: number;   // recorded lines, 1-based
   code: string[];            // the lines of the first fence
   rows: LineRow[];           // depth full
-  prose: string;             // depth map: the explanation as Markdown
+  prose: string;             // every other piece of the block's text after its code, as Markdown, in order:
+                             // the sentences (depth map), and any table that is not the line table, such as
+                             // the "Part of line n" tables the template allows under a line table
   concepts: string[]; }      // [[links]] of the block
 export interface FileNote { name: string; path: string; props: NoteProps; lens: [string, string][];
   blocks: Block[]; problems: string[]; }            // problems: why a part could not be read
@@ -74,7 +78,7 @@ export interface OtherNote { name: string; path: string; props: NoteProps; body:
 |---|---|
 | `parseProps(text)` | The properties between the first two `---` lines. `masked_lines: 3, 7-9` becomes a set. Line endings CRLF, LF and CR are all accepted |
 | `fenceMask(lines)` | True for fence lines and lines inside a fence; a fence closes only on a fence at least as long. Same rule as `fence_mask` in `check_notes.py` |
-| `parseFileNote(name, path, text)` | Level 1 lens rows; block headings matched by the same pattern as `BLOCK` in `check_notes.py`, outside fences only; the first fence after a heading is the code; rows whose first cell is a line number or range are line rows (cells split on `|` not preceded by `\`); other non-table text after the fence is the prose. Anything that cannot be read goes into `problems`, and the note is shown as "cannot be read", never guessed at |
+| `parseFileNote(name, path, text)` | Level 1 lens rows; block headings matched by the same pattern as `BLOCK` in `check_notes.py`, outside fences only; the first fence after a heading is the code; table rows whose first cell is a line number or range are line rows (cells split on `|` not preceded by `\`). Everything else that follows the code inside the block is kept, in order, in `prose`: sentences, further tables (with their header rows) and further fences. Nothing of a block's text is dropped: `rows` plus `prose` hold all of it, and the panel renders the line table first, then `prose`. Anything that cannot be read goes into `problems`, and the note is shown as "cannot be read", never guessed at |
 | `parseOtherNote` | Properties and body, for Concept, Library, Mechanism and Start Here notes |
 
 Tests (`notes.test.ts`), each on a note text written in the test:
@@ -82,6 +86,7 @@ Tests (`notes.test.ts`), each on a note text written in the test:
 | Test | Asserts |
 |---|---|
 | a full-depth note | block ids, ranges, code lines and line rows equal the expected ones |
+| a block with a "Part of line 12" table under its line table | the line rows are the numbered rows only; the extra table, with its header, is in `prose` and comes out of `render` as a table |
 | a `##` and a `### Block` line inside a code fence | they are code, not headings |
 | a four-backtick fence holding a three-backtick line | one fence |
 | tables with other spacing (`\|1\|`, `\|  1  \|`) | the same rows |
@@ -148,12 +153,13 @@ Tests: Windows and POSIX paths, a `..` that stays inside and one that leaves the
 | Settings (`package.json` `contributes.configuration`) | `argus.projects` (array of `{sourceRoot, notesFolder, vaultFolder?, graph?}`), `argus.createCommand` (array of strings), `argus.createDepth`, `argus.python`. `capabilities.untrustedWorkspaces`: `{"supported": "limited", "restrictedConfigurations": ["argus.createCommand", "argus.python", "argus.projects"], "description": ...}` |
 | Reading settings | `argus.createCommand` and `argus.python`: `inspect().globalValue`; when the user has set none, the extension's own constants `DEFAULT_CREATE_COMMAND` and `DEFAULT_PYTHON` (the values the design gives). The workspace value and the workspace-folder value are never read for these two. `argus.projects`: the effective value, which in Restricted Mode is the user's own |
 | First use | When the open file belongs to no project and `argus.projects` is empty, the panel shows "Choose the notes folder". The button opens a folder picker (`window.showOpenDialog`, folders only) and writes one entry to the user's settings (`ConfigurationTarget.Global`): `sourceRoot` the first workspace folder, `notesFolder` the picked folder. Asked once: after an entry exists, the panel only says "not in an Argus project" for files outside it |
-| `index.ts` | For each project: read every `.md` under `notesFolder` (folders starting with a dot skipped) with `written_by: argus`; when `vaultFolder` is set, also the Concept and Library notes with that property in the vault. Every indexed note gets an id: a number given by the index to its real path, stable while the extension runs. Two `FileSystemWatcher`s per project (notes, vault); a change re-reads the changed file after 300 ms of quiet. Exposes `fileNotesFor(project, sourceRel)` (zero, one or several), `notesByName(name)` (zero, one or several) and `noteById(id)` |
+| `index.ts` | For each project: read every `.md` under `notesFolder` (folders starting with a dot skipped) with `written_by: argus`; when `vaultFolder` is set, also the Concept and Library notes with that property in the vault. Every indexed note gets an id: a number given by the index to its real path, stable while the extension runs. Two `FileSystemWatcher`s per project (notes, vault); a change re-reads the changed file after 300 ms of quiet. `refreshNow(project)` reads the project's folders from disk at once and resolves when the index is up to date; anything that must not act on an old index awaits it. Exposes `fileNotesFor(project, sourceRel)` (zero, one or several), `notesByName(name)` (zero, one or several) and `noteById(id)` |
 | Commands | `argus.explainSelection`, `argus.explainFile`, `argus.create`, `argus.check`, `argus.refresh`, `argus.openInObsidian`; `explainSelection` also in `editor/context` |
 | `panel.ts` | A `WebviewViewProvider` in the side bar (view container "Argus"). HTML built in the extension with `markdown.render`; CSP `default-src 'none'; style-src ${cspSource}; img-src ${cspSource}; script-src 'nonce-...'`; `localResourceRoots: [media]`; `enableScripts: true`. `media/panel.js` only sends the five allowed messages and handles folding |
 | Messages | `{type: "openNote", name}`, `{type: "pick", id}`, `{type: "obsidian", id}`, `{type: "external", href}`, `{type: "create"}`, `{type: "check"}`, `{type: "setup"}`. The handler checks `type` against that list; anything else is dropped. `openNote` carries a name from a link: one note of that name is shown; several: the panel lists them, each with its folder and its id. `pick` and `obsidian` carry an id from such a list or from the note being shown: the handler looks the id up in the index (an unknown id is dropped) and tests again that the note's real path lies inside the project's notes folder or vault folder before reading or opening it. `external`: the address must be one that appears in the note being shown. Then, by scheme: `http`, `https` and `mailto` go to `env.openExternal`, which shows VS Code's own prompt for a place it does not trust; `obsidian` goes to `env.openExternal` as well; `file` asks first, in a modal that shows the whole path, and opens only on "Open"; every other scheme (`command`, `vscode`, `javascript`, `data` and the rest) is refused, and the panel says "this kind of address is not opened from a note" with the address. A refusal is always shown, never silent |
 | Selection to blocks | On `explainSelection` and on selection change while the panel is visible (after 200 ms of quiet): `assign` on the editor's text, blocks overlapping the selection (an empty selection is the cursor's line), unexplained ranges inside it |
 | States shown | Exactly the table "States" of the design, with a text label for each (never colour alone) |
+| Before a check or a fingerprint call | `await index.refreshNow(project)` as well, so the panel and the checker speak of the same notes |
 | Check details | Under the badge, whenever a check result is stored, whatever the badge: "the graph covers N of M explained files" (`graph.covered`, `graph.not_covered`; "graph not used" when `graph.used` is false); the masked lines of this note (`masked_lines[note]`, the line numbers) with the sentence "confirm each hides a secret and nothing else"; the warnings, first those about this note, then those about the graph, then the others, folded when more than three; the stale entries. A success badge is never shown without this block |
 
 Done when, by hand in the Extension Development Host with the notes folder of the two sample files: selecting lines of a file with a note shows the right block and its state; a file with no note says so; an edit that changes a block turns it "changed" without saving.
@@ -184,7 +190,7 @@ The parsing of the result and the mapping to states live in functions without `v
 | Command | `argus.createCommand` from the user's settings; placeholders replaced inside each argument (never joined into one string): `${file}` (path relative to the source root), `${notesFolder}`, `${sourceRoot}`, `${depth}` |
 | Terminal | A VS Code task, not a bare terminal: `tasks.executeTask(new Task({type: "argus"}, TaskScope.Workspace, "Argus: create explanation", "argus", new ProcessExecution(args[0], args.slice(1), {cwd: sourceRoot})))` with `presentationOptions` `{reveal: Always, focus: true, panel: Dedicated, close: false}`. `ProcessExecution` starts the program with its argument list and no shell. The task's terminal takes the person's typing, so the agent can ask. `close: false` keeps the terminal and its text after the program ends. The note file's text hash and the source text hash are recorded before the start. The call is awaited inside `try`: when `executeTask` rejects, the running state is cleared and the panel shows "could not start the agent" with the error's message |
 | While it runs | Panel state "agent running in the terminal 'Argus'" |
-| End | Two events are followed for that task execution. `tasks.onDidEndTaskProcess` gives the exit code when the program ends; the terminal stays open. `tasks.onDidEndTask` fires when the task is over, with or without a process: when it arrives and no process end was seen, the program never started or the task was stopped: the running state is cleared and the panel says "the agent did not run: the task ended without starting the program". With an exit code: undefined or not 0: "the agent stopped with an error; its output is in the terminal 'Argus: create explanation'". Else, no File note for the file or its text hash unchanged: "the agent finished without writing the note". Else run the check (piece 6) and show its state. The running state is cleared on every one of these paths |
+| End | Two events are followed for that task execution. `tasks.onDidEndTaskProcess` gives the exit code when the program ends; the terminal stays open. `tasks.onDidEndTask` fires when the task is over, with or without a process: when it arrives and no process end was seen, the program never started or the task was stopped: the running state is cleared and the panel says "the agent did not run: the task ended without starting the program". With an exit code: undefined or not 0: "the agent stopped with an error; its output is in the terminal 'Argus: create explanation'". With exit code 0: first `await index.refreshNow(project)`, so the notes the agent wrote in its last moment are in the index, and take the note file's text hash from disk; then, no File note for the file or its hash equal to the one recorded before the start: "the agent finished without writing the note"; else run the check (piece 6) and show its state. The running state is cleared on every one of these paths |
 | Program missing | The task ends at once with a failure to start: reported as "could not start <program>; see the setting argus.createCommand". Before starting, the program is looked up on PATH (or as a path) so the usual case is reported without starting anything |
 
 ## Piece 8: Concept notes and Obsidian
@@ -236,3 +242,10 @@ With the notes of the helper sample (7 files) and `C:\dev\applexus-chat` as work
 | 1 | P2 | `pick` carried only a name, so two notes of one name could not be told apart | Every indexed note has an id tied to its real path; `pick` and `obsidian` carry the id; containment is tested again on use |
 | 2 | P2 | A task that fails to start had no completion path; the panel could stay at "agent running" | `executeTask` is awaited in `try`; `onDidEndTask` without a process end clears the state and reports it; every path clears the running state |
 | 3 | P2 | Links with schemes other than http, https and obsidian were dropped silently | By scheme: opened through VS Code (http, https, mailto, obsidian), asked first (file), refused with a visible reason (all others) |
+
+## Review round 3: findings and what changed
+
+| # | Sev | Finding | Change in revision 4 |
+|---|---|---|---|
+| 1 | P2 | Tables under a block other than the line table (the template's "Part of line" tables) had no place in the block model | `prose` keeps everything after the code that is not a line row, in order, tables included; the panel renders it after the line table; a test |
+| 2 | P2 | The end of Create looked at an index that could be 300 ms old and report "no note written" | `index.refreshNow(project)` is awaited before the completion rules, and before a check or fingerprint call |
