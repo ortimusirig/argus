@@ -8,6 +8,7 @@
 - 2026-11-15: revision 4, after Codex review round 3 (no P1; 2 P2, both accepted). See "Review round 3" at the end.
 - 2026-11-15: revision 5, after Codex review round 4 (1 P1, 1 P2, both accepted; the round 3 fixes hold). See "Review round 4" at the end.
 - 2026-11-15: revision 6, after Codex review round 5 (no P1; 2 P2, both accepted; the generation fix holds). See "Review round 5" at the end.
+- 2026-11-15: revision 7, after Codex review round 6 (no P1; 1 P2, accepted; the range fix holds). The design's "Large files" rule was restated in design revision 13, because a cost linear in the file cannot be promised for a block with many different masked lines. See "Review round 6" at the end.
 - Design: `docs/design/2026-11-15-vscode-extension-design.md`. This plan builds exactly that design; where the two differ, the design wins and the plan is wrong.
 - Carried from the design review: P2 FIXED design round 10 #1 (Python runtime in the checker's fingerprint, skill 2.9.1), to be confirmed by the review of this plan.
 
@@ -20,6 +21,7 @@
 | 3 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 4 |
 | 4 | P0=0 P1=1 P2=1 P3=0, coverage complete | Both accepted; revision 5 |
 | 5 | P0=0 P1=0 P2=2 P3=0, coverage complete | Both accepted; revision 6 |
+| 6 | P0=0 P1=0 P2=1 P3=0, coverage complete | Accepted; revision 7 and design revision 13 |
 
 ## What is built
 
@@ -115,13 +117,14 @@ export function assign(note: FileNote, textLines: string[]): Assignment
 | Step | Rule |
 |---|---|
 | Line equality | `sameLine(noteLine, textLine, lineNo, props)`: equal strings match. Otherwise, only when the note line holds `[masked]` and `isMasked(props, lineNo)`: a line that is `[masked]` alone matches any line; else the text around each mask must match (the regular expression of `mask_pattern` in the checker, anchored at both ends). The text line has its line ending removed first; nothing else is changed |
-| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). No candidate is ever dropped and there is no cap. Each line of a block is one of three kinds: **exact** (no usable mask: it must equal the text line), **any** (it is `[masked]` alone and its line is declared: it matches every line), **pattern** (it holds a declared mask with text around it). The candidates of a block are kept as a bit array with one bit for each possible start in the text, first all set, then narrowed: (1) every distinct line string of text and note is numbered once, so comparing lines is comparing numbers; each maximal run of **exact** lines is searched in the text's number sequence with the Knuth-Morris-Pratt method, and the bit array keeps only the starts at which that run fits at its offset; (2) for each distinct **pattern** line, one pass over the text marks the lines that match it (a bit array, made once for the whole note); for each pattern line of the block, the block's bit array is AND-ed with that array shifted by the line's offset; (3) **any** lines narrow nothing. A block of `any` lines only therefore has every start that leaves room for it, taken directly, with no comparison at all |
+| Candidates | For each block, every start line where all its lines match in order, the mask permission of each line taken from its recorded line number (`block.from + k`). No candidate is ever dropped and there is no cap. Each line of a block is one of three kinds: **exact** (it must equal the text line), **any** (it is `[masked]` alone and its line is declared: it matches every line), **pattern** (it holds a declared mask with text around it). Every distinct line string of text and note is numbered once, so comparing exact lines is comparing numbers. The search for a block goes from cheap to dear and stops narrowing as soon as nothing is left: (1) **the longest run of exact lines** is searched in the text's number sequence with the Knuth-Morris-Pratt method: time (text lines + run length), whatever repeats; its fits give the first set of starts. A block with no exact line starts from all starts that leave room for it, taken directly. (2) **The other exact lines** are compared, as numbers, only at the starts still in the set. (3) **Pattern lines** are tested only at the starts still in the set, each test remembered by (pattern, text line) so that no pair is tested twice in the whole note. (4) **any** lines are never compared |
 | Assignment | Blocks in the order of their recorded `from`. Dynamic programming over (block index, candidate): a block may be placed at a candidate that starts after the end of the previous placed block, or left unplaced. Best = most blocks placed; among those, the smallest sum of distances between placed start and recorded `from` |
 | Ambiguous | After the best is found: for each placed block, if another best solution (same count, same sum) places it elsewhere, its state is `ambiguous` and `candidates` lists the places. Found by counting best solutions per (block, candidate) in the same table |
 | Changed | A block left unplaced. Its marker place: the first start line where the block matches with spaces at line ends ignored (`spacesOnly: true`), else its recorded lines clipped to the text |
 | Masked | A placed block with at least one line matched through a mask is `current-masked` |
 | Unexplained | Non-blank text lines outside every placed block of state `current` or `current-masked` |
-| Cost | For one block in a text of N lines: N + (length of the run) for each run of exact lines; N regular-expression tests for each distinct pattern line, once for the note; N/32 word operations for each pattern line of the block; nothing for `any` lines. So a block without masks is linear in N; a block of 5,000 `any` lines in 20,000 lines costs one pass to set its 15,001 starts; and the checker's limit of a quarter of a file's lines for masks bounds the pattern lines. The assignment step works on the bit arrays and their ranges, not on lists of single starts |
+| Cost | A block without masks: (text lines + block lines) for the run search, then nothing more: linear, as the design requires. A block with masks: the run search, plus (starts left) times (its other lines). In ordinary files the run search leaves one or two starts, so the rest is small. The worst case is a block with no exact run, or with a run that fits almost everywhere, and many different pattern lines: then the work can reach (text lines) times (pattern lines), and no method avoids that for arbitrary patterns. The checker's limit (masks on at most a quarter of a file's lines) bounds it but does not make it small. Design revision 13 states this bound instead of "linear" for blocks with masks, and requires what the next row gives |
+| Never stalls | `assign` is a generator: it does its work in slices and yields after every 2 milliseconds of work. The caller (`markers.ts`, `panel.ts`) runs the slices with `setImmediate` between them, so typing and scrolling stay live however long a match takes. Each run carries the document version it started for; an edit starts a new run and the old one stops at its next yield. While a file is still being matched, its markers are those of the last finished run and the panel says "matching…" with the number of blocks done. The core's tests call the generator to its end |
 
 Tests (`match.test.ts`):
 
@@ -139,6 +142,8 @@ Tests (`match.test.ts`):
 | 20,000 identical lines, a block of 5,000 of them | finishes within one second; the candidates are all 15,001 starts; with a second identical block the order rule places both |
 | 20,000 lines, a declared block of 5,000 lines that are all `[masked]` alone | finishes within one second; 15,001 candidates, found without comparing lines |
 | a block of 2,000 pattern lines (`key = "[masked]"`) in 20,000 lines | finishes within one second |
+| 5,000 different pattern lines in 20,000 lines, no exact line (the worst case) | the generator yields at least every few milliseconds of work (measured between yields); stopping it after the first yield leaves no result and no error; run to its end it gives the right answer |
+| an edit during a long match | the first run stops at its next yield; only the second run's result is used |
 | a block with a masked line in the middle and repeated unmasked runs | only the starts where both runs fit are candidates |
 | a note line with `[masked]` not declared in `masked_lines`, text differs | `changed` |
 | source text that itself says `[masked]`, copied exactly | `current`, not masked |
@@ -275,3 +280,9 @@ With the notes of the helper sample (7 files) and `C:\dev\applexus-chat` as work
 |---|---|---|---|
 | 1 | P2 | A block of masked lines only was matched by trying every start against every line: 75 million comparisons for 5,000 lines in 20,000 | Lines are exact, any or pattern; candidates are a bit array narrowed by run searches and by shifted pattern arrays; `any` lines cost nothing; two timing tests |
 | 2 | P2 | `masked_lines: 1-1000000000` would have been expanded into a set of a billion numbers | Ranges are kept as written; `isMasked` looks a line up; a test |
+
+## Review round 6: finding and what changed
+
+| # | Sev | Finding | Change in revision 7 |
+|---|---|---|---|
+| 1 | P2 | One pass over the text for each distinct masked pattern, and one search for each exact run, is not linear in the file for a block: 5,000 different patterns in 20,000 lines is 100 million tests | The search order is changed (longest exact run first, everything else only at the starts left, each pattern test remembered), which makes ordinary cases cheap. For the true worst case no linear method exists, so the design's rule was restated (design revision 13) and matching became a generator that yields every 2 ms and is dropped when the text changes: the editor cannot stall. Tests for the worst case and for an edit during a match |
