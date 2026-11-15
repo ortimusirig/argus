@@ -10,7 +10,7 @@ Last updated: 2026-11-15, after commit `185533d` (version 2.2.0).
 |---|---|
 | Released | 2.2.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py` |
 | In progress | Codex review, round 1, of the skill at commit `dd81c53` (before the rename). Findings not in yet |
-| Waiting on an answer | Whether the VS Code extension can use AURA for the LLM work: asked of the coordinator session "Agent start prompt configuration" |
+| Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Handle the Codex findings (fix, or rebut with evidence), commit, review again until clean. 2. Write the design note for the VS Code extension and have Codex review it |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
@@ -65,7 +65,21 @@ Design points already agreed with the owner for 3.0:
 | Stale note (`commit` differs) | Show it marked "code changed since"; offer a refresh |
 | No note | Run the skill on that file or block, save the note in the vault, run the check, show it |
 | Slow creation | Show the purpose first, the line table when ready |
-| LLM route | Open: Claude Code headless, or AURA (question sent to the coordinator session) |
+| LLM route | The extension itself makes no LLM call. It hands the request to a coding agent already in VS Code (Claude Code, Codex or OpenCode), which runs the argus skill. See "AURA route" |
+
+### AURA route (coordinator session's answer, 2026-11-15)
+
+| Question | Answer |
+|---|---|
+| Can the extension call AURA over plain HTTP? | No. `<origin>/ai/v1` is the model endpoint the AURA helper sets up for OpenCode, tied to the helper's sign-in and device key. It is not a public API; a new client would need its own design and review |
+| Supported today (a) | Run argus as an AURA skill inside an AURA-connected agent in VS Code: the Claude Code, Codex or OpenCode extensions the helper already connects. Recommended now |
+| Later (b) | A VS Code extension that speaks MCP to the local `aura mcp` server as a registered client. Needs a design note and a Codex review on the AURA side first |
+| Wait for helper 0.6.13? | No. It adds nothing argus needs |
+| argus as an AURA skill or agent | Fits: AURA skills are listed and loaded in coding agents (`list_skills`, `load_skill`) and usable in chat |
+| Rules | Explaining code needs no approval card. The owner's own Applexus code may go through AURA. Client code only when that engagement allows it; otherwise ask the owner. No secret values in notes or prompts |
+| AURA notes to read | Vault `Applexus GPT\config`: "AURA platform consolidation design 2026-11-15" (parts 2-3); in `config\GitHub Halo EULR OpenCode`: "AURA parity 1 machine track 0.6.0 refresh 2026-11-11", "AURA helper 0.6.12 plan 2026-11-15" |
+
+Consequence for the 3.0 design: the extension does lookup and display on its own (no LLM, no AURA). For "create", it passes the file and line range to the coding agent in VS Code, which follows the skill; with AURA connected to that agent, the work runs through AURA. Publishing argus as an AURA skill is a separate, small step.
 
 ## Where things are
 
