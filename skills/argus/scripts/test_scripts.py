@@ -15,7 +15,11 @@ LENS = ["In one sentence", "What we gain", "What we lose", "What was not possibl
 
 
 def run(script, *args):
-    out = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True)
+    args = [str(a) for a in args]
+    if script == CHECK and "--graph" not in args and "--bare" not in args:
+        args.append("--no-graph")
+    args = [a for a in args if a != "--bare"]
+    out = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True)
     return out.returncode, out.stdout + out.stderr
 
 
@@ -173,6 +177,73 @@ class CheckNotes(unittest.TestCase):
             out = run(CHECK, "--notes", nd, "--source", src)[1]
             self.assertIn("STALE P mechanism - m", out)
             self.assertIn("STALE P file - a.py", out)
+
+
+class CheckNotesRound2(unittest.TestCase):
+    def test_scope_in_another_letter_case(self):  # Codex round 2, finding 1
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"pkg/a.py": ["x = 1"]}, {})
+            if not (src / "PKG").exists():
+                self.skipTest("file names are case-sensitive here")
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--scope", "PKG")
+            self.assertEqual(code_, 1, out)
+            self.assertIn("MISSING pkg/a.py", out)
+
+    def test_files_without_extension(self):  # finding 2
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"Makefile": ["all:", "\techo hi"], "run": ["#!/bin/sh", "echo hi"],
+                                    "Dockerfile": ["FROM scratch"], "LICENSE": ["text"], "odd": ["data"]}, {})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            for name in ("Makefile", "run", "Dockerfile"):
+                self.assertIn(f"MISSING {name}", out)
+            self.assertNotIn("MISSING LICENSE", out)
+            self.assertIn("odd", out)  # reported as a file of unknown kind
+
+    def test_graph_symbol_with_same_file_name_in_two_folders(self):  # finding 5
+        with tempfile.TemporaryDirectory() as tmp:
+            root_a, pkg_a = ["x = 1"], ["def child_fn():", "    return 1"]
+            note_root = file_note("a.py", root_a).replace("does it (line", "mentions child_fn here (line")
+            # depth map: the pkg note's own words never name child_fn, so the check must fail for pkg/a.py
+            note_pkg = file_note("pkg/a.py", pkg_a, depth="map").replace("# P file - a.py", "# P file - pkg - a.py")
+            src, nd = project(tmp, {"a.py": root_a, "pkg/a.py": pkg_a},
+                              {"P file - a.py": note_root, "P file - pkg - a.py": note_pkg})
+            graph = Path(tmp) / "graph.json"
+            graph.write_text(json.dumps({"nodes": [
+                {"id": "f1", "label": "a.py", "source_file": "a.py"},
+                {"id": "f2", "label": "a.py", "source_file": "pkg/a.py"},
+                {"id": "c", "label": "child_fn()", "source_file": "pkg/a.py", "_callable": True}], "links": []}))
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("'child_fn' is in pkg/a.py", out)
+
+    def test_graph_or_no_graph_must_be_said(self):  # finding 6
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--bare")
+            self.assertEqual(code_, 2, out)
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--no-graph")
+            self.assertEqual(code_, 0, out)
+            self.assertIn("WITHOUT THE GRAPH CHECK", out)
+
+    def test_line_row_must_quote_real_code(self):  # finding 7
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            good = file_note("a.py", code)
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": good})
+            for cell in ("``  ``", "`…`", "`[masked]`", "`y = [masked]`"):
+                (nd / "P file - a.py.md").write_text(good.replace("`` x = 1 ``", cell), encoding="utf-8")
+                code_, out = run(CHECK, "--notes", nd, "--source", src)
+                self.assertEqual(code_, 1, f"cell {cell}: {out}")
+
+    def test_masked_line_row(self):  # finding 7
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ['token = "abc123"']
+            note = file_note("a.py", code, code_in_note=['token = "[masked]"']).replace('`` token = "abc123" ``', '`` token = "[masked]" ``')
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
 
 
 class GraphPlan(unittest.TestCase):

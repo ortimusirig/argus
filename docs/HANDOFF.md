@@ -2,16 +2,17 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, version 2.3.0 (fixes for Codex round 1).
+Last updated: 2026-11-15, version 2.4.0 (fixes for Codex round 2).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.3.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
-| In progress | Codex review, round 2, of the skill at 2.3.0. See "Codex review record" |
+| Released | 2.4.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
+| In progress | Codex review, round 3, of the skill at 2.4.0. See "Codex review record". The VS Code extension design is drafted on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`), not yet reviewed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Handle the round 2 findings (fix with a test, or rebut with evidence), commit, review again until clean. 2. Write the design note for the VS Code extension (`docs/design/`) and have Codex review it |
+| Next step | 1. Handle the round 3 findings (fix with a test, or rebut with evidence), commit, review again until clean. 2. Codex review of the extension design note. 3. Plan note, Codex review. 4. Build on branch `vscode-extension` |
+| Stop rule | The owner (2026-11-15): continue until all features are complete or plan usage reaches 20% (weekly, all models). It was 8% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
 ## What Argus is
@@ -44,6 +45,7 @@ Skills to use:
 | `cross-model-review` | The Codex review gate (`~/.claude/skills/cross-model-review`, script `scripts/xreview.sh`) | github.com/ortimusirig/cross-review-dev-skill |
 | superpowers | brainstorming, writing-plans, test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review | github.com/obra/superpowers |
 | `ui-ux-pro-max` | Any interface work (the VS Code panel, the later localhost page) | github.com/nextlevelbuilder/ui-ux-pro-max-skill |
+| `a2ui` | Interface that an agent generates at run time. Not needed for the 3.0 panel (fixed layout over stored notes); look again for the create step's progress display | github.com/a2ui-project/a2ui |
 | caveman | Terse replies to the owner in chat. Files, commits and notes stay in normal English | github.com/JuliusBrussee/caveman |
 
 When the owner's instructions and a skill disagree, the owner's instructions win. The owner asked for autonomy: decide, record the decision and its reason here, and carry on; ask only when a decision is his alone (spending, publishing outside his repositories, anything that cannot be undone).
@@ -99,7 +101,8 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | `C:\dev\applexus-chat` is read-only for this work: no writes, no git command that changes anything, no builds, installs or tests there | Other sessions build there; the coordinator session set this rule |
 | Run graphify only on a copy of the code, only as `graphify update <folder>`; never `graphify install`, `label`, `add` | `update` uses no LLM and sends nothing out; `install` edits `CLAUDE.md` and adds hooks |
 | No secret values in any note, commit or prompt | Owner rule in the vault and in the review skill |
-| Codex reads what it is given and sends it to OpenAI | Give it this repository only, never client code or the AURA example notes |
+| Codex reads what it is given and sends it to OpenAI | Give it this repository only, never client code, the AURA example notes or a graph made from AURA code |
+| Do not change this checkout while a Codex run is in progress | The helper voids the run. Work on another branch in a separate worktree meanwhile |
 | Commit author | The git identity is set in this clone's local config; do not change it |
 | Commits end with the `Co-Authored-By` line of the agent that made them | Attribution |
 
@@ -122,6 +125,21 @@ Run with `bash ~/.claude/skills/cross-model-review/scripts/xreview.sh plan <SKIL
 | Round | Subject | Outcome | Disposition |
 |---|---|---|---|
 | 1 | `SKILL.md` and the repository at `dd81c53` | P0=0 P1=2 P2=7 P3=0. The helper marked the run void because the skill folder was renamed while it ran; the findings were read and are valid | All 9 confirmed against the code and fixed in 2.3.0, each with a test |
+
+| 2 | `SKILL.md` and the repository at `649d685` (2.3.0) | P0=0 P1=4 P2=4 P3=0; coverage marked incomplete because no real graph file was supplied | All 8 confirmed and fixed in 2.4.0, each code fix with a test; a made-up graph in graphify's shape is now in `docs/graph-sample.json` |
+
+Round 2 findings, in short:
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | P1 | On Windows, `--scope SKILLS` (other letter case) passed with no notes | The scope is turned into its spelling on disk |
+| 2 | P1 | `Makefile`, `Dockerfile` and scripts without an extension were not counted | Known build-file names and files starting with `#!` count as code; other files without an extension are reported |
+| 3 | P1 | "Code never leaves the computer" cannot hold when a hosted agent reads the code | Rule reworded: the skill adds no new destination beyond the agent the person chose; client code needs the user's yes first |
+| 4 | P1 | Step 2 always left tests out, though tests can be asked for | Tests are left out only when not asked for; `--include-tests` in both scripts and in the steps |
+| 5 | P2 | `a.py` and `pkg/a.py` could be confused in the graph check | Exact path match; a looser match only when exactly one file fits |
+| 6 | P2 | Without `--graph` the check passed and said nothing | One of `--graph` and `--no-graph` is required; the result says `PASS WITHOUT THE GRAPH CHECK` |
+| 7 | P2 | An empty or mask-only Code cell in a line row passed | The cell must quote code; text around a mask must be on the line |
+| 8 | P2 | "Add to an existing Concept note" clashed with "never change notes the skill did not write" | Notes the skill writes carry `written_by: argus`; only those may be changed; otherwise a separate `(argus)` note is written |
 
 Round 1 findings, in short:
 

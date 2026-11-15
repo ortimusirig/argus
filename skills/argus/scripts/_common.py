@@ -14,7 +14,7 @@ CODE_EXT = {
 }
 # Files that are never counted as code: documents, data, settings, media, archives, generated files.
 NOT_CODE_EXT = {
-    "", ".md", ".txt", ".rst", ".adoc", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
+    ".md", ".txt", ".rst", ".adoc", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
     ".lock", ".csv", ".tsv", ".xml", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp", ".pdf",
     ".docx", ".xlsx", ".pptx", ".zip", ".gz", ".tar", ".7z", ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
     ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".wav", ".mov", ".map", ".log", ".pyc", ".class",
@@ -26,6 +26,37 @@ SKIP_DIRS = {
     ".pytest_cache", "coverage", "vendor", ".claude", ".idea", ".vscode", "target", ".next", ".nuxt",
 }
 TEST_DIRS = {"test", "tests", "__tests__", "spec"}
+# Files without an extension that hold code, by name (lower case).
+CODE_NAMES = {"makefile", "gnumakefile", "dockerfile", "containerfile", "rakefile", "gemfile", "jenkinsfile",
+              "vagrantfile", "justfile", "procfile", "brewfile", "cmakelists.txt"}
+# Files without an extension that are documents, by name (lower case).
+DOC_NAMES = {"license", "licence", "readme", "notice", "authors", "changelog", "contributors", "copying",
+             "codeowners", "version", "patents"}
+
+
+def kind_of(path):
+    """'code', 'other' (documents, data, settings, media) or a label for a kind this check does not know."""
+    name = path.name.lower()
+    if name in CODE_NAMES:
+        return "code"
+    if name.startswith(".") and name.count(".") == 1:
+        return "other"  # a settings file such as .gitignore
+    ext = path.suffix.lower()
+    if ext in CODE_EXT:
+        return "code"
+    if ext in NOT_CODE_EXT:
+        return "other"
+    if ext:
+        return ext
+    if name in DOC_NAMES:
+        return "other"
+    try:
+        with open(path, "rb") as handle:
+            if handle.read(2) == b"#!":
+                return "code"  # a script that names its own interpreter
+    except OSError:
+        pass
+    return f"no extension: {path.name}"
 
 
 def normalize_scopes(root, scopes):
@@ -46,8 +77,11 @@ def normalize_scopes(root, scopes):
         if ".." in parts:
             sys.exit(f"--scope must not contain '..': {raw}")
         rel = "/".join(parts)
-        if base is not None and rel and not (base / rel).exists():
-            sys.exit(f"--scope is not under the source root: {raw}")
+        if base is not None and rel:
+            if not (base / rel).exists():
+                sys.exit(f"--scope is not under the source root: {raw}")
+            # The spelling on disk: on Windows and macOS a scope may be typed in another letter case.
+            rel = (base / rel).resolve().relative_to(base).as_posix()
         result.append(rel)
     return [] if "" in result else result
 
@@ -56,10 +90,14 @@ def in_scope(rel, scopes):
     return not scopes or any(rel == s or rel.startswith(s + "/") for s in scopes)
 
 
-def same_path(a, b):
-    """True when two posix paths name the same file, one of them possibly with more leading folders."""
-    a, b = a.strip("/"), b.strip("/")
-    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+def match_source(path, candidates):
+    """The candidate that names the same file as path: an exact match, or else the only candidate that differs
+    from it by leading folders alone. None when nothing matches or more than one does."""
+    path = path.strip("/")
+    if path in candidates:
+        return path
+    loose = [c for c in candidates if c.endswith("/" + path) or path.endswith("/" + c)]
+    return loose[0] if len(loose) == 1 else None
 
 
 def inventory(root, include_tests, scopes):
@@ -76,9 +114,9 @@ def inventory(root, include_tests, scopes):
         rel = rel.as_posix()
         if not in_scope(rel, scopes):
             continue
-        ext = p.suffix.lower() if not p.name.startswith(".") or p.suffix else p.name.lower()
-        if ext in CODE_EXT:
+        kind = kind_of(p)
+        if kind == "code":
             code.append(rel)
-        elif ext not in NOT_CODE_EXT:
-            unknown[ext] = unknown.get(ext, 0) + 1
+        elif kind != "other":
+            unknown[kind] = unknown.get(kind, 0) + 1
     return code, unknown

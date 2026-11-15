@@ -15,7 +15,13 @@ One template per note type. Text in `<angle brackets>` is replaced. Everything e
 | Concept | `Concepts/` | `Concept - <term>` |
 | Library | `Libraries/` | `Library - <name>` |
 
-Concept and Library notes are shared by every project in the vault. Before writing one, look for an existing note of that name and add this project's example and "Used in" line to it.
+Concept and Library notes are shared by every project in the vault. Before writing one, look for an existing note of that name:
+
+| What is there | Do |
+| --- | --- |
+| No note of that name | Write it |
+| A note with `written_by: argus` in its properties | Add this project's example and "Used in" line to it |
+| A note without `written_by: argus` (someone's own note) | Do not change it. Write your note as `Concept - <term> (argus)` or `Library - <name> (argus)`, link to that one from your notes, and name the person's note in its "Related" line |
 
 ## Properties
 
@@ -24,6 +30,7 @@ Every note starts with properties. The check reads `type`, `source`, `commit` an
 ```markdown
 ---
 type: file
+written_by: argus
 project: <Project>
 source: <path of the source file, relative to the source root, with />
 commit: <output of: git log -1 --format=%h -- <source file>>
@@ -33,7 +40,7 @@ written: <YYYY-MM-DD>
 ---
 ```
 
-Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `project` and `written`. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas) and `commit` (the output of `git rev-parse --short HEAD` in the source when the note was written): the check marks the note STALE when one of those files changes later.
+Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas) and `commit` (the output of `git rev-parse --short HEAD` in the source when the note was written): the check marks the note STALE when one of those files changes later.
 
 ## File note
 

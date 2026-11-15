@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import CODE_EXT, inventory, normalize_scopes, same_path  # noqa: E402
+from _common import CODE_EXT, inventory, match_source, normalize_scopes  # noqa: E402
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 BLOCK = re.compile(r"^### Block (\w+)\b.*\(lines? (\d+)(?:-(\d+))?\)\s*$")
@@ -203,10 +203,12 @@ def check_file_note(name, text, props, root):
                 if not c[3]:
                     fails.append(f"{name}: row {label} has an empty 'Real value' cell (write a value, none, or not run)")
                 quoted = code_excerpt(c[1])
-                if quoted is None:
+                if not quoted or not quoted.replace(MASK, "").strip():
                     fails.append(f"{name}: row {label} quotes no code in its Code cell")
-                elif r1 >= 1 and r2 <= len(lines) and MASK not in quoted:
-                    if quoted and not any(quoted in lines[k - 1] for k in range(r1, r2 + 1)):
+                elif r1 >= 1 and r2 <= len(lines):
+                    # With [masked] in the excerpt, the text around each mask must still be on the line.
+                    pattern = ".+?".join(re.escape(part) for part in quoted.split(MASK))
+                    if not any(re.search(pattern, lines[k - 1]) for k in range(r1, r2 + 1)):
                         fails.append(f"{name}: row {label} quotes code that is not on that line: {quoted[:50]}")
     uncovered = sorted(nonblank - set(in_block))
     if uncovered:
@@ -281,7 +283,7 @@ def check_graph(graph_path, noted, prose_by_source):
             continue
         if Path(label).suffix.lower() in CODE_EXT:
             continue
-        match = next((s for s in prose_by_source if same_path(where, s)), None)
+        match = match_source(where, list(prose_by_source))
         if not match:
             continue
         short = re.split(r"[.:#/]", label.split("(")[0].strip())[-1]
@@ -291,7 +293,7 @@ def check_graph(graph_path, noted, prose_by_source):
         if not re.search(r"(?<![\w$-])" + re.escape(short) + r"(?![\w$-])", prose_by_source[match]):
             fails.append(f"graph: '{short}' is in {match} but its note never names it outside the copied code")
     for s in noted:
-        if not any(same_path(f, s) for f in files_in_graph):
+        if match_source(s, sorted(files_in_graph)) is None:
             warns.append(f"graph: {s} is not in the graph (not parsed?); find its callers by text search and say so")
     print(f"INFO graph: {len(nodes)} nodes, {compared} functions or classes compared with notes")
 
@@ -306,9 +308,14 @@ def main():
     ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes. Default: --notes, so "
                                     "give it whenever Concept or Library notes are shared with other folders")
     ap.add_argument("--graph", help="graph JSON from graphify, to compare its functions with the notes")
+    ap.add_argument("--no-graph", action="store_true",
+                    help="run without the graph check; the result line then says so. One of --graph and --no-graph "
+                         "must be given")
     ap.add_argument("--include-tests", action="store_true", help="test folders need File notes too")
     ap.add_argument("--allow-missing", action="store_true", help="source files without a note do not fail the check")
     args = ap.parse_args()
+    if bool(args.graph) == bool(args.no_graph):
+        ap.error("give exactly one of --graph <graph.json> and --no-graph")
     notes_dir, root = Path(args.notes), Path(args.source)
     vault = Path(args.vault) if args.vault else notes_dir
     for folder in (notes_dir, root, vault):
@@ -364,7 +371,7 @@ def main():
     code_files, unknown = inventory(root, args.include_tests, scopes)
     missing.extend(src for src in code_files if src not in noted)
     if unknown:
-        kinds_text = ", ".join(f"{ext} ({count})" for ext, count in sorted(unknown.items()))
+        kinds_text = "; ".join(f"{kind} ({count})" for kind, count in sorted(unknown.items()))
         warns.append(f"files in scope of a kind this check does not know, not counted as code: {kinds_text}. "
                      f"If they hold code, they need File notes too; say so in the report")
     if args.graph:
@@ -382,7 +389,8 @@ def main():
     bad = len(fails) + (0 if args.allow_missing else len(missing))
     where = ", ".join(scopes) if scopes else "whole source root"
     print(f"RESULT scope {where}: {len(notes)} notes, {len(noted)} source files explained, {len(missing)} without a "
-          f"note, {len(fails)} fail, {len(stale)} stale, {len(warns)} warn: {'PASS' if bad == 0 else 'NOT PASSED'}")
+          f"note, {len(fails)} fail, {len(stale)} stale, {len(warns)} warn: "
+          f"{'NOT PASSED' if bad else 'PASS' if args.graph else 'PASS WITHOUT THE GRAPH CHECK'}")
     sys.exit(0 if bad == 0 else 1)
 
 

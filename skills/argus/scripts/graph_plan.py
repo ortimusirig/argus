@@ -66,6 +66,7 @@ def main():
     ap.add_argument("--source", help="the folder graphify was run on, to list code files the graph has no symbols for")
     ap.add_argument("--scope", action="append", default=[],
                     help="folder or file to limit the plan to, relative to the folder graphify was run on; repeatable")
+    ap.add_argument("--include-tests", action="store_true", help="test folders count as code too")
     ap.add_argument("--json", action="store_true", help="print the plan as JSON")
     args = ap.parse_args()
     try:
@@ -108,7 +109,7 @@ def main():
 
     no_symbols = []
     if args.source:
-        code_files, _ = inventory(args.source, False, scopes)
+        code_files, _ = inventory(args.source, args.include_tests, scopes)
         no_symbols = [f for f in code_files if not symbols.get(f)]
 
     plan = {
