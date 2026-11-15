@@ -630,6 +630,10 @@ class Fingerprint(unittest.TestCase):
             changed("an explained source changed")
             graph.write_text(graph.read_text(encoding="utf-8") + " ", encoding="utf-8")
             changed("the graph changed")
+            (nd / "Deeper").mkdir()
+            (nd / "Deeper" / "Concept - x.md").write_text((nd / "Concept - x.md").read_text(encoding="utf-8"), encoding="utf-8")
+            changed("a second note with an existing name was added (the check then fails: name used twice)")
+            self.assertIn("note name used twice", run(CHECK, *base)[1])
             self.assertNotIn(fp("--include-tests"), seen, "an option changed")
 
 

@@ -411,7 +411,8 @@ def fingerprint(notes_dir, notes, targets, root, graph, settings):
         except OSError:
             return "unreadable"
 
-    for name, p in sorted(notes.items()):
+    # Every note file found, by path: two notes with one name are two entries, though only one is checked.
+    for p in sorted(notes, key=lambda q: q.relative_to(notes_dir).as_posix()):
         add("note", p.relative_to(notes_dir).as_posix(), digest(p))
         props = frontmatter(read_text(p)[0])
         if props.get("written_by", "").lower() == "argus" and props.get("type") == "file" and props.get("source"):
@@ -477,7 +478,7 @@ def main():
 
     print_of_inputs = None
     if args.fingerprint or args.json:
-        print_of_inputs = fingerprint(notes_dir, notes, targets, root, args.graph, {
+        print_of_inputs = fingerprint(notes_dir, list(note_files(notes_dir)), targets, root, args.graph, {
             "scope": scopes, "include_tests": args.include_tests, "allow_missing": args.allow_missing,
             "graph": bool(args.graph)})
     if args.fingerprint:
