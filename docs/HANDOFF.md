@@ -2,16 +2,16 @@
 
 Read this first. It is kept current after every step, so a new agent with no other context can continue the work.
 
-Last updated: 2026-11-15, version 2.4.0 (fixes for Codex round 2).
+Last updated: 2026-11-15, version 2.5.0 (fixes for Codex round 3).
 
 ## Status
 
 | Item | State |
 |---|---|
-| Released | 2.4.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
-| In progress | Codex review, round 3, of the skill at 2.4.0. See "Codex review record". The VS Code extension design is drafted on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`), not yet reviewed |
+| Released | 2.5.0 on `main`: the skill, its templates, `check_notes.py`, `graph_plan.py`, `_common.py`, `test_scripts.py` |
+| In progress | Own adversarial probe of the scripts (a fresh agent), then Codex review round 4 of the skill. See "Codex review record". The VS Code extension design is drafted on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`), not yet reviewed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
-| Next step | 1. Handle the round 3 findings (fix with a test, or rebut with evidence), commit, review again until clean. 2. Codex review of the extension design note. 3. Plan note, Codex review. 4. Build on branch `vscode-extension` |
+| Next step | 1. Fix what the adversarial probe confirms (each with a test), commit, then Codex round 4; repeat until clean. 2. Codex review of the extension design note. 3. Plan note, Codex review. 4. Build on branch `vscode-extension` |
 | Stop rule | The owner (2026-11-15): continue until all features are complete or plan usage reaches 20% (weekly, all models). It was 8% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
 | Owner action open | Rename the GitHub repository `ortimusirig/code-explainer` to `argus` (optional; only the owner can) |
 
@@ -127,6 +127,23 @@ Run with `bash ~/.claude/skills/cross-model-review/scripts/xreview.sh plan <SKIL
 | 1 | `SKILL.md` and the repository at `dd81c53` | P0=0 P1=2 P2=7 P3=0. The helper marked the run void because the skill folder was renamed while it ran; the findings were read and are valid | All 9 confirmed against the code and fixed in 2.3.0, each with a test |
 
 | 2 | `SKILL.md` and the repository at `649d685` (2.3.0) | P0=0 P1=4 P2=4 P3=0; coverage marked incomplete because no real graph file was supplied | All 8 confirmed and fixed in 2.4.0, each code fix with a test; a made-up graph in graphify's shape is now in `docs/graph-sample.json` |
+
+| 3 | `SKILL.md` and the repository at `633ec6a` (2.4.0) | P0=0 P1=3 P2=5 P3=0; coverage complete | All 8 confirmed and fixed in 2.5.0 with tests |
+
+Trend: 9, 8, 8 findings. The review skill says to step back after three rounds without a downward trend. Change of approach (2026-11-15): before each further Codex round, a fresh agent probes the scripts adversarially with probes it must actually run, and its confirmed findings are fixed first. The Codex rounds had each found a new layer of the same kinds of hole (false pass, false fail, files missing from coverage, paths and letter case, Markdown parsing); a broad own probe is cheaper than one Codex round per layer.
+
+Round 3 findings, in short:
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 1 | P1 | Running the scripts could leave `__pycache__` in the tree being explained | `sys.dont_write_bytecode`; commands use `python -B` |
+| 2 | P1 | An inner line of a secret that spans lines could not be masked and pass | A line that is `[masked]` alone is accepted when the note's `masked_lines` names it; the count is printed |
+| 3 | P1 | `--scope build/compile.py` found nothing: skipped folder names applied before the scope | A scope into such a folder is honoured; left-out folders and their code file counts are reported |
+| 4 | P2 | A graph function in `pkg/a.py` (no note) was charged to `a.py` | Graph paths resolve against every code file, then only explained files are compared |
+| 5 | P2 | The plan showed inferred edges as certain and built a circle from one | Order and circles from confirmed uses; inferred uses listed apart with lines |
+| 6 | P2 | Constants in the graph had to be named like functions | Only functions, methods and classes |
+| 7 | P2 | A person's own empty note in the folder failed the check | Only notes with `written_by: argus` are read; such a File note is also the only kind that counts as an explanation |
+| 8 | P2 | An empty source file had no valid note form | Lens and no block |
 
 Round 2 findings, in short:
 

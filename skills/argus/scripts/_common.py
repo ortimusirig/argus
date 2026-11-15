@@ -101,22 +101,34 @@ def match_source(path, candidates):
 
 
 def inventory(root, include_tests, scopes):
-    """(code files in scope, {extension: count} of files in scope that are neither code nor known non-code)."""
-    code, unknown = [], {}
+    """(code files in scope, {kind: count} of files of unknown kind, {folder: count} of code files left out).
+
+    Folders named in SKIP_DIRS (dependencies, build output, tool folders), and test folders unless include_tests,
+    are left out. A scope that names such a folder, or something inside it, is honoured: only folders below the
+    scope are judged. The third value tells how many code files each left-out folder held, so nothing is dropped
+    without a word."""
+    code, unknown, left_out = [], {}, {}
     root = Path(root)
     for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
-        rel = p.relative_to(root)
-        folders = set(rel.parts[:-1])
-        if folders & SKIP_DIRS or (not include_tests and folders & TEST_DIRS):
+        parts = p.relative_to(root).parts
+        if ".git" in parts[:-1]:
             continue
-        rel = rel.as_posix()
+        rel = "/".join(parts)
         if not in_scope(rel, scopes):
+            continue
+        depth = max((len(s.split("/")) for s in scopes if rel == s or rel.startswith(s + "/")), default=0)
+        below = parts[depth:-1]
+        skipped = next((f for f in below if f in SKIP_DIRS or (not include_tests and f in TEST_DIRS)), None)
+        if skipped:
+            if kind_of(p) == "code":
+                folder = "/".join(parts[:depth + below.index(skipped) + 1])
+                left_out[folder] = left_out.get(folder, 0) + 1
             continue
         kind = kind_of(p)
         if kind == "code":
             code.append(rel)
         elif kind != "other":
             unknown[kind] = unknown.get(kind, 0) + 1
-    return code, unknown
+    return code, unknown, left_out

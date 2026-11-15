@@ -1,5 +1,5 @@
 {
   "name": "argus",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Explains a codebase for a reader who does not program, as linked Obsidian notes: purpose, blocks and lines, with every line of code in the notes and a script that proves nothing was skipped."
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Coverage check for argus notes. Python 3.10+, standard library only. Reads; never writes.
 
-  python check_notes.py --notes <notes folder> --source <source root> [--scope <path under the source root>]
+  python -B check_notes.py --notes <notes folder> --source <source root> [--scope <path under the source root>]
 
 Exit code 0: no FAIL and no MISSING. Exit code 1 otherwise. STALE and WARN lines do not change the exit code.
 """
@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import CODE_EXT, inventory, match_source, normalize_scopes  # noqa: E402
 
@@ -81,16 +82,27 @@ def code_excerpt(cell):
     return m.group(1).replace("\\|", "|").split("…")[0].strip()
 
 
-def same_line(got, real):
-    """A copied line equals the source line. With [masked] in it, everything around each mask must still match."""
+def same_line(got, real, fully_masked=False):
+    """A copied line equals the source line. With [masked] in it, everything around each mask must still match.
+    A line that is nothing but the mask is accepted only when the note declares that line in 'masked_lines'."""
     if got == real:
         return True
     if MASK not in got:
         return False
     parts = got.split(MASK)
     if not "".join(parts).strip():
-        return False
+        return fully_masked and got.strip() == MASK
     return re.fullmatch(".+?".join(re.escape(p) for p in parts), real) is not None
+
+
+def line_set(text):
+    """'3, 7-9' -> {3, 7, 8, 9}. Anything that is not a number or a range is ignored."""
+    result = set()
+    for piece in str(text).split(","):
+        m = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", piece)
+        if m:
+            result.update(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1))
+    return result
 
 
 def git(root, *args):
@@ -114,6 +126,7 @@ def check_file_note(name, text, props, root):
     depth = props.get("depth", "")
     if depth not in ("map", "full"):
         fails.append(f"{name}: property 'depth' must be map or full, is '{depth}'")
+    masked_lines = line_set(props.get("masked_lines", ""))
     note = text.split("\n")
     mask = fence_mask(note)
 
@@ -128,6 +141,12 @@ def check_file_note(name, text, props, root):
 
     # Blocks: headings outside fences only.
     starts = [i for i, line in enumerate(note) if not mask[i] and BLOCK.match(line)]
+    if not nonblank:
+        # finding 8: an empty source file has a note with the lens and no blocks
+        if starts:
+            fails.append(f"{name}: {src} has no code, so its note must have no '### Block' section")
+        print(f"INFO {src}: {len(lines)} lines, 0 non-blank, 0 blocks: an empty file, lens only")
+        return src
     if not starts:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
     block_ids = [BLOCK.match(note[i]).group(1) for i in starts]
@@ -174,7 +193,7 @@ def check_file_note(name, text, props, root):
                 fails.append(f"{name}: block {block_id} code has {len(code)} lines, source lines {a}-{b} are {len(want)}")
             else:
                 for offset, (got, real) in enumerate(zip(code, want)):
-                    if not same_line(got, real):
+                    if not same_line(got, real, (a + offset) in masked_lines):
                         fails.append(f"{name}: block {block_id} code differs from the source at line {a + offset}")
                         break
             after = [note[i] for i in range(last, end) if not mask[i]]
@@ -203,7 +222,9 @@ def check_file_note(name, text, props, root):
                 if not c[3]:
                     fails.append(f"{name}: row {label} has an empty 'Real value' cell (write a value, none, or not run)")
                 quoted = code_excerpt(c[1])
-                if not quoted or not quoted.replace(MASK, "").strip():
+                if quoted == MASK and all(k in masked_lines for k in range(r1, r2 + 1)):
+                    pass  # a row for lines the note declares as fully masked
+                elif not quoted or not quoted.replace(MASK, "").strip():
                     fails.append(f"{name}: row {label} quotes no code in its Code cell")
                 elif r1 >= 1 and r2 <= len(lines):
                     # With [masked] in the excerpt, the text around each mask must still be on the line.
@@ -222,8 +243,12 @@ def check_file_note(name, text, props, root):
         if blank_row:
             fails.append(f"{name}: rows for blank lines: {blank_row[:20]}")
         rows = f"{len(nonblank & set(in_row))}/{len(nonblank)}"
+    undeclared = sorted(k for k in masked_lines if k < 1 or k > len(lines))
+    if undeclared:
+        fails.append(f"{name}: masked_lines names lines outside the file: {undeclared[:10]}")
     print(f"INFO {src}: {len(lines)} lines, {len(nonblank)} non-blank, {len(starts)} blocks, depth {depth}, "
-          f"in blocks {len(nonblank & set(in_block))}/{len(nonblank)}, rows {rows}")
+          f"in blocks {len(nonblank & set(in_block))}/{len(nonblank)}, rows {rows}"
+          + (f", fully masked lines: {len(masked_lines)}" if masked_lines else ""))
     return src
 
 
@@ -256,7 +281,7 @@ def check_stale(name, props, root, kind):
         stale.append(f"{name}: written at commit {noted}; {', '.join(files)} changed since (now {newer[:8]})")
 
 
-def check_graph(graph_path, noted, prose_by_source):
+def check_graph(graph_path, noted, prose_by_source, all_code):
     """Every function or class the graph places in an explained file must be named in that file's note, outside the
     copied code. The graph's shape is read loosely (nodes with a file and a label): it differs between versions."""
     try:
@@ -283,9 +308,11 @@ def check_graph(graph_path, noted, prose_by_source):
             continue
         if Path(label).suffix.lower() in CODE_EXT:
             continue
-        match = match_source(where, list(prose_by_source))
-        if not match:
-            continue
+        if not (node.get("_callable") or node.get("_callable_class") or label.endswith("()")):
+            continue  # a constant or a variable: only functions, methods and classes must be named
+        match = match_source(where, all_code)
+        if match not in prose_by_source:
+            continue  # the file is not explained (or cannot be told apart): nothing to compare
         short = re.split(r"[.:#/]", label.split("(")[0].strip())[-1]
         if not re.fullmatch(r"[A-Za-z_$][\w$-]*", short or ""):
             continue
@@ -331,12 +358,13 @@ def main():
     vault_names = {p.stem for p in vault.rglob("*.md")} | set(notes)
 
     noted, linked, prose_by_source, kinds = set(), set(), {}, {}
+    unowned = []
     for name, p in notes.items():
         text = p.read_text(encoding="utf-8", errors="replace").replace("\r", "")
-        if not text.strip():
-            fails.append(f"{name}: the note is empty")
-            continue
         props = frontmatter(text)
+        if props.get("written_by", "").lower() != "argus":
+            unowned.append(name)  # someone's own note: kept for link resolution, never checked
+            continue
         kinds[name] = props.get("type", "")
         if not kinds[name]:
             warns.append(f"{name}: no 'type' property")
@@ -364,18 +392,24 @@ def main():
                 for code in re.findall(r"`([^`]*)`", bare):
                     if re.search(r"(^|[^\\])\|", code):
                         fails.append(f"{name} line {number}: unescaped | inside code in a table: {code[:40]}")
-    for name in notes:
+    for name in kinds:
         if name not in linked and kinds.get(name) != "start" and not name.endswith("Start Here"):
             fails.append(f"{name}: no note links to it")
+    if unowned:
+        print(f"INFO {len(unowned)} notes without written_by: argus were not checked (they are not this skill's notes)")
 
-    code_files, unknown = inventory(root, args.include_tests, scopes)
+    code_files, unknown, left_out = inventory(root, args.include_tests, scopes)
+    if left_out:
+        folders = "; ".join(f"{folder} ({count})" for folder, count in sorted(left_out.items()))
+        warns.append(f"folders left out as dependencies, build output, tool folders or tests, with their code files: "
+                     f"{folders}. To have one explained, name it with --scope (tests: --include-tests)")
     missing.extend(src for src in code_files if src not in noted)
     if unknown:
         kinds_text = "; ".join(f"{kind} ({count})" for kind, count in sorted(unknown.items()))
         warns.append(f"files in scope of a kind this check does not know, not counted as code: {kinds_text}. "
                      f"If they hold code, they need File notes too; say so in the report")
     if args.graph:
-        check_graph(args.graph, noted, prose_by_source)
+        check_graph(args.graph, noted, prose_by_source, sorted(set(inventory(root, True, [])[0]) | noted))
 
     for item in fails:
         print(f"FAIL {item}")

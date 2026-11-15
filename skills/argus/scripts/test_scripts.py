@@ -28,7 +28,7 @@ def file_note(src_rel, code_lines, depth="full", lang="py", explain=True, code_i
     n = len(code_lines)
     rng = f"line 1" if n == 1 else f"lines 1-{n}"
     shown = code_in_note if code_in_note is not None else code_lines
-    t = [f"---\ntype: file\nproject: P\nsource: {src_rel}\ndepth: {depth}\n{extra_props}---", f"# P file - {Path(src_rel).name}",
+    t = [f"---\ntype: file\nwritten_by: argus\nproject: P\nsource: {src_rel}\ndepth: {depth}\n{extra_props}---", f"# P file - {Path(src_rel).name}",
          "", "## Level 1: purpose", "", "| Lens | Answer |", "| --- | --- |"]
     t += [f"| {label} | an answer |" for label in LENS]
     t += ["", "## Level 2: blocks", "", "| # | Lines | Purpose | Why this way | Concepts |", "| --- | --- | --- | --- | --- |"]
@@ -57,8 +57,8 @@ def project(tmp, sources, notes):
     for name, text in notes.items():
         (nd / f"{name}.md").write_text(text, encoding="utf-8")
     links = " ".join(f"[[{name}]]" for name in notes)
-    (nd / "P - Start Here.md").write_text(f"---\ntype: start\n---\n# P\n{links} [[Concept - x]]\n", encoding="utf-8")
-    (nd / "Concept - x.md").write_text("---\ntype: concept\n---\n# Concept - x\nA thing.\n", encoding="utf-8")
+    (nd / "P - Start Here.md").write_text(f"---\ntype: start\nwritten_by: argus\n---\n# P\n{links} [[Concept - x]]\n", encoding="utf-8")
+    (nd / "Concept - x.md").write_text("---\ntype: concept\nwritten_by: argus\n---\n# Concept - x\nA thing.\n", encoding="utf-8")
     return src, nd
 
 
@@ -168,9 +168,9 @@ class CheckNotes(unittest.TestCase):
             first = git("log", "-1", "--format=%h").stdout.strip()
             (nd / "P file - a.py.md").write_text(file_note("a.py", code, extra_props=f"commit: {first}\n"), encoding="utf-8")
             (nd / "P mechanism - m.md").write_text(
-                f"---\ntype: mechanism\nsources: a.py\ncommit: {first}\n---\n# m\n[[P file - a.py]]\n```mermaid\nsequenceDiagram\n```\n",
+                f"---\ntype: mechanism\nwritten_by: argus\nsources: a.py\ncommit: {first}\n---\n# m\n[[P file - a.py]]\n```mermaid\nsequenceDiagram\n```\n",
                 encoding="utf-8")
-            (nd / "P - Start Here.md").write_text("---\ntype: start\n---\n[[P file - a.py]] [[P mechanism - m]] [[Concept - x]]\n", encoding="utf-8")
+            (nd / "P - Start Here.md").write_text("---\ntype: start\nwritten_by: argus\n---\n[[P file - a.py]] [[P mechanism - m]] [[Concept - x]]\n", encoding="utf-8")
             self.assertNotIn("STALE", run(CHECK, "--notes", nd, "--source", src)[1])
             (src / "a.py").write_text("x = 2\n", encoding="utf-8")
             git("add", "-A"); git("commit", "-q", "-m", "two")
@@ -244,6 +244,121 @@ class CheckNotesRound2(unittest.TestCase):
             src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
             code_, out = run(CHECK, "--notes", nd, "--source", src)
             self.assertEqual(code_, 0, out)
+
+
+class CheckNotesRound3(unittest.TestCase):
+    def test_scripts_write_nothing_beside_themselves(self):  # Codex round 3, finding 1
+        import shutil
+        shutil.rmtree(HERE / "__pycache__", ignore_errors=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            run(CHECK, "--notes", nd, "--source", src)
+            run(PLAN, "--graph", HERE.parent.parent.parent / "docs" / "graph-sample.json")
+        self.assertFalse((HERE / "__pycache__").exists())
+
+    def test_fully_masked_line_must_be_declared(self):  # finding 2
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ['key = """', "SECRETLINE", '"""']
+            shown = ['key = """', "[masked]", '"""']
+            undeclared = file_note("a.py", code, depth="map", code_in_note=shown)
+            declared = file_note("a.py", code, depth="map", code_in_note=shown, extra_props="masked_lines: 2\n")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": undeclared})
+            self.assertEqual(run(CHECK, "--notes", nd, "--source", src)[0], 1)
+            (nd / "P file - a.py.md").write_text(declared, encoding="utf-8")
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+            self.assertIn("fully masked lines: 1", out)
+
+    def test_fully_masked_line_in_a_line_table(self):  # finding 2
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ['key = """', "SECRETLINE", '"""']
+            note = file_note("a.py", code, code_in_note=['key = """', "[masked]", '"""'], extra_props="masked_lines: 2\n")
+            note = note.replace("`` SECRETLINE ``", "`` [masked] ``")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+            self.assertNotIn("SECRETLINE", note)
+
+    def test_scope_into_a_folder_that_is_normally_left_out(self):  # finding 3
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"build/compile.py": ["x = 1"], "a.py": ["y = 2"]},
+                              {"P file - a.py": file_note("a.py", ["y = 2"])})
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--scope", "build/compile.py")
+            self.assertEqual(code_, 1, out)
+            self.assertIn("MISSING build/compile.py", out)
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+            self.assertIn("build (1)", out)  # the left-out folder is reported
+
+    def test_graph_file_without_a_note_is_not_mixed_up(self):  # finding 4
+        with tempfile.TemporaryDirectory() as tmp:
+            src, nd = project(tmp, {"a.py": ["x = 1"], "pkg/a.py": ["def child_fn():", "    return 1"]},
+                              {"P file - a.py": file_note("a.py", ["x = 1"])})
+            graph = Path(tmp) / "graph.json"
+            graph.write_text(json.dumps({"nodes": [
+                {"id": "f1", "label": "a.py", "source_file": "a.py"},
+                {"id": "c", "label": "child_fn()", "source_file": "pkg/a.py", "_callable": True}], "links": []}))
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph, "--scope", "a.py")
+            self.assertEqual(code_, 0, out)
+
+    def test_graph_constants_need_not_be_named(self):  # finding 6
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["LIMIT = 5"]
+            note = file_note("a.py", code, depth="map")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            graph = Path(tmp) / "graph.json"
+            graph.write_text(json.dumps({"nodes": [
+                {"id": "f1", "label": "a.py", "source_file": "a.py"},
+                {"id": "k", "label": "LIMIT", "source_file": "a.py"}], "links": []}))
+            code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph)
+            self.assertEqual(code_, 0, out)
+
+    def test_notes_of_the_person_are_not_checked(self):  # finding 7
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            (nd / "My own note.md").write_text("", encoding="utf-8")
+            (nd / "Another of mine.md").write_text("See [[Nowhere at all]].\n", encoding="utf-8")
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+            self.assertIn("2 notes without written_by: argus", out)
+
+    def test_unowned_file_note_does_not_count(self):  # finding 7, the other side
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            note = file_note("a.py", code).replace("written_by: argus\n", "")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 1, out)
+            self.assertIn("MISSING a.py", out)
+
+    def test_empty_source_file(self):  # finding 8
+        with tempfile.TemporaryDirectory() as tmp:
+            lens = "\n".join(f"| {label} | an answer |" for label in LENS)
+            note = ("---\ntype: file\nwritten_by: argus\nproject: P\nsource: pkg/__init__.py\ndepth: map\n---\n# P file - init\n\n"
+                    f"## Level 1: purpose\n\n| Lens | Answer |\n| --- | --- |\n{lens}\n\n## Level 2: blocks\n\nThe file is empty.\n")
+            src, nd = project(tmp, {"pkg/__init__.py": []}, {})
+            self.assertIn("MISSING pkg/__init__.py", run(CHECK, "--notes", nd, "--source", src)[1])
+            (nd / "P file - init.md").write_text(note, encoding="utf-8")
+            (nd / "P - Start Here.md").write_text("---\ntype: start\nwritten_by: argus\n---\n[[P file - init]] [[Concept - x]]\n", encoding="utf-8")
+            code_, out = run(CHECK, "--notes", nd, "--source", src)
+            self.assertEqual(code_, 0, out)
+
+
+class GraphPlanRound3(unittest.TestCase):
+    def test_inferred_edge_is_not_a_dependency(self):  # finding 5
+        sample = HERE.parent.parent.parent / "docs" / "graph-sample.json"
+        code_, out = run(PLAN, "--graph", sample, "--json")
+        self.assertEqual(code_, 0, out)
+        plan = json.loads(out)
+        self.assertEqual(plan["cycles"], [])
+        self.assertLess(plan["order"].index("app/src/store.js"), plan["order"].index("app/src/main.js"))
+        store = plan["files"]["app/src/store.js"]
+        self.assertEqual(store["uses"], [])
+        self.assertEqual([u["file"] for u in store["inferred_uses"]], ["app/src/main.js"])
+        self.assertEqual(plan["files"]["app/src/main.js"]["uses"][0]["file"], "app/src/store.js")
+        self.assertIn("L2", plan["files"]["app/src/main.js"]["uses"][0]["at"])
 
 
 class GraphPlan(unittest.TestCase):

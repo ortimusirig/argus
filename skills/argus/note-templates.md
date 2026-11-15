@@ -124,7 +124,9 @@ Rules the check enforces on a File note:
 | Lens | All eight lens rows are present in Level 1, each with an answer |
 | Concepts | Every row of the Level 2 table has at least one `[[link]]` in its last cell |
 | Graph | Every function or class the graph places in the file is named in the note's own words, outside the copied code (a block purpose or a row) |
-| Masked secrets | On a code line that contains `[masked]`, everything around each `[masked]` must equal the source line; only the secret value itself may be replaced |
+| Masked secrets | On a code line that contains `[masked]`, everything around each `[masked]` must equal the source line; only the secret value itself may be replaced. A line that is `[masked]` alone must be listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`) |
+| Empty file | A source with no non-blank line: lens table, "The file is empty." under Level 2, no block |
+| Ownership | Only notes with `written_by: argus` are read by the check |
 | Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
 ## Concept note
