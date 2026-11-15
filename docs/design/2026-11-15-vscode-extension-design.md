@@ -4,6 +4,7 @@
 
 - 2026-11-15: first draft, written by the agent under the owner's autonomy instruction (decide, record, carry on).
 - 2026-11-15: revision 2, after Codex review round 1 (3 P1, 5 P2; all accepted). Changes: the states are defined; validation is separate from freshness and run by the extension itself; block matching is an ordered, non-overlapping assignment; unexplained lines are a state of their own; masked notes match; unsaved files, several projects and duplicate notes are defined; "create" runs in a visible terminal so the agent can ask.
+- 2026-11-15: revision 3, after Codex review round 2 (2 P1, 2 P2; all accepted). Changes: the check's outcome is taken from its exit code and RESULT line, never from per-note lines alone; the checker itself refuses a `source` outside the source root; shared Concept and Library notes in the vault are indexed; masking follows the checker's rule exactly.
 - Owner's request, in his words: "select the lines of code and explanation comes from the skill (either fetched or created at that time: if I have run the skill once that is fetched, or else created)". VS Code extension first; a localhost page in the next release.
 
 ## Codex review records
@@ -11,6 +12,7 @@
 | Round | Outcome | Disposition |
 |---|---|---|
 | 1 | P0=0 P1=3 P2=5 P3=0, coverage complete | All 8 accepted and designed for in revision 2 (see "Review round 1" at the end) |
+| 2 | P0=0 P1=2 P2=2 P3=0, coverage complete | All 4 accepted and designed for in revision 3 (see "Review round 2" at the end) |
 
 ## Goal
 
@@ -54,7 +56,7 @@ flowchart LR
 
 | Step | What happens | LLM used |
 |---|---|---|
-| 1. Index | On start, and whenever a note file changes, the extension reads every note in each project's notes folder that carries `written_by: argus`: properties (`type`, `source`, `commit`, `depth`, `masked_lines`), the lens table, and each block (id, purpose, recorded line range, the copied code, the explanation under it) | No |
+| 1. Index | On start, and whenever a note file changes, the extension reads every note that carries `written_by: argus` in each project's notes folder, and, when the project has a `vaultFolder`, the Concept and Library notes with that property anywhere in the vault (folders whose name starts with a dot are skipped). For each: properties (`type`, `source`, `commit`, `depth`, `masked_lines`), the lens table, and each block (id, purpose, recorded line range, the copied code, the explanation under it). Both folders are watched; a change refreshes the index | No |
 | 2. Project | The open file's real path is compared with each project's source root. The file belongs to the project whose root contains it (the longest root wins) | No |
 | 3. Look up | The file's path relative to that root is compared with the `source` of the notes of that project only | No |
 | 4. Assign | The note's blocks are assigned to places in the editor's current text (see "Matching") | No |
@@ -74,9 +76,10 @@ flowchart LR
 | Block | changed | Its code is not in the text exactly. This includes a difference only in spaces at line ends | Warning marker; the explanation is shown under "written for earlier code" |
 | Block | ambiguous | Its code occurs at more than one place and the order of the blocks does not decide which | Warning marker at every candidate place; the panel says so and does not call it current |
 | Line | unexplained | A non-blank line of the current text that no current block covers | Its own marker; selecting it offers Create |
-| Note | checked | The last check of this exact note against this exact source passed, with the graph | Badge "checked" |
-| Note | checked without graph | It passed with `--no-graph` | Badge "checked, graph not used" |
-| Note | check failed | The check reported FAIL for this note | Badge "check failed", with the check's lines for it |
+| Note | checked | The last check run for this file ended with exit code 0 and a RESULT line ending in `PASS`, for this exact note text and source text | Badge "checked" |
+| Note | checked without graph | The same, with a RESULT line ending in `PASS WITHOUT THE GRAPH CHECK` | Badge "checked, graph not used" |
+| Note | check failed | The run ended with exit code 1. The panel shows every FAIL and MISSING line, grouped: lines that name this note; lines about the graph (`FAIL graph: ...`); lines about other notes of the same folder. Any of them keeps the badge at "check failed" | Badge "check failed" and the grouped lines |
+| Note | check error | The check could not be run or did not finish: Python missing, exit code 2 (wrong arguments), any other exit code, no RESULT line, or the process was stopped | Badge "check error" and the reason |
 | Note | not checked | No stored result for this note text and source text; or Python is not available | Badge "not checked" and why |
 
 The validation result is stored with a hash of the note's text and a hash of the source file's saved text. A change to either makes the note "not checked" again.
@@ -88,7 +91,7 @@ The note's blocks, in the order of their recorded line ranges, are assigned to t
 | Rule | Detail |
 |---|---|
 | Text compared | Line by line. Line endings (CRLF or LF) are ignored. Everything else must be equal, spaces at line ends included |
-| Masked lines | A note line with `[masked]` matches a text line when everything around each mask matches, as in `check_notes.py` `same_line`. A line the note declares in `masked_lines` matches any one line |
+| Masked lines | Exactly the checker's rule (`check_notes.py`, the code-fence comparison). A copied line without `[masked]` must equal the text line, whatever `masked_lines` says. A copied line with `[masked]` is accepted only when its recorded line number is in `masked_lines`; then, a line that is `[masked]` alone matches any one line, and any other masked line matches when the text around each mask equals the text line. A `masked_lines` entry for a line whose copy holds no mask changes nothing |
 | Candidates | Every place in the text where a block's whole code matches |
 | Assignment | Blocks keep their order and never overlap: block n+1 is assigned after the end of block n. Among the assignments that satisfy this, the one that assigns the most blocks wins; among those, the one whose places are nearest the recorded lines |
 | Ambiguous | When two assignments are equally good and put a block at different places, that block is ambiguous |
@@ -121,7 +124,7 @@ Two parsers exist: the Python check (the authority on whether a note is valid) a
 | `argus.createDepth` | Depth asked for on create | `full` |
 | `argus.python` | The Python program for the check | `python` |
 
-Path rules (`projects.ts`): every configured folder is turned into its real path; on Windows, comparison ignores letter case and treats `\` and `/` alike; a file belongs to a project only when its real path lies inside the source root; a note's `source` that is absolute, contains `..`, or leads outside the source root is ignored and listed in the panel's "problems" line; with several workspace folders, each needs its own entry in `argus.projects`, and a file under no entry is "not in a project".
+Path rules (`projects.ts`): every configured folder is turned into its real path; on Windows, comparison ignores letter case and treats `\` and `/` alike; a file belongs to a project only when its real path lies inside the source root; a note's `source` that is absolute, contains `..`, or leads outside the source root is ignored by the index and listed in the panel's "problems" line (the checker refuses the same notes on its own, see "Validation by the extension"); with several workspace folders, each needs its own entry in `argus.projects`, and a file under no entry is "not in a project".
 
 A file that was renamed or moved has no note under its new path: it shows "no note". (A later version may notice that another note's blocks all match this file and suggest it.)
 
@@ -167,7 +170,8 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | Point | Decision |
 |---|---|
 | Command | `<argus.python> -B <extension>/scripts/check_notes.py --notes <notesFolder> --source <sourceRoot> --scope <file> [--vault <vaultFolder>] (--graph <graph> or --no-graph)`, run as a program with an argument list |
-| Result | The check's output lines that name this file's note, and its RESULT line. FAIL lines for this note: "check failed". No FAIL and the note counted as explaining the file: "checked" or "checked without graph" |
+| Result | Decided by the run as a whole, in this order: (1) the process could not start, was stopped, ended with a code other than 0 or 1, or printed no RESULT line: "check error"; (2) exit code 1: "check failed", with every FAIL and MISSING line shown, grouped as in "States"; (3) exit code 0 and RESULT ends in `PASS`: "checked"; (4) exit code 0 and RESULT ends in `PASS WITHOUT THE GRAPH CHECK`: "checked without graph". Nothing else counts as success. A failure in another note of the same folder, or in the graph, therefore keeps this note from showing "checked": the check certifies the folder's notes together, and the panel says which lines are not about this note |
+| What the check reads | Every note with `written_by: argus` in the notes folder, not only this file's. The checker itself refuses a `source` that is absolute, contains `..` or resolves outside the source root (`on_disk` in `_common.py`: the path is resolved and must lie inside the root, before anything is read), and reports it as a FAIL. The extension does not rely on its own index to keep the checker inside the root |
 | Stored | In the extension's workspace storage: note text hash, source text hash, state, the lines, the time |
 | Never | The extension does not change a note to make it pass |
 
@@ -177,7 +181,7 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 |---|---|
 | A workspace sets `argus.createCommand`, `argus.python` or `argus.projects` to run or read something harmful | `package.json` declares `capabilities.untrustedWorkspaces` as `{"supported": "limited", "restrictedConfigurations": ["argus.createCommand", "argus.python", "argus.projects"]}`: in Restricted Mode VS Code gives the extension only the user's own values. Create and Check are switched off until the workspace is trusted. `argus.createCommand` and `argus.python` are always read from the user's own settings (`inspect().globalValue`), never from the workspace, trusted or not |
 | A note contains HTML or script | The webview's content security policy is `default-src 'none'`, styles and images from the extension's own `media` folder only (`webview.cspSource`), scripts only with a nonce made new for each render. `localResourceRoots` is the `media` folder alone. Note text reaches the page through the core's renderer, which escapes HTML first |
-| A message from the page to the extension | Only these kinds are accepted: open a note by name, open in Obsidian, create, check, pick one of duplicate notes. Each is checked against the index before anything is done; a name that is not in the index is refused |
+| A message from the page to the extension | Only these kinds are accepted: open a note by name, open in Obsidian, create, check, pick one of duplicate notes. Each is checked against the index before anything is done; a name that is not in the index is refused. A linked name is looked up first among the project's own notes, then among the shared Concept and Library notes of its vault; found once: shown; found more than once in the vault: the panel lists the places and the person picks; a file outside the notes folder and the vault folder (by real path) is never opened |
 | Links in notes | `[[links]]` open notes inside the panel; `obsidian://` links open Obsidian; any other link is shown as text with its address and opened only on a click, through VS Code's own "open external" prompt |
 | Secrets | The panel shows the note's code, which is masked where the skill masked it; for a masked block it never shows the editor's text. The extension sends nothing anywhere |
 | Source code leaving the computer | Only through the coding agent the person has set up, as in any use of that agent |
@@ -249,3 +253,12 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | 6 | P2 | Source identity underspecified | `argus.projects` with one entry per source root; path rules; "duplicate notes" state; renamed files |
 | 7 | P2 | A non-interactive run cannot answer the skill's questions | Create runs in a visible terminal |
 | 8 | P2 | Ignoring line-end spaces hides real changes | Exact comparison; a spaces-only difference is "changed", and only used to place the marker |
+
+## Review round 2: findings and what changed
+
+| # | Sev | Finding | Change in revision 3 |
+|---|---|---|---|
+| 1 | P1 | The checker read any `source`, also outside the root, whatever the extension's index left out | The checker refuses such a source itself (done in the skill, version 2.6.0: `on_disk`); the design states that containment is the checker's own duty ("Validation by the extension") |
+| 2 | P1 | Graph and global failures had no defined outcome; a note could show "checked" while the run said NOT PASSED | The outcome comes from the exit code and the RESULT line; new state "check error"; failures are grouped but any of them prevents "checked" |
+| 3 | P2 | Shared Concept notes outside the notes folder had no lookup path | The index covers Concept and Library notes of the vault; lookup order, duplicates and containment are defined |
+| 4 | P2 | `masked_lines` let any declared line match anything | Parity with the checker: only a copied line that holds `[masked]` is treated as masked, and only when its line is listed |
