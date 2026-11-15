@@ -799,6 +799,28 @@ class FingerprintFraming(unittest.TestCase):
         self.assertNotEqual(digest(("a\x1fb",)), digest(("a", "b")))
 
 
+class FingerprintOfFailedReads(unittest.TestCase):
+    """A read that fails is part of the fingerprint (extension design review, round 9)."""
+
+    def test_missing_graph_and_unreadable_graph_differ(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ["x = 1"]
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": file_note("a.py", code)})
+            missing = Path(tmp) / "no-such-graph.json"
+            folder = Path(tmp) / "a-folder.json"
+            folder.mkdir()  # reading a folder as a file fails in another way than a missing file
+
+            def result(graph):
+                code_, out = run(CHECK, "--notes", nd, "--source", src, "--graph", graph, "--json")
+                return json.loads(out)
+
+            one, two = result(missing), result(folder)
+            self.assertEqual(one["result"], "NOT PASSED")
+            self.assertNotEqual(one["fails"][0]["text"], two["fails"][0]["text"].replace(str(folder), str(missing)))
+            self.assertNotEqual(one["fingerprint"], two["fingerprint"])
+            self.assertEqual(one["fingerprint"], result(missing)["fingerprint"])  # the same failure, the same value
+
+
 class GraphPlanProbe(unittest.TestCase):
     def test_graph_paths_with_a_leading_folder_and_scope(self):  # 14
         with tempfile.TemporaryDirectory() as tmp:

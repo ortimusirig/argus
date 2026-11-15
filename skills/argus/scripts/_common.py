@@ -68,7 +68,12 @@ def utf8_output():
 def read_text(path):
     """(text, encoding name). Reads UTF-8 with or without a mark, UTF-16 with a mark, and falls back to
     Windows-1252 for anything else, so a file is compared as an editor would show it."""
-    data = Path(path).read_bytes()
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        # A read that fails is an input too: "missing" and "not allowed" lead to different results.
+        witness("read failed", path, type(error).__name__, error.errno, error.strerror)
+        raise
     witness("read", path, hashlib.sha256(data).hexdigest())
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8", errors="replace"), "utf-8 with BOM"
