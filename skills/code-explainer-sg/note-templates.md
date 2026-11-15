@@ -10,7 +10,7 @@ One template per note type. Text in `<angle brackets>` is replaced. Everything e
 | Map | target folder | `<Project> - Map` |
 | Glossary | target folder | `<Project> - Glossary` |
 | End-to-End Flow | target folder | `<Project> flow - <what the flow does>` |
-| File | `Files/` | `<Project> file - <file name>` (add the folder when two files share a name: `<Project> file - setup/common.js`, written with ` - ` in place of `/`) |
+| File | `Files/` | `<Project> file - <file name>`. When another file of the same project has that file name, or the name is a generic one (`index`, `main`, `utils`, `common`, `__init__`), put the parent folder in front with ` - ` in place of `/`: `<Project> file - setup - common.js` |
 | Mechanism | `Mechanisms/` | `<Project> mechanism - <what it does>` |
 | Concept | `Concepts/` | `Concept - <term>` |
 | Library | `Libraries/` | `Library - <name>` |
@@ -33,7 +33,7 @@ written: <YYYY-MM-DD>
 ---
 ```
 
-Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `project` and `written`. Only File notes have `source`, `commit` and `depth`.
+Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `project` and `written`. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead.
 
 ## File note
 
@@ -43,7 +43,7 @@ Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept`
 ---
 # <Project> file - <file name>
 
-Source: `<source path>`, <version if the project has one>, <N> lines.
+Source: `<source path>`, <the project's version from its manifest, when it has one>, <N> lines.
 Back to [[<Project> - Start Here]]. <Links to the Mechanism notes this file takes part in.>
 
 ## Level 1: purpose
@@ -79,8 +79,13 @@ Back to [[<Project> - Start Here]]. <Links to the Mechanism notes this file take
 
 | Line | Code | What happens | Real value |
 | --- | --- | --- | --- |
-| <n> | `<the line, or a short excerpt ending in …>` | <plain words, with [[Concept - ...]] links> | <a real value, "none", or "not run"> |
-| <n-m> | `<excerpt>` | <one row for a statement that spans lines> | <...> |
+| <n> | `<the line as written, or its start followed by …>` | <plain words, with [[Concept - ...]] links> | <a value and where it comes from; "none"; or "not run"> |
+| <n-m> | `<the start of one of those lines, followed by …>` | <one row for a statement that spans lines> | <...> |
+
+<optional, for a line too rich for one cell: a small table, one row per part of the line. Its rows must not start with a number.>
+
+| Part of line <n> | Meaning |
+| --- | --- |
 
 ### Block 2: <purpose> (line <a>)
 
@@ -108,9 +113,10 @@ Rules the check enforces on a File note:
 | Block heading | `### Block <id>: <purpose> (lines a-b)` or `(line a)`. The id is a number, or a number and a letter for sub-blocks |
 | Code fence | The first fence after the heading holds exactly source lines a to b |
 | Coverage | The block ranges together contain every non-blank line once |
-| Line tables (`depth: full`) | Inside each block, the rows that start with a line number or range cover every non-blank line of that block once |
-| Lens | All eight lens rows are present in Level 1 |
-| Concepts | Every row of the Level 2 table has at least one `[[link]]` |
+| Line tables (`depth: full`) | Inside each block, the rows that start with a line number or range cover every non-blank line of that block once. Each has four cells; "What happens" and "Real value" are not empty; the Code cell quotes text that is on that line |
+| Lens | All eight lens rows are present in Level 1, each with an answer |
+| Concepts | Every row of the Level 2 table has at least one `[[link]]` in its last cell |
+| Graph | Every function or class the graph places in the file is named in the note's own words, outside the copied code (a block purpose or a row) |
 | Masked secrets | A code line that contains `[masked]` is not compared |
 
 ## Concept note
@@ -140,7 +146,7 @@ Rules the check enforces on a File note:
 `<source path>` line <n>:
 
 ```<language>
-<two to six real lines>
+<one to six real lines: the fewest that show it>
 ```
 
 <The real value it produces, when there is one.>
@@ -152,7 +158,9 @@ Rules the check enforces on a File note:
 Related: <[[Concept - ...]] links, each with three or four words on how it relates.>
 ````
 
-A sign such as `=`, `===`, `!` or `? :` does not get a note of its own. All signs of one language go in one note, `Concept - operators and symbols`, as a table: sign, how to read it, where in our code, the result there.
+A sign such as `=`, `===`, `!` or `? :` does not get a note of its own. All signs of one language go in one note, `Concept - operators and symbols`: the properties, one table (sign, how to read it, where in our code, the result there), a four-row lens (gain, lose, issues, risks) and "Used in". No "Parts" and no "Smallest real example".
+
+General computing words go in one note, `Concept - computing words`: the properties, one table (word, meaning in one or two sentences) and "Used in".
 
 ## Mechanism note
 
@@ -162,7 +170,7 @@ A sign such as `=`, `===`, `!` or `? :` does not get a note of its own. All sign
 ---
 # <Project> mechanism - <what it does>
 
-Source: <the files and line ranges that take part>.
+Source: <the files and line ranges that take part; a file with a note as a [[link]], a file without one as plain text with "no note yet">.
 Back to [[<Project> - Start Here]].
 
 <One sentence: what the behaviour is.>
@@ -279,7 +287,7 @@ flowchart LR
 
 ## Map of the source files
 
-<a Bases view when the obsidian-bases skill is installed; otherwise this table, in leaf-first order>
+<a Bases view when the obsidian-bases skill is installed; otherwise this table, in leaf-first order. Every source file of the project gets a row; a file without a note has "no note yet" in the last two cells.>
 
 | File | Lines | Purpose | Depth | Note |
 | --- | --- | --- | --- | --- |
@@ -314,7 +322,7 @@ Above about 30 files, draw one diagram of groups and one diagram per group.
 
 ## Programming concepts
 
-Read in this order: each one uses only the ones above it.
+Read in this order: the "What it is" of each one needs only the ones above it. (Their "Related" lines may point further down.)
 
 | # | Concept | In one line |
 | --- | --- | --- |

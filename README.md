@@ -39,18 +39,18 @@ Copy `skills/code-explainer-sg` into `~/.claude/skills/`, or add this repository
 ## The check
 
 ```bash
-python skills/code-explainer-sg/scripts/check_notes.py --notes <notes folder> --source <source root>
+python skills/code-explainer-sg/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope>
 ```
 
-It fails when a source file has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row (depth `full`), a lens row is missing, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options.
+It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options.
 
 ## Status
 
-Version 2.0.0. Replaces the DOCX generator of version 1.
+Version 2.0.1. Replaces the DOCX generator of version 1.
 
 | Part | State |
 | --- | --- |
-| Note format and check script | Tried on two real files (86 lines): the check passes on the notes and fails on deliberately broken copies |
-| graphify step | Written from graphify's documentation; not yet run. The graph comparison in the check reads the graph loosely and may need adjusting after the first real run |
+| Note format and check script | Tried on three real files (105 lines): the check passes on the notes and fails on deliberately broken copies (11 kinds of defect) |
+| The skill text | Followed once by a fresh agent with no other context, on one 19-line file at depth `full`: it produced 30 notes that pass the check. A second fresh agent, without graphify, stopped at preflight as the skill requires. Their 30 reported gaps led to version 2.0.1. Not yet tried on a whole project or at depth `map` |
+| graphify step | Written from graphify's documentation; not yet run. The test used a hand-made graph file. The graph comparison reads the graph loosely and may need adjusting after the first real run |
 | Bases view, canvas map | Left to obsidian-skills; not yet tried |
-| The skill text itself | Not yet tested by having a fresh agent follow it on a new codebase |
