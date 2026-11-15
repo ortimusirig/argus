@@ -5,6 +5,7 @@
 - 2026-11-15: first draft, written by the agent under the owner's autonomy instruction (decide, record, carry on).
 - 2026-11-15: revision 2, after Codex review round 1 (3 P1, 5 P2; all accepted). Changes: the states are defined; validation is separate from freshness and run by the extension itself; block matching is an ordered, non-overlapping assignment; unexplained lines are a state of their own; masked notes match; unsaved files, several projects and duplicate notes are defined; "create" runs in a visible terminal so the agent can ask.
 - 2026-11-15: revision 3, after Codex review round 2 (2 P1, 2 P2; all accepted). Changes: the check's outcome is taken from its exit code and RESULT line, never from per-note lines alone; the checker itself refuses a `source` outside the source root; shared Concept and Library notes in the vault are indexed; masking follows the checker's rule exactly.
+- 2026-11-15: revision 4, after Codex review round 3 (2 P1, 2 P2; all accepted). Changes: a stored check result is tied to everything the check read; a file the graph does not cover is never shown as fully checked; a copied line equal to the source needs no mask declaration even when the source itself says `[masked]`; the index accepts exactly the `source` paths the checker accepts. The extension reads the check's result as JSON (`check_notes.py --json`, added in skill version 2.6.1).
 - Owner's request, in his words: "select the lines of code and explanation comes from the skill (either fetched or created at that time: if I have run the skill once that is fetched, or else created)". VS Code extension first; a localhost page in the next release.
 
 ## Codex review records
@@ -13,6 +14,7 @@
 |---|---|---|
 | 1 | P0=0 P1=3 P2=5 P3=0, coverage complete | All 8 accepted and designed for in revision 2 (see "Review round 1" at the end) |
 | 2 | P0=0 P1=2 P2=2 P3=0, coverage complete | All 4 accepted and designed for in revision 3 (see "Review round 2" at the end) |
+| 3 | P0=0 P1=2 P2=2 P3=0, coverage complete | All 4 accepted and designed for in revision 4 (see "Review round 3" at the end) |
 
 ## Goal
 
@@ -76,13 +78,14 @@ flowchart LR
 | Block | changed | Its code is not in the text exactly. This includes a difference only in spaces at line ends | Warning marker; the explanation is shown under "written for earlier code" |
 | Block | ambiguous | Its code occurs at more than one place and the order of the blocks does not decide which | Warning marker at every candidate place; the panel says so and does not call it current |
 | Line | unexplained | A non-blank line of the current text that no current block covers | Its own marker; selecting it offers Create |
-| Note | checked | The last check run for this file ended with exit code 0 and a RESULT line ending in `PASS`, for this exact note text and source text | Badge "checked" |
+| Note | checked | The stored result is still valid (see "What a stored result is tied to"), it ended with exit code 0 and `PASS`, and the graph covers this file | Badge "checked" |
+| Note | checked, not in the graph | The same, but the result lists this file under the graph's `not_covered`: its functions were not compared with the graph | Badge "checked; this file is not in the graph" |
 | Note | checked without graph | The same, with a RESULT line ending in `PASS WITHOUT THE GRAPH CHECK` | Badge "checked, graph not used" |
 | Note | check failed | The run ended with exit code 1. The panel shows every FAIL and MISSING line, grouped: lines that name this note; lines about the graph (`FAIL graph: ...`); lines about other notes of the same folder. Any of them keeps the badge at "check failed" | Badge "check failed" and the grouped lines |
 | Note | check error | The check could not be run or did not finish: Python missing, exit code 2 (wrong arguments), any other exit code, no RESULT line, or the process was stopped | Badge "check error" and the reason |
-| Note | not checked | No stored result for this note text and source text; or Python is not available | Badge "not checked" and why |
+| Note | not checked | No stored result, or the stored result is no longer valid, or Python is not available | Badge "not checked" and why (for example "another note changed since the last check") |
 
-The validation result is stored with a hash of the note's text and a hash of the source file's saved text. A change to either makes the note "not checked" again.
+Whatever the badge, the panel also shows, from the same result: how many of the folder's explained files the graph covers, the number of warnings with a way to read them, and the masked lines of this note.
 
 ## Matching
 
@@ -91,7 +94,7 @@ The note's blocks, in the order of their recorded line ranges, are assigned to t
 | Rule | Detail |
 |---|---|
 | Text compared | Line by line. Line endings (CRLF or LF) are ignored. Everything else must be equal, spaces at line ends included |
-| Masked lines | Exactly the checker's rule (`check_notes.py`, the code-fence comparison). A copied line without `[masked]` must equal the text line, whatever `masked_lines` says. A copied line with `[masked]` is accepted only when its recorded line number is in `masked_lines`; then, a line that is `[masked]` alone matches any one line, and any other masked line matches when the text around each mask equals the text line. A `masked_lines` entry for a line whose copy holds no mask changes nothing |
+| Masked lines | Exactly the checker's order (`check_notes.py`, the code-fence comparison). First: a copied line equal to the text line matches, whatever it contains; source code that itself says `[masked]` therefore needs no declaration. Only when the two differ and the copied line holds `[masked]`: it is accepted when its recorded line number is in `masked_lines` and either the line is `[masked]` alone, or the text around each mask equals the text line. A `masked_lines` entry for a line whose copy holds no mask changes nothing |
 | Candidates | Every place in the text where a block's whole code matches |
 | Assignment | Blocks keep their order and never overlap: block n+1 is assigned after the end of block n. Among the assignments that satisfy this, the one that assigns the most blocks wins; among those, the one whose places are nearest the recorded lines |
 | Ambiguous | When two assignments are equally good and put a block at different places, that block is ambiguous |
@@ -124,7 +127,7 @@ Two parsers exist: the Python check (the authority on whether a note is valid) a
 | `argus.createDepth` | Depth asked for on create | `full` |
 | `argus.python` | The Python program for the check | `python` |
 
-Path rules (`projects.ts`): every configured folder is turned into its real path; on Windows, comparison ignores letter case and treats `\` and `/` alike; a file belongs to a project only when its real path lies inside the source root; a note's `source` that is absolute, contains `..`, or leads outside the source root is ignored by the index and listed in the panel's "problems" line (the checker refuses the same notes on its own, see "Validation by the extension"); with several workspace folders, each needs its own entry in `argus.projects`, and a file under no entry is "not in a project".
+Path rules (`projects.ts`): every configured folder is turned into its real path; on Windows, comparison ignores letter case and treats `\` and `/` alike; a file belongs to a project only when its real path lies inside the source root; the index treats a note's `source` exactly as the checker does: it is resolved against the source root, and accepted when the result is a file inside the root, whatever its spelling (`sub/../file.py`, another letter case on Windows); a `source` that resolves outside the root or to no file is ignored by the index and listed in the panel's "problems" line (the checker refuses the same notes on its own, see "Validation by the extension"); with several workspace folders, each needs its own entry in `argus.projects`, and a file under no entry is "not in a project".
 
 A file that was renamed or moved has no note under its new path: it shows "no note". (A later version may notice that another note's blocks all match this file and suggest it.)
 
@@ -169,10 +172,11 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 
 | Point | Decision |
 |---|---|
-| Command | `<argus.python> -B <extension>/scripts/check_notes.py --notes <notesFolder> --source <sourceRoot> --scope <file> [--vault <vaultFolder>] (--graph <graph> or --no-graph)`, run as a program with an argument list |
-| Result | Decided by the run as a whole, in this order: (1) the process could not start, was stopped, ended with a code other than 0 or 1, or printed no RESULT line: "check error"; (2) exit code 1: "check failed", with every FAIL and MISSING line shown, grouped as in "States"; (3) exit code 0 and RESULT ends in `PASS`: "checked"; (4) exit code 0 and RESULT ends in `PASS WITHOUT THE GRAPH CHECK`: "checked without graph". Nothing else counts as success. A failure in another note of the same folder, or in the graph, therefore keeps this note from showing "checked": the check certifies the folder's notes together, and the panel says which lines are not about this note |
-| What the check reads | Every note with `written_by: argus` in the notes folder, not only this file's. The checker itself refuses a `source` that is absolute, contains `..` or resolves outside the source root (`on_disk` in `_common.py`: the path is resolved and must lie inside the root, before anything is read), and reports it as a FAIL. The extension does not rely on its own index to keep the checker inside the root |
-| Stored | In the extension's workspace storage: note text hash, source text hash, state, the lines, the time |
+| Command | `<argus.python> -B <extension>/scripts/check_notes.py --json --notes <notesFolder> --source <sourceRoot> --scope <file> [--vault <vaultFolder>] (--graph <graph> or --no-graph)`, run as a program with an argument list. `--json` makes the checker print one JSON object: `result`, `exit_code`, `explained`, `missing`, `fails` and `warns` (each with the note it is about, or a `graph` mark), `stale`, `masked_lines`, and `graph` with `used`, `covered` and `not_covered` |
+| Result | Decided by the run as a whole, in this order: (1) the process could not start, was stopped, ended with a code other than 0 or 1, or its output is not the expected JSON object: "check error"; (2) exit code 1: "check failed", with every entry of `fails` and `missing` shown, grouped by the note it is about, the graph, or other notes; (3) exit code 0, `result` is `PASS` and this file is in `graph.covered`: "checked"; (4) exit code 0, `result` is `PASS` and this file is in `graph.not_covered`: "checked, not in the graph"; (5) exit code 0 and `result` is `PASS WITHOUT THE GRAPH CHECK`: "checked without graph". Nothing else counts as success. A failure in another note of the same folder, or in the graph, keeps this note from showing "checked": the check certifies the folder's notes together, and the panel says which entries are not about this note |
+| What the check reads | Every note with `written_by: argus` in the notes folder, not only this file's; the source file of each File note; the graph. The checker resolves each `source` against the source root and reads it only when the result is a file inside the root (`on_disk` in `_common.py`); anything else is a FAIL and is not read. A spelling such as `sub/../file.py` or another letter case that resolves to a file inside the root is accepted |
+| Stored | In the extension's workspace storage: the result object, the time, and a fingerprint of everything the check read (next row) |
+| What a stored result is tied to | A fingerprint made of: the name and text of every `.md` file in the notes folder (so a changed, added or removed note changes it); the text of the source file of every File note there; the graph file's content, or the fact that no graph was used; the settings that shape the run (source root, notes folder, vault folder, graph path, Python program); the shipped checker's own files. The fingerprint is recomputed whenever the notes folder, a noted source file, the graph file or those settings change, and before a badge is shown after such a change. When it differs from the stored one, the result is dropped and the badge is "not checked" with the reason |
 | Never | The extension does not change a note to make it pass |
 
 ## Safety
@@ -185,7 +189,7 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | Links in notes | `[[links]]` open notes inside the panel; `obsidian://` links open Obsidian; any other link is shown as text with its address and opened only on a click, through VS Code's own "open external" prompt |
 | Secrets | The panel shows the note's code, which is masked where the skill masked it; for a masked block it never shows the editor's text. The extension sends nothing anywhere |
 | Source code leaving the computer | Only through the coding agent the person has set up, as in any use of that agent |
-| Paths | See "Path rules": real paths, containment in the source root, no `..` |
+| Paths | See "Path rules": real paths and containment in the source root, the same rule in the index and in the checker |
 
 ## Lens
 
@@ -262,3 +266,12 @@ The panel, top to bottom: the file's name, the freshness summary (how many block
 | 2 | P1 | Graph and global failures had no defined outcome; a note could show "checked" while the run said NOT PASSED | The outcome comes from the exit code and the RESULT line; new state "check error"; failures are grouped but any of them prevents "checked" |
 | 3 | P2 | Shared Concept notes outside the notes folder had no lookup path | The index covers Concept and Library notes of the vault; lookup order, duplicates and containment are defined |
 | 4 | P2 | `masked_lines` let any declared line match anything | Parity with the checker: only a copied line that holds `[masked]` is treated as masked, and only when its line is listed |
+
+## Review round 3: findings and what changed
+
+| # | Sev | Finding | Change in revision 4 |
+|---|---|---|---|
+| 1 | P1 | The stored result was tied to one note and one source, though the check reads the whole folder and the graph | The result is tied to a fingerprint of everything the check read; any change drops it ("Validation by the extension") |
+| 2 | P1 | A file the graph does not cover could show "checked" | New state "checked, not in the graph", from the result's `graph.not_covered`; coverage and warnings are always shown |
+| 3 | P2 | Requiring a declaration for every copied line that contains `[masked]` rejects source that says `[masked]` itself | Literal equality first, as in the checker ("Matching") |
+| 4 | P2 | The index refused `..` and absolute paths that the checker accepts when they resolve inside the root | One rule for both: resolve, then containment ("Path rules") |
