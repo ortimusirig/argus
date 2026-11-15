@@ -145,12 +145,12 @@ def git(root, *args):
 # ---------------------------------------------------------------- one File note
 
 def check_file_note(name, text, props, root):
-    """Checks one File note against its source. Returns (source path on disk, masked line count) or (None, 0)."""
+    """Checks one File note against its source. Returns (source path on disk, masked line numbers) or (None, [])."""
     given = props.get("source", "")
     src = on_disk(root, given) if given else None
     if not src:
         fails.append(f"{name}: property 'source' names no file under the source root: '{given}'")
-        return None, 0
+        return None, []
     lines, encoding = source_lines(Path(root) / src)
     nonblank = {i + 1 for i, line in enumerate(lines) if line.strip()}
     depth = props.get("depth", "")
@@ -169,7 +169,7 @@ def check_file_note(name, text, props, root):
         if starts:
             fails.append(f"{name}: {src} has no code, so its note must have no '### Block' section")
         infos.append(f"{src}: {len(lines)} lines, 0 non-blank, 0 blocks: an empty file, lens only")
-        return src, 0
+        return src, []
     if not starts:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
     block_ids = [BLOCK.match(note[i]).group(1) for i in starts]
@@ -314,7 +314,7 @@ def check_file_note(name, text, props, root):
     infos.append(f"{src}: {len(lines)} lines ({encoding}), {len(nonblank)} non-blank, {len(starts)} blocks, depth "
                  f"{depth}, in blocks {len(nonblank & set(in_block))}/{len(nonblank)}, rows {rows}"
                  + (f", masked lines: {len(masked_seen)}" if masked_seen else ""))
-    return src, len(masked_seen)
+    return src, sorted(masked_seen)
 
 
 def check_stale(name, props, root, kind, src=None):
@@ -478,9 +478,9 @@ def main():
         prose = [(i + 1, line) for i, line in enumerate(lines) if not mask[i]]
         if kind == "file":
             src, masked = check_file_note(name, text, props, root)
-            masked_total += masked
+            masked_total += len(masked)
             if masked:
-                masked_by_note[name] = masked
+                masked_by_note[name] = masked  # the line numbers
             if src:
                 if src in explained:
                     fails.append(f"{name}: {src} is also explained by the note '{explained[src]}'")

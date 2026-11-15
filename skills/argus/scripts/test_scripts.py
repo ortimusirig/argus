@@ -564,6 +564,15 @@ class ForPrograms(unittest.TestCase):
             self.assertEqual(result["fails"][0]["note"], "P file - a.py")
             self.assertFalse(result["graph"]["used"])
 
+    def test_json_lists_masked_line_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ['key = """', "SECRETLINE", '"""', "x = 1", "y = 2", "z = 3", "w = 4", "v = 5"]
+            note = file_note("a.py", code, depth="map", code_in_note=['key = """', "[masked]", '"""'] + code[3:],
+                             extra_props="masked_lines: 2\n")
+            src, nd = project(tmp, {"a.py": code}, {"P file - a.py": note})
+            result = json.loads(run(CHECK, "--notes", nd, "--source", src, "--json")[1])
+            self.assertEqual(result["masked_lines"], {"P file - a.py": [2]})
+
     def test_source_outside_the_root_is_refused_unread(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, nd = project(tmp, {"a.py": ["x = 1"]}, {"P file - a.py": file_note("a.py", ["x = 1"])})

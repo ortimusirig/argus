@@ -8,8 +8,8 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.9.1 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
-| In progress | Extension: the design stage is CLOSED (design note revision 11 on branch `vscode-extension`, worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`; ten Codex rounds, findings 8, 4, 4, 2, 1, 2, 1, 1, 1, 1; the last P2 fixed in skill 2.9.1 and to be confirmed in the plan review). The plan note (`docs/plans/` on the branch) is being written. Skill: Codex round 4 on the skill itself is still owed |
+| Released | 2.9.2 on `main` (committed locally; see the push problem under Rules) (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| In progress | Extension: design closed (revision 12). The plan note (`docs/plans/2026-11-15-vscode-extension-plan.md` on branch `vscode-extension`, worktree `C:\dev\argus-ext`) is at revision 2 after its first Codex round (1 P1, 7 P2, 1 P3, all accepted) and goes back to Codex. Skill: Codex round 4 on the skill itself is still owed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Plan note for the extension on the branch, then Codex review of it (`xreview.sh plan <plan note> <outdir> --source <design note> --source skills/argus/scripts/check_notes.py --source skills/argus/scripts/_common.py`). 2. Build on the branch, core first (`vscode/src/core/`), tests next to the code. 3. Codex round 4 on the skill when the Codex slot is free |
 | Stop rule | The owner (2026-11-15, latest word): continue until all features are complete or plan usage reaches 30% (weekly, all models; first 40%, then 20%, then 30%). It was 11% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
@@ -104,6 +104,7 @@ Consequence for the 3.0 design: the extension does lookup and display on its own
 | Run graphify only on a copy of the code, only as `graphify update <folder>`; never `graphify install`, `label`, `add` | `update` uses no LLM and sends nothing out; `install` edits `CLAUDE.md` and adds hooks |
 | No secret values in any note, commit or prompt | Owner rule in the vault and in the review skill |
 | Codex reads what it is given and sends it to OpenAI | Give it this repository only, never client code, the AURA example notes or a graph made from AURA code |
+| Pushing to GitHub needs the owner (since 2026-11-15, about 14:20) | git's saved sign-in for github.com stopped working without a prompt: `git push` from an agent fails with "could not read Username". Never enter credentials. Commit locally, tell the owner, and ask him to run `git -C C:\dev\argus push origin main` and `git -C C:\dev\argus-ext push -u origin vscode-extension`. Until then `main` on this computer is ahead of GitHub and the branch `vscode-extension` exists only here |
 | Do not change this checkout while a Codex run is in progress | The helper voids the run. Work on another branch in a separate worktree meanwhile |
 | Commit author | The git identity is set in this clone's local config; do not change it |
 | Commits end with the `Co-Authored-By` line of the agent that made them | Attribution |
