@@ -391,11 +391,26 @@ def check_graph(graph_path, own_words, files):
 # ---------------------------------------------------------------- main
 
 def note_files(folder):
-    """Every .md file under folder, leaving out folders whose name starts with a dot (.trash, .obsidian)."""
+    """Every .md file under folder, as a list, leaving out folders whose name starts with a dot (.trash,
+    .obsidian). The list adds itself to the run's fingerprint: call this once and use the one list for everything,
+    so what is checked and what is fingerprinted cannot differ."""
     folder = Path(folder)
-    for p in sorted(folder.rglob("*.md")):
-        if not any(part.startswith(".") for part in p.relative_to(folder).parts[:-1]):
-            yield p
+    found = [p for p in sorted(folder.rglob("*.md"))
+             if not any(part.startswith(".") for part in p.relative_to(folder).parts[:-1])]
+    witness("note files", folder, *[p.relative_to(folder).as_posix() for p in found])
+    return found
+
+
+def link_targets(vault, notes):
+    """What a [[link]] may point at: any note by name, any other file by its full name. One listing of the vault,
+    which adds itself to the run's fingerprint."""
+    vault = Path(vault)
+    targets = set(notes)
+    for p in vault.rglob("*"):
+        if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
+            targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
+    witness("link targets", vault, *sorted(targets))
+    return targets
 
 
 def main():
@@ -435,19 +450,13 @@ def main():
         if p.stem in notes:
             fails.append(f"note name used twice: {p.stem}")
         notes[p.stem] = p
-    # What a [[link]] may point at: any note in the vault by name, any other file by its full name.
-    targets = set(notes)
-    for p in vault.rglob("*"):
-        if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
-            targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
+    targets = link_targets(vault, notes)
 
     # What the run was told and what it found in the folders goes into its fingerprint; file contents and git
     # answers are added where they are read.
     witness("options", json.dumps({"scope": scopes, "include_tests": args.include_tests,
                                    "allow_missing": args.allow_missing, "graph": args.graph or None,
                                    "notes": str(notes_dir), "source": str(root), "vault": str(vault)}, sort_keys=True))
-    witness("note files", *[q.relative_to(notes_dir).as_posix() for q in note_files(notes_dir)])
-    witness("link targets", *sorted(targets))
     for script in ("check_notes.py", "_common.py"):
         witness("checker", script, hashlib.sha256((Path(__file__).resolve().parent / script).read_bytes()).hexdigest())
 

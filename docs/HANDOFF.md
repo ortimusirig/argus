@@ -8,8 +8,8 @@ Last updated: 2026-11-15, version 2.6.1 (`check_notes.py --json`).
 
 | Item | State |
 |---|---|
-| Released | 2.8.1 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
-| In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 7 and in Codex round 7. Findings per round so far: 8, 4, 4, 2, 1, 2, all accepted; since round 2 they are all about when a stored check result may still be shown as "checked". Skill: Codex round 4 is still owed |
+| Released | 2.8.2 on `main` (`setup_tools.py`; tour in the project's `.tours`; fingerprint built from what the run reads; 69 tests): the skill, its templates, `check_notes.py` (with `--json`), `graph_plan.py`, `_common.py`, `test_scripts.py` (59 tests) |
+| In progress | Extension: the design note on branch `vscode-extension` (worktree `C:\dev\argus-ext`, `docs/design/2026-11-15-vscode-extension-design.md`) is at revision 8 and in Codex round 8. Findings per round so far: 8, 4, 4, 2, 1, 2, 1, all accepted; since round 2 they are all about when a stored check result may still be shown as "checked". Skill: Codex round 4 is still owed |
 | Answered 2026-11-15 | AURA and the VS Code extension: see "AURA route" below |
 | Next step | 1. Handle design round 4; repeat until clean. 2. Codex round 4 on the skill (`xreview.sh plan skills/argus/SKILL.md ... --source C:/dev/argus`), one Codex run at a time. 3. Plan note for the extension (`docs/plans/` on the branch), Codex review. 4. Build on the branch, core first (`vscode/src/core/`), tests next to the code |
 | Stop rule | The owner (2026-11-15, latest word): continue until all features are complete or plan usage reaches 30% (weekly, all models; first 40%, then 20%, then 30%). It was 11% at the last look. The loop is driven by `/loop` in the session; a new agent restarts it with the same goal text |
