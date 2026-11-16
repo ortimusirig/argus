@@ -42,48 +42,75 @@ function* codePoints(line: string): Generator<void, Uint32Array, void> {
   return out.subarray(0, n);
 }
 
-interface Piece { text: Uint32Array; fail: Int32Array; }
-/** A note line cut at each [masked]: the literal pieces p0 … pk. */
-interface Pattern { first: Uint32Array; middle: Piece[]; last: Uint32Array; head: string; tail: string; size: number; }
+/** A note line cut at each [masked]: the literal pieces p0 … pk, two at least, kept end to end in one array
+ *  (`ends[m]` is where piece m ends), so that a line of very many pieces is not very many objects. `fail` holds,
+ *  at the same places, the search table of each piece between the first and the last; only those are searched for. */
+interface Pattern { text: Uint32Array; fail: Int32Array; ends: number[]; head: string; tail: string; size: number; }
 
-/** The Knuth-Morris-Pratt table of a sequence: for each place, the longest start of the sequence that ends there. */
-function failTable(seq: ArrayLike<number>, from: number, length: number): Int32Array {
+/** The Knuth-Morris-Pratt table of a sequence: for each place, the longest start of the sequence that ends there.
+ *  Yields every STEP places. */
+function* failSteps(seq: ArrayLike<number>, from: number, length: number): Generator<void, Int32Array, void> {
   const fail = new Int32Array(length);
   for (let i = 1, k = 0; i < length; i++) {
     while (k > 0 && seq[from + i] !== seq[from + k]) { k = fail[k - 1]; }
     if (seq[from + i] === seq[from + k]) { k++; }
     fail[i] = k;
+    if (i % STEP === 0) { yield; }
   }
   return fail;
 }
 
+const PIECE_WORK = 32;  // the work of one piece beside the work of one character: a yield every STEP / 32 pieces at least
+
+/** Cuts the note line at each [masked] and prepares each piece. The line is cut piece by piece, not at once, and
+ *  the work is counted: every STEP units of it there is a yield, however many pieces there are and however long. */
 function* compile(noteLine: string): Generator<void, Pattern, void> {
-  const parts = noteLine.split(MASK);
-  const pieces: Uint32Array[] = [];
-  for (const part of parts) { pieces.push(yield* codePoints(part)); }
-  const middle: Piece[] = [];
-  for (const text of pieces.slice(1, -1)) {
-    middle.push({ text, fail: failTable(text, 0, text.length) });
-    if (text.length >= STEP) { yield; }
+  const text = new Uint32Array(noteLine.length), fail = new Int32Array(noteLine.length);
+  const ends: number[] = [];
+  let head = "", tail = "", n = 0, work = 0;
+  for (let from = 0; ;) {
+    const at = noteLine.indexOf(MASK, from);
+    const end = at < 0 ? noteLine.length : at, start = n;
+    for (let i = from; i < end; i++) {                    // the piece as whole characters, as `codePoints` gives them
+      const c = noteLine.codePointAt(i) ?? 0;
+      if (c > 0xffff) { i++; }
+      text[n++] = c;
+      if (++work >= STEP) { work = 0; yield; }
+    }
+    if (ends.length > 0 && at >= 0) {                     // a piece between two masks: its Knuth-Morris-Pratt table
+      for (let i = 1, k = 0; start + i < n; i++) {
+        while (k > 0 && text[start + i] !== text[start + k]) { k = fail[start + k - 1]; }
+        if (text[start + i] === text[start + k]) { k++; }
+        fail[start + i] = k;
+        if (++work >= STEP) { work = 0; yield; }
+      }
+    }
+    if (ends.length === 0) { head = noteLine.slice(0, end); }
+    ends.push(n);
+    work += PIECE_WORK;
+    if (work >= STEP) { work = 0; yield; }
+    if (at < 0) { tail = noteLine.slice(from); break; }
+    from = at + MASK.length;
   }
-  return { first: pieces[0], middle, last: pieces[pieces.length - 1], head: parts[0], tail: parts[parts.length - 1],
-    size: noteLine.length };
+  return { text, fail, ends, head, tail, size: noteLine.length };
 }
 
 /** Whether the text fits the pattern: it starts with p0, ends with pk, and each piece between is found at the
  *  earliest place that leaves at least one character after the piece before it. The checker's expression
  *  (`mask_pattern`: the pieces joined by "one or more characters", anchored at both ends) without backtracking. */
 function* fits(p: Pattern, t: Uint32Array): Generator<void, boolean, void> {
-  const n = t.length;
+  const { text, fail, ends } = p, n = t.length, count = ends.length;
+  const firstLength = ends[0], lastAt = ends[count - 2], lastLength = ends[count - 1] - lastAt;
   let steps = 0;
-  if (n < p.first.length) { return false; }
-  for (let i = 0; i < p.first.length; i++) {
-    if (t[i] !== p.first[i]) { return false; }
+  if (n < firstLength) { return false; }
+  for (let i = 0; i < firstLength; i++) {
+    if (t[i] !== text[i]) { return false; }
     if (++steps % STEP === 0) { yield; }
   }
-  let pos = p.first.length;                 // the end of the piece before
-  for (const { text, fail } of p.middle) {
-    const from = pos + 1, length = text.length;
+  let pos = firstLength;                    // the end of the piece before
+  for (let m = 1; m < count - 1; m++) {
+    const at = ends[m - 1], length = ends[m] - at, from = pos + 1;
+    if (++steps % STEP === 0) { yield; }    // a piece is a step too, however short: there may be very many
     if (length === 0) {                     // two masks side by side: the first takes one character
       if (from > n) { return false; }
       pos = from;
@@ -91,18 +118,18 @@ function* fits(p: Pattern, t: Uint32Array): Generator<void, boolean, void> {
     }
     let found = -1;
     for (let i = from, k = 0; i < n; i++) {
-      while (k > 0 && t[i] !== text[k]) { k = fail[k - 1]; }
-      if (t[i] === text[k]) { k++; }
+      while (k > 0 && t[i] !== text[at + k]) { k = fail[at + k - 1]; }
+      if (t[i] === text[at + k]) { k++; }
       if (k === length) { found = i - length + 1; break; }
       if (++steps % STEP === 0) { yield; }
     }
     if (found < 0) { return false; }
     pos = found + length;
   }
-  const start = n - p.last.length;
+  const start = n - lastLength;
   if (start < pos + 1) { return false; }
-  for (let i = 0; i < p.last.length; i++) {
-    if (t[start + i] !== p.last[i]) { return false; }
+  for (let i = 0; i < lastLength; i++) {
+    if (t[start + i] !== text[lastAt + i]) { return false; }
     if (++steps % STEP === 0) { yield; }
   }
   return true;
@@ -124,14 +151,24 @@ export function maskedMatch(noteLine: string, textLine: string): boolean {
 
 type Kind = "exact" | "any" | "pattern";
 
+/** Whether the line holds nothing but masks and white space: pyStrip(line with every [masked] taken out) === "",
+ *  read from the left without cutting the line up. It stops at the first character that is neither. */
+function onlyMasks(line: string): boolean {
+  for (let i = 0; i < line.length;) {
+    if (line.startsWith(MASK, i)) { i += MASK.length; continue; }
+    if (pyStrip(line[i]) !== "") { return false; }
+    i++;
+  }
+  return true;
+}
+
 /** What a note line may match, from the checker's steps 2 to 5. A line that holds a mask it may not use ("never")
  *  can match only a text line equal to it, so it is an exact line. */
 function kindOf(noteLine: string, lineNo: number, props: NoteProps): Kind {
   if (!noteLine.includes(MASK)) { return "exact"; }
   if (!isMasked(props, lineNo)) { return "exact"; }
   if (pyStrip(noteLine) === MASK) { return "any"; }
-  if (pyStrip(noteLine.split(MASK).join("")) === "") { return "exact"; }
-  return "pattern";
+  return onlyMasks(noteLine) ? "exact" : "pattern";
 }
 
 function* sameLineSteps(noteLine: string, textLine: string, lineNo: number, props: NoteProps): Generator<void, boolean, void> {
@@ -257,7 +294,7 @@ class NumberedText {
     }
     let starts: number[] = [];
     if (runLength > 0) {
-      const fail = failTable(exact, runAt, runLength);
+      const fail = runLength < STEP ? runToEnd(failSteps(exact, runAt, runLength)) : yield* drive(failSteps(exact, runAt, runLength), slicer);
       for (let i = 0, k = 0; i < total; i++) {
         while (k > 0 && seq[i] !== exact[runAt + k]) { k = fail[k - 1]; }
         if (seq[i] === exact[runAt + k]) { k++; }

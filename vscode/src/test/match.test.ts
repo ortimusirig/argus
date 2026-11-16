@@ -477,3 +477,55 @@ test("CRLF text against an LF note: current", () => {
   assert.deepEqual(states(a), [["1", "current", 1, 2], ["2", "current", 4, 5], ["3", "current", 7, 8]]);
   assert.deepEqual(a.unexplained, []);
 });
+
+/** Runs `assign` to its end and gives its result with the time of work before each yield, in order. */
+function gapsOf(n: FileNote, text: string[]): { result: Assignment; gaps: number[]; took: number } {
+  const gaps: number[] = [];
+  const g = assign(n, text);
+  const started = performance.now();
+  let last = started;
+  for (;;) {
+    const step = g.next();
+    const now = performance.now();
+    gaps.push(now - last);
+    last = now;
+    if (step.done) { return { result: step.value, gaps, took: last - started }; }
+  }
+}
+
+test("a declared line of 250,000 [masked] side by side: preparing the pattern yields every few milliseconds; right answer", () => {
+  // Three shapes of a costly pattern: very many empty pieces, very many short pieces, one very long piece.
+  const shapes: { name: string; line: string; fitting: string; short: string }[] = [
+    { name: "x, 250,000 [masked], y", line: "x" + MASK.repeat(250000) + "y",
+      fitting: "x" + "ab".repeat(150000) + "y", short: "x" + "a".repeat(249999) + "y" },          // one character too few
+    { name: "x and 100,000 times [masked]a", line: "x" + (MASK + "a").repeat(100000),
+      fitting: "x" + "ba".repeat(100000), short: "x" + "ba".repeat(99999) + "a" },
+    { name: "x[masked], 2,000,000 characters, [masked]y", line: "x" + MASK + "ab".repeat(1000000) + MASK + "y",
+      fitting: "xQ" + "ab".repeat(1000000) + "Qy", short: "xQ" + "ab".repeat(1000000) + "y" },
+  ];
+  for (const { name, line, fitting, short } of shapes) {
+    const text = ["before", short, fitting, "after"];
+    const n = note([block("1", 3, [line])], "3");
+    const { result, gaps, took } = gapsOf(n, text);
+    const first = gaps[0], sorted = [...gaps].sort((x, y) => x - y);
+    const median = sorted[sorted.length >> 1], longest = sorted[sorted.length - 1];
+    console.log(`timing: ${name}: first yield after ${first.toFixed(2)} ms; ran ${took.toFixed(0)} ms in ${gaps.length} slices; `
+      + `work between yields: median ${median.toFixed(2)} ms, longest ${longest.toFixed(2)} ms`);
+    assert.deepEqual(states(result), [["1", "current-masked", 3, 3]], name);
+    assert.deepEqual(result.unexplained, [[1, 2], [4, 4]], name);
+    assert.ok(gaps.length > 1, `${name}: it never yielded`);
+    assert.ok(median <= 4, `${name}: median work between yields ${median} ms`);
+    assert.ok(longest <= 25, `${name}: longest work between yields ${longest} ms`);
+    // The same answers from the calls that do not yield.
+    assert.deepEqual(runToEnd(candidates(n, text)), [[3]], name);
+    assert.equal(sameLine(line, fitting, 3, n.props), true, name);
+    assert.equal(sameLine(line, short, 3, n.props), false, name);
+    assert.equal(maskedMatch(line, fitting), true, name);
+  }
+  // A line of masks and white space only, declared: it matches only a line equal to it (the checker's step 5).
+  const only = " " + MASK.repeat(250000) + " ";
+  const masks = note([block("1", 1, [only])], "1");
+  assert.equal(sameLine(only, "x".repeat(250002), 1, masks.props), false);
+  assert.deepEqual(states(run(masks, [only, "y"])), [["1", "current", 1, 1]]);
+  assert.equal(run(masks, ["x".repeat(250002), "y"]).placed[0].state, "changed");
+});
