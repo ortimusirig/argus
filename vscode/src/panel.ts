@@ -34,6 +34,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private quiet?: NodeJS.Timeout;
   private readonly latest = new Latest();                     // what was asked for after the selection moved stays (core/latest.ts)
   private again?: NodeJS.Timeout;
+  private opening = false;                                    // a command is opening the panel right now
   private editor?: vscode.TextEditor;
   private asked?: { key: string; at: number };                // the match the panel waits for, and since when
   /** The validation badge of a file's note; piece 6 (check.ts) sets it. */
@@ -48,7 +49,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.view = view;
     view.webview.options = { enableScripts: true, localResourceRoots: [this.media] };
     view.webview.onDidReceiveMessage((message: unknown) => { void this.receive(message); });
-    view.onDidChangeVisibility(() => { if (view.visible) { this.render(); } });
+    view.onDidChangeVisibility(() => { if (view.visible) { this.expire(); this.render(); } });
     view.onDidDispose(() => { if (this.view === view) { this.view = undefined; this.inner = ""; } });
     this.inner = "";
     this.render();
@@ -80,16 +81,27 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   /** The selection or the text changed: the panel follows after 200 ms of quiet, and shows the file again.
    *  What the person asked for in that time (a CodeLens, a linked note, a notice) is newer than the change and stays. */
   follow(): void {
-    if (!this.visible) { return; }
+    if (!this.visible) {
+      // Hidden: nothing is drawn, but the move is remembered, so what was kept before it goes when the panel
+      // is shown again. Not while a command opens the panel: a move that the opening itself causes is not the
+      // person's, and must not take away the lines the command asked for.
+      if (!this.opening) { this.latest.moved(); }
+      return;
+    }
     this.latest.moved();
     if (this.quiet) { clearTimeout(this.quiet); }
     this.quiet = setTimeout(() => {
       this.quiet = undefined;
-      if (this.latest.stale("shown")) { this.shown = undefined; }
-      if (this.latest.stale("pinned")) { this.pinned = undefined; }
-      if (this.latest.stale("notice")) { this.notice = undefined; }
+      this.expire();
       this.render();
     }, QUIET_MS);
+  }
+
+  /** Drops what was kept before the selection last moved. */
+  private expire(): void {
+    if (this.latest.stale("shown")) { this.shown = undefined; }
+    if (this.latest.stale("pinned")) { this.pinned = undefined; }
+    if (this.latest.stale("notice")) { this.notice = undefined; }
   }
 
   /** Sets the notice (or takes it away) as asked for now. */
@@ -104,7 +116,8 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.pinned = pinned;
     this.shown = undefined; this.notice = undefined;
     this.latest.asked("pinned", "shown", "notice");
-    await vscode.commands.executeCommand(`${Panel.viewId}.focus`);
+    this.opening = true;
+    try { await vscode.commands.executeCommand(`${Panel.viewId}.focus`); } finally { this.opening = false; }
     this.render();
   }
 
