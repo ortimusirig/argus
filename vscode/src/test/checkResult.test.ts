@@ -112,3 +112,19 @@ test("the panel shows the check details under the badge, escaped, with the warni
   const error = view("nonsense", 2);
   assert.ok(error.includes("check error") && error.includes("exit code 2"));
 });
+
+test("a note named like something every object has (constructor, toString, __proto__) has no masked lines of its own", () => {
+  for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    const outcome = stateOf(0, recorded({ masked_lines: { N: [5] } }), "a.py");
+    assert.deepEqual(badgeOf(outcome, name).details?.masked, [], name);
+    assert.ok(body({ kind: "file", file: "a.py", note: parseFileNote(name, "/n.md", "---\ntype: file\nsource: a.py\n---\n"), noteId: 1,
+      whole: false, badge: badgeOf(outcome, name), linkTo: () => undefined, problems: [] }).includes("checked"), name);
+  }
+  // Such a name with masked lines written for it gets exactly those.
+  const text = '{"result":"PASS","exit_code":0,"fingerprint":"f","explained":{},"missing":[],"fails":[],"warns":[],"stale":[],'
+    + '"masked_lines":{"__proto__":[3],"constructor":[4]},"graph":{"used":true,"covered":["a.py"],"not_covered":[]}}';
+  const outcome = stateOf(0, text, "a.py");
+  assert.deepEqual(badgeOf(outcome, "__proto__").details?.masked, [3]);
+  assert.deepEqual(badgeOf(outcome, "constructor").details?.masked, [4]);
+  assert.deepEqual(badgeOf(outcome, "toString").details?.masked, []);
+});

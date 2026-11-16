@@ -91,3 +91,18 @@ export class Checks {
     return { why: this.why.get(key) ?? "no check has been run" };
   }
 }
+
+/** A Memory over the object that the workspace storage holds for a project (`stored`: results by source path).
+ *  `save` is given the whole object again after each change. The results are kept in a Map: a source file named
+ *  `__proto__` or `constructor` is a key like any other, which it is not on a plain object. */
+export function memoryOf(stored: Record<string, Stored> | undefined, save: (all: Record<string, Stored>) => void): Memory {
+  const all = new Map<string, Stored>(Object.entries(stored ?? {}));
+  return {
+    keys: () => [...all.keys()],
+    get: (source) => all.get(source),
+    set: (source, value) => {
+      if (value) { all.set(source, value); } else { all.delete(source); }
+      save(Object.fromEntries(all));
+    },
+  };
+}

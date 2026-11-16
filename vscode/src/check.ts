@@ -12,7 +12,7 @@ import { Badge } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { Ran, RunOptions, checkerArgs, mayRun } from "./core/run";
 import { projectKey, userPython } from "./core/settings";
-import { Checks, Memory, Stored } from "./core/validity";
+import { Checks, Memory, Stored, memoryOf } from "./core/validity";
 
 const QUIET_MS = 1500;
 const LIMITS: RunOptions = { timeoutMs: 120000, maxBuffer: 20 * 1024 * 1024 };
@@ -49,15 +49,7 @@ export class Check implements vscode.Disposable {
   /** The results of a project in the workspace storage, by source path. */
   private memory(key: string): Memory {
     const name = `argus.check ${key}`;
-    const all: Record<string, Stored> = { ...this.context.workspaceState.get<Record<string, Stored>>(name, {}) };
-    return {
-      keys: () => Object.keys(all),
-      get: (source) => Object.prototype.hasOwnProperty.call(all, source) ? all[source] : undefined,
-      set: (source, value) => {
-        if (value) { all[source] = value; } else { delete all[source]; }
-        void this.context.workspaceState.update(name, { ...all });
-      },
-    };
+    return memoryOf(this.context.workspaceState.get<Record<string, Stored>>(name), (all) => { void this.context.workspaceState.update(name, all); });
   }
 
   /** The projects of the settings changed, or were read for the first time: a settings change is an input event. */

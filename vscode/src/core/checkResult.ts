@@ -93,7 +93,8 @@ export function detailsOf(result: CheckResult, noteName: string): Details {
   const covered = result.graph.covered.length;
   return {
     graph: result.graph.used ? `the graph covers ${covered} of ${covered + result.graph.not_covered.length} explained files` : "graph not used",
-    masked: [...(result.masked_lines[noteName] ?? [])],
+    // The note's own entry only: a note named `constructor` or `__proto__` must not get what every object has.
+    masked: Object.hasOwn(result.masked_lines, noteName) ? [...result.masked_lines[noteName]] : [],
     warnings: [...warns.mine, ...warns.graph, ...warns.others],
     stale: result.stale.map((item) => item.text),
     fails: { ...split(result.fails), missing: [...result.missing] },

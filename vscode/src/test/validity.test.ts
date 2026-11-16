@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { Checks, Memory, Stored, Validity } from "../core/validity";
+import { Checks, Memory, Stored, Validity, memoryOf } from "../core/validity";
 import { CheckResult, stateOfResult } from "../core/checkResult";
 
 function result(fingerprint: string, over: Partial<CheckResult> = {}): CheckResult {
@@ -124,4 +124,27 @@ test("a check error is shown for its generation only, and a failed check is stor
   checks.changed();
   checks.fingerprintDone("a.py", checks.begin(), "f3");
   assert.equal(label(checks), "failed");
+});
+
+test("the stored results: a source file named __proto__ or constructor is a key like any other", () => {
+  let saved: Record<string, Stored> = {};
+  const memory = memoryOf(undefined, (all) => { saved = all; });
+  assert.equal(memory.get("constructor"), undefined);
+  assert.equal(memory.get("__proto__"), undefined);
+  for (const key of ["__proto__", "constructor", "a.py"]) {
+    const stored: Stored = { result: result(key), time: 1 };
+    memory.set(key, stored);
+    assert.equal(memory.get(key), stored, key);
+    assert.ok(Object.hasOwn(saved, key), `${key} is saved`);
+  }
+  assert.deepEqual(memory.keys().sort(), ["__proto__", "a.py", "constructor"]);
+  assert.equal(Object.getPrototypeOf(saved), Object.prototype);
+  // What was saved is read again as it was, also after the storage wrote it as JSON.
+  const again = memoryOf(JSON.parse(JSON.stringify(saved)) as Record<string, Stored>, () => undefined);
+  assert.equal(again.get("__proto__")?.result.fingerprint, "__proto__");
+  assert.equal(again.get("toString"), undefined);
+  memory.set("__proto__", undefined);
+  assert.equal(memory.get("__proto__"), undefined);
+  assert.equal(Object.hasOwn(saved, "__proto__"), false);
+  assert.deepEqual(memory.keys().sort(), ["a.py", "constructor"]);
 });
