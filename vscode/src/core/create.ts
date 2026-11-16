@@ -52,8 +52,10 @@ export function refusal(at: { trusted: boolean; onDisk: boolean; file: string | 
 }
 
 /** What the lookup of a program asks of the system. Tests give the other system, and a disk that is not there. */
-export interface Lookup { windows: boolean; env: Record<string, string | undefined>; isFile(file: string): Promise<boolean>; }
-export type Program = { path: string } | { problem: string };
+export interface Lookup { windows: boolean; env: Record<string, string | undefined>; isFile(file: string): Promise<boolean>;
+  read?: (file: string) => Promise<string>; }   // the text of a launcher file; without it a batch file is always refused
+/** `before`: arguments that come before the command's own (the script that node runs, for an npm launcher). */
+export type Program = { path: string; before?: string[] } | { problem: string };
 
 /** The full path of the program of the command: a name is looked up on PATH (on Windows with the endings of
  *  PATHEXT), a full path is taken as it is. The full path is what is started, so what was looked at is what runs.
@@ -92,10 +94,41 @@ export async function findProgram(program: string, lookup: Lookup): Promise<Prog
   }
   if (found === undefined) { return { problem: `could not start '${program}': the program was not found; ${SETTING}` }; }
   if (lookup.windows && [".bat", ".cmd"].includes(p.extname(found).toLowerCase())) {
+    // A launcher that npm wrote only names the real program: that program is started itself, without the batch
+    // file and so without a command shell.
+    const through = lookup.read ? await behindShim(found, lookup, p) : undefined;
+    if (through) { return through; }
     return { problem: `could not start '${found}': it is a batch file, and Windows hands the arguments of a batch file to a command shell. `
       + `Name a program (an .exe) in argus.createCommand; ${SETTING}` };
   }
   return { path: found };
+}
+
+/** What an npm launcher (`name.cmd`) starts: the line `"%dp0%\...\program.exe" %*`, or `"%_prog%"  "%dp0%\...\script.js" %*`
+ *  with node. Only a target inside the launcher's own folder counts, written without `..`. Undefined when the
+ *  file is no such launcher; then it is refused as any batch file. */
+async function behindShim(shim: string, lookup: Lookup, p: typeof path.win32): Promise<Program | undefined> {
+  let text: string;
+  try { text = await (lookup.read as (file: string) => Promise<string>)(shim); } catch { return undefined; }
+  if (text.length > 20000) { return undefined; }
+  const folder = p.dirname(shim);
+  const inside = (rel: string): string | undefined =>
+    rel.split(/[\\/]/).some((part) => part === ".." || part === "" || part.includes(":")) ? undefined : p.join(folder, rel);
+  const exe = /^\s*"%dp0%\\([^"%\r\n]+\.exe)"\s+%\*\s*$/im.exec(text);
+  if (exe) {
+    const target = inside(exe[1]);
+    return target !== undefined && await lookup.isFile(target) ? { path: target } : undefined;
+  }
+  const js = /"%dp0%\\([^"%\r\n]+\.[cm]?js)"\s+%\*/i.exec(text);
+  if (js) {
+    const script = inside(js[1]);
+    if (script === undefined || !await lookup.isFile(script)) { return undefined; }
+    const beside = p.join(folder, "node.exe");
+    if (await lookup.isFile(beside)) { return { path: beside, before: [script] }; }
+    const node = await findProgram("node", { ...lookup, read: undefined });
+    return "path" in node ? { path: node.path, before: [script] } : undefined;
+  }
+  return undefined;
 }
 
 /** How the task of a run ended: its program ended (with an exit code, when the system gave one), or the task was

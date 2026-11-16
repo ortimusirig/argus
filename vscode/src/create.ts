@@ -125,7 +125,8 @@ export class Create implements vscode.Disposable {
     const variable = variableIn(values);
     if (variable !== undefined) { return variable; }
     const command = fill(userCommand(config.inspect<unknown>("createCommand")), values);
-    const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram });
+    const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram,
+      read: (file) => fs.promises.readFile(file, "utf8") });
     if ("problem" in program) { return program.problem; }
     // The hashes from before the start: the file as saved, and the file's notes as they are on disk now.
     await this.index.refreshNow(project).catch(() => undefined);
@@ -146,7 +147,7 @@ export class Create implements vscode.Disposable {
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
     const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, TASK_NAME, "argus",
-      new vscode.ProcessExecution(program.path, command.slice(1), { cwd: path.resolve(project.sourceRoot) }));
+      new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...command.slice(1)], { cwd: path.resolve(project.sourceRoot) }));
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, focus: true, panel: vscode.TaskPanelKind.Dedicated, close: false };
     const follow = new Follow((ended) => { void this.ended(started, ended); });
     this.following = { task, follow };
