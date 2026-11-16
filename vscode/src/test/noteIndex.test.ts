@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveLink } from "../core/links";
-import { NoteIndex } from "../core/noteIndex";
+import { NoteIndex, isNoteFile } from "../core/noteIndex";
 import { PathRules, Project, systemRules } from "../core/projects";
 
 function fileNote(source: string, purpose = "adds"): string {
@@ -596,4 +596,14 @@ test("a note read through a link keeps the link's name when the file the link le
     await index.changed(s.project, real);
     assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.name), ["Alias"], "as a reading of the folders gives it");
   } finally { s.done(); }
+});
+
+test("isNoteFile: a note file is what the checker's rglob(\"*.md\") finds: any letter case on Windows, .md as written elsewhere", () => {
+  assert.equal(isNoteFile("N.md", true), true);
+  assert.equal(isNoteFile("N.MD", true), true);
+  assert.equal(isNoteFile("N.md", false), true);
+  assert.equal(isNoteFile("N.MD", false), false, "the checker does not read it there, so it must not show a check's badge");
+  assert.equal(isNoteFile("N.Md", false), false);
+  assert.equal(isNoteFile("md", false), false);
+  assert.equal(isNoteFile("N.txt", true), false);
 });

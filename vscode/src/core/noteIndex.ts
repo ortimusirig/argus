@@ -39,9 +39,16 @@ interface Way { file: string; key: string; }
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
+/** Whether a file name is a note's, as the checker's `rglob("*.md")` takes it: on Windows in any letter case, on
+ *  other systems only `.md` as written. A file the checker does not read is no note here either: it could
+ *  else show the badge of a check that never read it. */
+export function isNoteFile(name: string, windows: boolean): boolean {
+  return (windows ? name.toLowerCase() : name).endsWith(".md");
+}
+
 /** Every .md file under the folder, folders whose name starts with a dot left out (as `note_files` in the checker).
  *  The listing ends early when `wanted` says that nobody waits for it any more. */
-async function mdFiles(folder: string, pause: () => Promise<void>, wanted: () => boolean): Promise<string[]> {
+async function mdFiles(folder: string, windows: boolean, pause: () => Promise<void>, wanted: () => boolean): Promise<string[]> {
   const found: string[] = [];
   const left = [folder];
   while (left.length > 0 && wanted()) {
@@ -51,7 +58,7 @@ async function mdFiles(folder: string, pause: () => Promise<void>, wanted: () =>
     for (const item of listed) {
       if (item.isDirectory()) {
         if (!item.name.startsWith(".")) { left.push(path.join(at, item.name)); }
-      } else if (item.name.toLowerCase().endsWith(".md")) {
+      } else if (isNoteFile(item.name, windows)) {
         found.push(path.join(at, item.name));
       }
     }
@@ -164,7 +171,7 @@ export class NoteIndex {
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
       for (const [, folder] of folders) {
-        for (const file of await mdFiles(folder, this.pause, () => this.live(held))) {
+        for (const file of await mdFiles(folder, this.rules.windows, this.pause, () => this.live(held))) {
           if (!this.live(held)) { return false; }
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
@@ -226,7 +233,7 @@ export class NoteIndex {
         return false;
       }
       if (folder) { return held.refreshed > asked ? false : this.refreshWork(held); }
-      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, this.wayOf(held, file)) : this.throughLink(held, file);
+      return isNoteFile(path.basename(file), this.rules.windows) ? this.rereadWork(held, this.wayOf(held, file)) : this.throughLink(held, file);
     });
   }
 
