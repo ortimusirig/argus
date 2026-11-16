@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { Block, FileNote, parseFileNote, parseProps } from "../core/notes";
 import { Assignment, MatchRuns, RunKey, assign, candidates, maskedMatch, pyStrip, runToEnd, sameLine } from "../core/match";
 
@@ -566,5 +567,121 @@ test("64 declared [masked] lines, each after 1,000,000 spaces: telling what a li
     // The same answers from the call that does not yield.
     assert.equal(sameLine(line, same, 1, n.props), true, name);
     if (other !== undefined) { assert.equal(sameLine(line, other, 1, n.props), false, name); }   // a whole-line mask fits every line
+  }
+});
+
+// ---------------------------------------------------------------- every step of a run yields, however large its input
+
+/** As gapsOf, with the pauses of the garbage collector taken out of the gaps they fell in. They are the engine's
+ *  time and no step of the matcher; with millions of lines on the heap one of them is longer than the bound. */
+async function workOf(n: FileNote, text: string[]): Promise<{ result: Assignment; gaps: number[]; took: number; collector: number }> {
+  const pauses: { startTime: number; duration: number }[] = [];
+  const observer = new PerformanceObserver((list) => { pauses.push(...list.getEntries()); });
+  observer.observe({ entryTypes: ["gc"] });
+  const gaps: number[] = [], ends: number[] = [];
+  const g = assign(n, text);
+  const started = performance.now();
+  let last = started;
+  let step = g.next();
+  for (;;) {
+    const now = performance.now();
+    gaps.push(now - last);
+    ends.push(now);
+    last = now;
+    if (step.done) { break; }
+    step = g.next();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));       // the collector's entries arrive after the run
+  observer.disconnect();
+  let collector = 0;
+  for (const pause of pauses) {
+    const at = ends.findIndex((end) => end >= pause.startTime + pause.duration);
+    if (at >= 0 && pause.startTime >= started) { gaps[at] = Math.max(0, gaps[at] - pause.duration); collector += pause.duration; }
+  }
+  return { result: step.value as Assignment, gaps, took: last - started, collector };
+}
+
+test("2,000,000 lines, 300,000 blocks, 300,000 masked ranges: every step of a run yields every few milliseconds; right answers", async () => {
+  const LINES = 2000000;
+  const count = (a: Assignment, state: string) => a.placed.reduce((sum, p) => sum + (p.state === state ? 1 : 0), 0);
+  const shapes: { name: string; make: () => { n: FileNote; text: string[] }; check: (a: Assignment) => void }[] = [
+    // The reviewer's case: no line of the block is an exact line, so every start is a candidate, 2,000,000 of them.
+    // The lines are all different: numbering them is a table of 2,000,000 entries.
+    { name: "one declared [masked] block against 2,000,000 different short lines",
+      make: () => ({ n: note([block("1", 1000, [MASK])], "1000"), text: numbered(LINES) }),
+      check: (a) => {
+        assert.deepEqual(states(a), [["1", "current-masked", 1000, 1000]]);
+        assert.deepEqual(a.unexplained, [[1, 999], [1001, LINES]]);
+      } },
+    // The longest run of exact lines is found at every start; the other exact line differs at each one at once.
+    { name: "an exact line at 2,000,000 starts, the block's other exact line at none of them",
+      make: () => { const text = new Array<string>(LINES).fill("A"); text[0] = "B"; return { n: note([block("1", 5, ["A", MASK, "B"])], "6"), text }; },
+      check: (a) => {
+        assert.deepEqual(states(a), [["1", "changed", 5, 7]]);
+        assert.equal(a.placed[0].spacesOnly, undefined);
+        assert.deepEqual(a.unexplained, [[1, LINES]]);
+      } },
+    // Very many blocks: 300,000 whose line is nowhere, recorded in no order; two that cannot both keep their order;
+    // 200 that are where they were recorded.
+    { name: "300,000 blocks whose code is nowhere, two that cannot keep their order, 200 in place",
+      make: () => {
+        const text = ["", "b()", "", "a()", ...numbered(200, "t")];
+        const blocks: Block[] = [];
+        for (let i = 0; i < 300000; i++) { blocks.push(block("c" + i, ((i * 7919) % 300000) + 1, ["nowhere " + (i % 7)])); }
+        blocks.push(block("a", 2, ["a()"]), block("b", 4, ["b()"]));
+        for (let i = 0; i < 200; i++) { blocks.push(block("t" + i, 5 + i, ["t" + i])); }
+        return { n: note(blocks), text };
+      },
+      check: (a) => {
+        assert.equal(a.placed.length, 300202);
+        assert.equal(count(a, "changed"), 300000);
+        assert.deepEqual([a.placed[0].at, a.placed[1].at, a.placed[299999].at], [{ from: 1, to: 1 }, { from: 204, to: 204 }, { from: 204, to: 204 }]);
+        assert.deepEqual(a.placed.slice(300000, 300002).map((p) => [p.block.id, p.state, p.candidates]), [["a", "ambiguous", [4]], ["b", "ambiguous", [2]]]);
+        assert.equal(count(a, "current"), 200);
+        assert.deepEqual([a.placed[300002].at, a.placed[300201].at], [{ from: 5, to: 5 }, { from: 204, to: 204 }]);
+        assert.deepEqual(a.unexplained, [[2, 2], [4, 4]]);
+      } },
+    // `masked_lines` names 300,000 lines one by one; the block's 2,000 lines are among the last of them.
+    { name: "300,000 ranges in masked_lines, a block of 2,000 pattern lines",
+      make: () => {
+        const masked = Array.from({ length: 300000 }, (_, i) => String(i + 1)).join(",");
+        return { n: note([block("1", 298001, Array.from({ length: 2000 }, (_, i) => `x${MASK}y${i}`))], masked),
+          text: Array.from({ length: 2000 }, (_, i) => `xQy${i}`) };
+      },
+      check: (a) => {
+        assert.deepEqual(states(a), [["1", "current-masked", 1, 2000]]);
+        assert.deepEqual(a.unexplained, []);
+      } },
+  ];
+  for (const { name, make, check } of shapes) {
+    const { n, text } = make();
+    const { result, gaps, took, collector } = await workOf(n, text);
+    const first = gaps[0], sorted = [...gaps].sort((x, y) => x - y);
+    const median = sorted[sorted.length >> 1], longest = sorted[sorted.length - 1];
+    console.log(`timing: ${name}: first yield after ${first.toFixed(2)} ms; ran ${took.toFixed(0)} ms in ${gaps.length} slices; `
+      + `work between yields: median ${median.toFixed(2)} ms, longest ${longest.toFixed(2)} ms (collector pauses of ${collector.toFixed(0)} ms taken out)`);
+    check(result);
+    assert.ok(gaps.length > 1, `${name}: it never yielded`);
+    assert.ok(median <= 4, `${name}: median work between yields ${median} ms`);
+    assert.ok(longest <= 25, `${name}: longest work between yields ${longest} ms`);
+  }
+  // The call that gives only the candidates: every start, none dropped.
+  const every = runToEnd(candidates(note([block("1", 7, [MASK, MASK])], "7-8"), numbered(100000)));
+  assert.equal(every[0].length, 99999);
+  assert.deepEqual([every[0][0], every[0][1], every[0][99998]], [1, 2, 99999]);
+});
+
+test("masked_lines: ranges in any order, one inside another, meeting, empty, far apart: each line as the checker reads it", () => {
+  const n = note([], "9-8, 20-22, 1, 21-30, 5-5, 3-4, 40, 1000000000-1000000002, 31, 0-0");
+  const declared = (line: number) => sameLine(MASK, "anything", line, n.props);
+  const yes = [1, 3, 4, 5, 20, 21, 22, 23, 30, 31, 40, 1000000000, 1000000002];
+  const no = [0, -1, 2, 6, 8, 9, 19, 32, 39, 41, 999999999, 1000000003];
+  for (const line of yes) { assert.equal(declared(line), true, `line ${line}`); }
+  for (const line of no) { assert.equal(declared(line), false, `line ${line}`); }
+  // The same through a run: a block of one [masked] line at each of those recorded lines.
+  const text = ["something"];
+  for (const line of [...yes, ...no]) {
+    const a = run(note([block("1", line, [MASK])], "9-8, 20-22, 1, 21-30, 5-5, 3-4, 40, 1000000000-1000000002, 31, 0-0"), text);
+    assert.equal(a.placed[0].state, yes.includes(line) ? "current-masked" : "changed", `a block recorded at line ${line}`);
   }
 });

@@ -43,9 +43,10 @@ function* codePoints(line: string): Generator<void, Uint32Array, void> {
 }
 
 /** A note line cut at each [masked]: the literal pieces p0 … pk, two at least, kept end to end in one array
- *  (`ends[m]` is where piece m ends), so that a line of very many pieces is not very many objects. `fail` holds,
- *  at the same places, the search table of each piece between the first and the last; only those are searched for. */
-interface Pattern { text: Uint32Array; fail: Int32Array; ends: number[]; head: string; tail: string; size: number; }
+ *  (`ends[m]` is where piece m ends, for the `count` pieces), so that a line of very many pieces is not very many
+ *  objects and no list grows as they are found. `fail` holds, at the same places, the search table of each piece
+ *  between the first and the last; only those are searched for. */
+interface Pattern { text: Uint32Array; fail: Int32Array; ends: Int32Array; count: number; head: string; tail: string; size: number; }
 
 /** The Knuth-Morris-Pratt table of a sequence: for each place, the longest start of the sequence that ends there.
  *  Yields every STEP places. */
@@ -66,8 +67,8 @@ const PIECE_WORK = 32;  // the work of one piece beside the work of one characte
  *  the work is counted: every STEP units of it there is a yield, however many pieces there are and however long. */
 function* compile(noteLine: string): Generator<void, Pattern, void> {
   const text = new Uint32Array(noteLine.length), fail = new Int32Array(noteLine.length);
-  const ends: number[] = [];
-  let head = "", tail = "", n = 0, work = 0;
+  const ends = new Int32Array(Math.floor(noteLine.length / MASK.length) + 1);     // one piece more than there can be masks
+  let head = "", tail = "", n = 0, work = 0, count = 0;
   for (let from = 0; ;) {
     const at = noteLine.indexOf(MASK, from);
     const end = at < 0 ? noteLine.length : at, start = n;
@@ -77,7 +78,7 @@ function* compile(noteLine: string): Generator<void, Pattern, void> {
       text[n++] = c;
       if (++work >= STEP) { work = 0; yield; }
     }
-    if (ends.length > 0 && at >= 0) {                     // a piece between two masks: its Knuth-Morris-Pratt table
+    if (count > 0 && at >= 0) {                           // a piece between two masks: its Knuth-Morris-Pratt table
       for (let i = 1, k = 0; start + i < n; i++) {
         while (k > 0 && text[start + i] !== text[start + k]) { k = fail[start + k - 1]; }
         if (text[start + i] === text[start + k]) { k++; }
@@ -85,21 +86,21 @@ function* compile(noteLine: string): Generator<void, Pattern, void> {
         if (++work >= STEP) { work = 0; yield; }
       }
     }
-    if (ends.length === 0) { head = noteLine.slice(0, end); }
-    ends.push(n);
+    if (count === 0) { head = noteLine.slice(0, end); }
+    ends[count++] = n;
     work += PIECE_WORK;
     if (work >= STEP) { work = 0; yield; }
     if (at < 0) { tail = noteLine.slice(from); break; }
     from = at + MASK.length;
   }
-  return { text, fail, ends, head, tail, size: noteLine.length };
+  return { text, fail, ends, count, head, tail, size: noteLine.length };
 }
 
 /** Whether the text fits the pattern: it starts with p0, ends with pk, and each piece between is found at the
  *  earliest place that leaves at least one character after the piece before it. The checker's expression
  *  (`mask_pattern`: the pieces joined by "one or more characters", anchored at both ends) without backtracking. */
 function* fits(p: Pattern, t: Uint32Array): Generator<void, boolean, void> {
-  const { text, fail, ends } = p, n = t.length, count = ends.length;
+  const { text, fail, ends, count } = p, n = t.length;
   const firstLength = ends[0], lastAt = ends[count - 2], lastLength = ends[count - 1] - lastAt;
   let steps = 0;
   if (n < firstLength) { return false; }
@@ -291,176 +292,357 @@ function whole(line: string): number {
   return line.length >> 10;
 }
 
+// ---------------------------------------------------------------- lists and tables of any size
+
+// Nothing below is one native step over a list as long as the text or the note: no sort, map or filter, no list
+// that is copied whole when it grows, no Map of millions of entries (a Map that grows writes all its entries again
+// in one step: 33 ms for a million). A list is a typed array of a known length, or is kept in pieces; a table is
+// many small Maps; an order is merged in runs. Every loop over them counts its work with the slicer.
+
+const PIECE = 4096;       // the entries of one piece of a list, and about those of one Map of a table
+
+/** Values by number, in pieces of PIECE: a list that grows is never copied whole. */
+class Pieces<T> {
+  private readonly pieces: T[][] = [];
+  get(i: number): T | undefined {
+    const piece = this.pieces[i >> 12];
+    return piece === undefined ? undefined : piece[i & (PIECE - 1)];
+  }
+  set(i: number, value: T): void {
+    (this.pieces[i >> 12] ?? (this.pieces[i >> 12] = []))[i & (PIECE - 1)] = value;
+  }
+}
+
+/** The characters from `from` up to `to` taken into a hash (FNV-1a over the UTF-16 units). */
+function hashed(line: string, h: number, from: number, to: number): number {
+  for (let i = from; i < to; i++) { h = Math.imul(h ^ line.charCodeAt(i), 0x01000193); }
+  return h;
+}
+
+/** The hash's bits stirred, so that each depends on every character (the last step of MurmurHash3). */
+function stirred(h: number): number {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** The hash of a long line. Yields every STEP characters. */
+function* hashSteps(line: string, seed: number): Generator<void, number, void> {
+  let h = seed;
+  for (let i = 0; i < line.length; i += STEP) {
+    h = hashed(line, h, i, Math.min(i + STEP, line.length));
+    yield;
+  }
+  return stirred(h);
+}
+
+/** A table from a line to a value, kept as many small Maps, about PIECE entries in each when `expected` lines are
+ *  all different. The Map of a line is chosen by a hash of the line that begins at a number drawn for this table,
+ *  so that no text can be written to fall into one Map. A table for few lines is one Map and nothing is hashed. */
+class Table<V> {
+  private readonly maps: (Map<string, V> | undefined)[];
+  private readonly seed = (Math.random() * 0x100000000) | 0;
+  constructor(expected: number) {
+    let count = 1;
+    while (count < 65536 && count * PIECE < expected) { count *= 2; }
+    this.maps = new Array(count);
+  }
+  private at(hash: number): Map<string, V> {
+    const i = hash & (this.maps.length - 1);
+    return this.maps[i] ?? (this.maps[i] = new Map());
+  }
+  /** The Map of a line shorter than STEP. */
+  near(line: string): Map<string, V> {
+    return this.maps.length === 1 ? this.at(0) : this.at(stirred(hashed(line, this.seed, 0, line.length)));
+  }
+  /** The Map of a long line: its hash is read inside the slice. */
+  *far(line: string, slicer: Slicer): Generator<number, Map<string, V>, void> {
+    return this.maps.length === 1 ? this.at(0) : this.at(yield* drive(hashSteps(line, this.seed), slicer));
+  }
+}
+
+/** The numbers 0 … count-1 in the order of their keys, those of equal keys in their own order: what a stable sort
+ *  by `key(a) - key(b)` gives, merged in runs with the slicer asked at every step. */
+function* inOrder(count: number, key: (i: number) => number, slicer: Slicer): Generator<number, Int32Array, void> {
+  let from = new Int32Array(count), to = new Int32Array(count);
+  const keys = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    from[i] = i;
+    keys[i] = key(i);
+    if (slicer.due()) { yield slicer.done; slicer.resume(); }
+  }
+  for (let width = 1; width < count; width *= 2) {
+    for (let low = 0; low < count; low += 2 * width) {
+      const middle = Math.min(low + width, count), high = Math.min(low + 2 * width, count);
+      for (let k = low, i = low, j = middle; k < high; k++) {
+        to[k] = i < middle && (j >= high || keys[from[i]] <= keys[from[j]]) ? from[i++] : from[j++];
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      }
+    }
+    [from, to] = [to, from];
+  }
+  return from;
+}
+
+/** The lines that `masked_lines` names, for an answer in a few steps however many ranges are written: the ranges
+ *  in the order of their first lines, those that meet joined into one. The answer is that of `isMasked`. */
+class MaskedLines {
+  private constructor(private readonly first: Float64Array, private readonly last: Float64Array, private readonly count: number) {}
+
+  static *of(props: NoteProps, slicer: Slicer): Generator<number, MaskedLines, void> {
+    const ranges = props.maskedRanges;
+    const order = yield* inOrder(ranges.length, (i) => ranges[i][0], slicer);
+    const first = new Float64Array(ranges.length), last = new Float64Array(ranges.length);
+    let count = 0;
+    for (let k = 0; k < order.length; k++) {
+      const [from, to] = ranges[order[k]];
+      if (to >= from) {                                  // a range written backwards holds no line
+        if (count > 0 && from <= last[count - 1]) {
+          if (to > last[count - 1]) { last[count - 1] = to; }
+        } else {
+          first[count] = from;
+          last[count++] = to;
+        }
+      }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
+    }
+    return new MaskedLines(first, last, count);
+  }
+
+  has(line: number): boolean {
+    if (!(line >= 1)) { return false; }
+    let low = 0, high = this.count;                      // the ranges that begin at or before the line end before `low`
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (this.first[middle] <= line) { low = middle + 1; } else { high = middle; }
+    }
+    return low > 0 && line <= this.last[low - 1];
+  }
+}
+
 // ---------------------------------------------------------------- candidates
 
 interface Compiled { pattern: Pattern; memo?: Uint8Array; }   // memo: two bits for each distinct text line
 
+const NONE = new Int32Array(0);
+
 /** A text with every distinct line numbered once, so that comparing exact lines is comparing numbers. */
 class NumberedText {
-  readonly ids = new Map<string, number>();
-  readonly distinct: string[] = [];
   readonly seq: Int32Array;
-  private readonly points: (Uint32Array | undefined)[] = [];
+  private distinct = 0;                                        // how many different lines the text holds
+  private readonly ids: Table<number>;
+  private readonly lines = new Pieces<string>();               // each different line, by its number
+  private readonly points = new Pieces<Uint32Array>();
   private kept = 0;
-  private readonly patterns = new Map<string, Compiled>();
+  private readonly patterns: Table<Compiled>;
 
   /** `loose`: the text's lines are without the white space at their ends, and the note's lines are read so too. */
-  private constructor(readonly props: NoteProps, readonly text: string[], private readonly loose: boolean) {
-    this.seq = new Int32Array(text.length);
+  private constructor(private readonly masked: MaskedLines, total: number, noteLines: number, private readonly loose: boolean) {
+    this.seq = new Int32Array(total);
+    this.ids = new Table<number>(total);
+    this.patterns = new Table<Compiled>(noteLines);
   }
 
-  static *of(props: NoteProps, text: string[], loose: boolean, slicer: Slicer): Generator<number, NumberedText, void> {
-    const numbered = new NumberedText(props, text, loose);
-    for (let i = 0; i < text.length; i++) {
-      let id = numbered.ids.get(text[i]);
+  /** The text is read from the caller's lines as they are: no copy of them is made. `noteLines`: how many lines
+   *  of code the note holds, for the table of their patterns. */
+  static *of(masked: MaskedLines, textLines: string[], noteLines: number, loose: boolean, slicer: Slicer): Generator<number, NumberedText, void> {
+    const numbered = new NumberedText(masked, textLines.length, noteLines, loose);
+    for (let i = 0; i < textLines.length; i++) {
+      let line = withoutEnding(textLines[i]);
+      if (loose) { line = line.length < STEP ? pyRStrip(line) : yield* rstripped(line, slicer); }
+      const map = line.length < STEP ? numbered.ids.near(line) : yield* numbered.ids.far(line, slicer);
+      let id = map.get(line);
       if (id === undefined) {
-        id = numbered.distinct.length;
-        numbered.ids.set(text[i], id);
-        numbered.distinct.push(text[i]);
+        id = numbered.distinct++;
+        map.set(line, id);
+        numbered.lines.set(id, line);
       }
       numbered.seq[i] = id;
-      if (slicer.due(4 + whole(text[i]))) { yield slicer.done; slicer.resume(); }
+      if (slicer.due(4 + (line.length >> 6))) { yield slicer.done; slicer.resume(); }
     }
     return numbered;
   }
 
   private *compiled(noteLine: string, slicer: Slicer): Generator<number, Compiled, void> {
-    let c = this.patterns.get(noteLine);
+    const map = noteLine.length < STEP ? this.patterns.near(noteLine) : yield* this.patterns.far(noteLine, slicer);
+    let c = map.get(noteLine);
     if (!c) {
       c = { pattern: yield* drive(compile(noteLine), slicer) };
-      this.patterns.set(noteLine, c);
+      map.set(noteLine, c);
     }
     return c;
   }
 
   /** One pattern against one distinct text line; the caller remembers the answer. */
   private *test(p: Pattern, id: number, slicer: Slicer): Generator<number, boolean, void> {
-    const line = this.distinct[id];
+    const line = this.lines.get(id) as string;
     if (!line.startsWith(p.head) || !line.endsWith(p.tail)) { return false; }
-    let t = this.points[id];
+    let t = this.points.get(id);
     if (!t) {
       t = line.length < STEP ? runToEnd(codePoints(line)) : yield* drive(codePoints(line), slicer);
-      if (this.kept + t.length <= 4_000_000) { this.points[id] = t; this.kept += t.length; }   // kept while they are few
+      if (this.kept + t.length <= 4_000_000) { this.points.set(id, t); this.kept += t.length; }   // kept while they are few
     }
     return p.size + t.length < STEP ? runToEnd(fits(p, t)) : yield* drive(fits(p, t), slicer);
   }
 
   /** Every start (0-based) where all lines of the block match in order. None is dropped; there is no cap. */
-  *starts(block: Block, slicer: Slicer): Generator<number, number[], void> {
+  *starts(block: Block, slicer: Slicer): Generator<number, Int32Array, void> {
     const length = block.code.length, total = this.seq.length, seq = this.seq;
-    if (length === 0 || length > total) { return []; }
-    const exact = new Int32Array(length).fill(-1);    // the number of each exact line; -1 for the other kinds
-    const patterns: { at: number; c: Compiled }[] = [];
+    if (length === 0 || length > total) { return NONE; }
+    const exact = new Int32Array(length);             // the number of each exact line; -1 for the other kinds
+    const patterns = new Pieces<Compiled>(), patternAt = new Int32Array(length);   // the pattern lines, and where each is
+    let patternCount = 0;
     for (let k = 0; k < length; k++) {
       const code = block.code[k];
       const line = !this.loose ? code : code.length < STEP ? pyRStrip(code) : yield* rstripped(code, slicer);
-      let kind: Kind = "exact", units = 4 + whole(line);
-      if (mayMask(line, block.from + k, this.props)) {         // the mask permission of a line is that of its recorded number
+      let kind: Kind = "exact", units = 4 + (line.length >> 6);
+      if (line.includes(MASK) && this.masked.has(block.from + k)) {   // the mask permission of a line is that of its recorded number
         kind = yield* stepped(maskKind(line), line.length, slicer);
         units += line.length >> 2;
       }
+      if (slicer.due(units)) { yield slicer.done; slicer.resume(); }    // counted before the line can end the search
+      exact[k] = -1;
       if (kind === "exact") {
-        const id = this.ids.get(line);
-        if (id === undefined) { return []; }           // a line the text does not hold at all
+        const map = line.length < STEP ? this.ids.near(line) : yield* this.ids.far(line, slicer);
+        const id = map.get(line);
+        if (id === undefined) { return NONE; }         // a line the text does not hold at all
         exact[k] = id;
       } else if (kind === "pattern") {
-        patterns.push({ at: k, c: yield* this.compiled(line, slicer) });
+        patterns.set(patternCount, yield* this.compiled(line, slicer));
+        patternAt[patternCount++] = k;
       }
-      if (slicer.due(units)) { yield slicer.done; slicer.resume(); }
     }
     // (1) The longest run of exact lines, searched in the text's numbers with Knuth-Morris-Pratt.
-    let runAt = 0, runLength = 0;
-    for (let k = 0; k < length; k++) {
-      if (exact[k] < 0) { continue; }
-      let end = k;
-      while (end < length && exact[end] >= 0) { end++; }
-      if (end - k > runLength) { runAt = k; runLength = end - k; }
-      k = end;
+    let runAt = 0, runLength = 0, others = 0;
+    for (let k = 0, begun = -1; k <= length; k++) {    // one line at a time: a run may be as long as the block
+      if (k < length && exact[k] >= 0) {
+        if (begun < 0) { begun = k; }
+        others++;
+      } else if (begun >= 0) {
+        if (k - begun > runLength) { runAt = begun; runLength = k - begun; }     // the first of the longest
+        begun = -1;
+      }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
     }
-    let starts: number[] = [];
+    others -= runLength;                               // the exact lines outside the longest run
+    let starts: Int32Array, count = 0;
     if (runLength > 0) {
       const fail = runLength < STEP ? runToEnd(failSteps(exact, runAt, runLength)) : yield* drive(failSteps(exact, runAt, runLength), slicer);
+      // The starts found are kept in pieces, and written into one list of their number at the end.
+      const pieces: number[][] = [];
+      let piece: number[] = [];
       for (let i = 0, k = 0; i < total; i++) {
         while (k > 0 && seq[i] !== exact[runAt + k]) { k = fail[k - 1]; }
         if (seq[i] === exact[runAt + k]) { k++; }
         if (k === runLength) {
           const start = i - runLength + 1 - runAt;
-          if (start >= 0 && start + length <= total) { starts.push(start); }
+          if (start >= 0 && start + length <= total) {
+            if (piece.length === PIECE) { pieces.push(piece); piece = []; }
+            piece.push(start);
+            count++;
+          }
           k = fail[k - 1];
         }
         if (slicer.due()) { yield slicer.done; slicer.resume(); }
       }
+      pieces.push(piece);
+      starts = new Int32Array(count);
+      for (let p = 0; p < pieces.length; p++) {
+        starts.set(pieces[p], p * PIECE);
+        if (slicer.due(64)) { yield slicer.done; slicer.resume(); }
+      }
     } else {
-      // No exact line: every start that leaves room, taken directly.
-      for (let start = 0; start + length <= total; start++) { starts.push(start); }
+      // No exact line: every start that leaves room, taken directly. All are kept, and the slicer is asked at each.
+      count = total - length + 1;
+      starts = new Int32Array(count);
+      for (let start = 0; start < count; start++) {
+        starts[start] = start;
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      }
     }
     // (2) The other exact lines, as numbers, only at the starts still left.
-    const others: number[] = [];
-    for (let k = 0; k < length; k++) {
-      if (exact[k] >= 0 && (k < runAt || k >= runAt + runLength)) { others.push(k); }
-    }
-    if (others.length > 0 && starts.length > 0) {
-      const left: number[] = [];
-      for (const start of starts) {
-        let ok = true;
-        for (const k of others) {
-          if (seq[start + k] !== exact[k]) { ok = false; break; }
-          if (slicer.due()) { yield slicer.done; slicer.resume(); }
-        }
-        if (ok) { left.push(start); }
+    if (others > 0 && count > 0) {
+      const at = new Int32Array(others);
+      for (let k = 0, n = 0; k < length; k++) {
+        if (exact[k] >= 0 && (k < runAt || k >= runAt + runLength)) { at[n++] = k; }
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }
       }
-      starts = left;
+      let left = 0;                                    // the starts that stay are written over the start of the list
+      for (let s = 0; s < count; s++) {
+        const start = starts[s];
+        let ok = true;
+        for (let n = 0; n < others && ok; n++) {
+          if (seq[start + at[n]] !== exact[at[n]]) { ok = false; }
+          if (slicer.due()) { yield slicer.done; slicer.resume(); }   // at every comparison, the one that fails too
+        }
+        if (ok) { starts[left++] = start; }
+      }
+      count = left;
     }
     // (3) Pattern lines, only at the starts still left; each (pattern, text line) pair is tested once in the note.
     // (4) "any" lines are never compared.
-    if (patterns.length > 0 && starts.length > 0) {
-      const left: number[] = [];
-      for (const start of starts) {
+    if (patternCount > 0 && count > 0) {
+      let left = 0;
+      for (let s = 0; s < count; s++) {
+        const start = starts[s];
         let ok = true;
-        for (const { at, c } of patterns) {
-          const id = seq[start + at], shift = (id & 3) << 1;
-          const memo = c.memo ?? (c.memo = new Uint8Array((this.distinct.length + 3) >> 2));
+        for (let n = 0; n < patternCount; n++) {
+          const c = patterns.get(n) as Compiled;
+          const id = seq[start + patternAt[n]], shift = (id & 3) << 1;
+          const memo = c.memo ?? (c.memo = new Uint8Array((this.distinct + 3) >> 2));
           let answer = (memo[id >> 2] >> shift) & 3;   // 0 not tested yet, 1 no, 2 yes
           if (answer === 0) {
             answer = (yield* this.test(c.pattern, id, slicer)) ? 2 : 1;
             memo[id >> 2] |= answer << shift;
-            if (slicer.due(16 + (this.distinct[id].length >> 2))) { yield slicer.done; slicer.resume(); }
+            if (slicer.due(16 + ((this.lines.get(id) as string).length >> 2))) { yield slicer.done; slicer.resume(); }
           } else if (slicer.due()) { yield slicer.done; slicer.resume(); }
           if (answer !== 2) { ok = false; break; }
         }
-        if (ok) { left.push(start); }
+        if (ok) { starts[left++] = start; }
       }
-      starts = left;
+      count = left;
     }
-    return starts;
+    return count === starts.length ? starts : starts.subarray(0, count);
   }
 }
 
-function* withoutEndings(textLines: string[], slicer: Slicer): Generator<number, string[], void> {
-  const text: string[] = new Array(textLines.length);
-  for (let i = 0; i < textLines.length; i++) {
-    text[i] = withoutEnding(textLines[i]);
+/** What a run prepares once: the masked lines, the numbered text, and for each block its starts. */
+interface Found { masked: MaskedLines; noteLines: number; found: Int32Array[]; }
+
+function* allStarts(note: FileNote, textLines: string[], slicer: Slicer): Generator<number, Found, void> {
+  const masked = yield* MaskedLines.of(note.props, slicer);
+  let noteLines = 0;
+  for (const block of note.blocks) {
+    noteLines += block.code.length;
     if (slicer.due()) { yield slicer.done; slicer.resume(); }
   }
-  return text;
-}
-
-function* allStarts(numbered: NumberedText, blocks: Block[], slicer: Slicer): Generator<number, number[][], void> {
-  const found: number[][] = [];
-  for (const block of blocks) {
-    found.push(yield* numbered.starts(block, slicer));
+  const numbered = yield* NumberedText.of(masked, textLines, noteLines, false, slicer);
+  const found: Int32Array[] = new Array(note.blocks.length);
+  for (let b = 0; b < note.blocks.length; b++) {
+    found[b] = yield* numbered.starts(note.blocks[b], slicer);
     slicer.done++;
+    if (slicer.due(4)) { yield slicer.done; slicer.resume(); }       // a block is a step, though its search may end at once
   }
-  return found;
+  return { masked, noteLines, found };
 }
 
 /** For each block of the note, in the note's order: every start line (1-based) where its whole code matches. */
 export function* candidates(note: FileNote, textLines: string[]): Generator<number, number[][], void> {
   const slicer = new Slicer();
-  const text = yield* withoutEndings(textLines, slicer);
-  const numbered = yield* NumberedText.of(note.props, text, false, slicer);
-  const found = yield* allStarts(numbered, note.blocks, slicer);
-  return found.map((starts) => starts.map((start) => start + 1));
+  const { found } = yield* allStarts(note, textLines, slicer);
+  const lines: number[][] = new Array(found.length);
+  for (let b = 0; b < found.length; b++) {
+    const starts = found[b], list: number[] = new Array(starts.length);
+    for (let j = 0; j < starts.length; j++) {
+      list[j] = starts[j] + 1;
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
+    }
+    lines[b] = list;
+    if (slicer.due()) { yield slicer.done; slicer.resume(); }
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------- assignment
@@ -500,18 +682,16 @@ class Best {
 // the later and stricter rule (design revision 13: matching never blocks the editor), so this is the generator.
 export function* assign(note: FileNote, textLines: string[]): Generator<number, Assignment, void> {
   const slicer = new Slicer();
-  const text = yield* withoutEndings(textLines, slicer);
-  const total = text.length;
-  const numbered = yield* NumberedText.of(note.props, text, false, slicer);
-  const found = yield* allStarts(numbered, note.blocks, slicer);
+  const total = textLines.length;
+  const { masked, noteLines, found } = yield* allStarts(note, textLines, slicer);
 
   // Blocks in the order of their recorded `from`. Forward: the best way to place blocks up to this one with this
   // block at this candidate. A block may sit at a candidate that starts after the end of the block placed before.
-  const order = note.blocks.map((_, i) => i).sort((a, b) => note.blocks[a].from - note.blocks[b].from);
-  const count = order.length;
+  const count = note.blocks.length;
+  const order = yield* inOrder(count, (i) => note.blocks[i].from, slicer);
   const far = (o: number, start: number) => Math.abs(start + 1 - note.blocks[order[o]].from);
   const forward = new Best(total + 1);
-  const upCount: Int32Array[] = [], upCost: Float64Array[] = [];
+  const upCount: Int32Array[] = new Array(count), upCost: Float64Array[] = new Array(count);
   for (let o = 0; o < count; o++) {
     const starts = found[order[o]], length = note.blocks[order[o]].code.length;
     const c = new Int32Array(starts.length), k = new Float64Array(starts.length);
@@ -525,8 +705,9 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
       forward.add(starts[j] + length, c[j], k[j]);
       if (slicer.due(8)) { yield slicer.done; slicer.resume(); }
     }
-    upCount.push(c);
-    upCost.push(k);
+    upCount[o] = c;
+    upCost[o] = k;
+    if (slicer.due(4)) { yield slicer.done; slicer.resume(); }       // a block without a candidate is a step too
   }
   forward.find(total + 1);
   const bestCount = forward.foundCount, bestCost = forward.foundCost;
@@ -535,16 +716,18 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
   // best solution when the two halves together give the best count and sum.
   const backward = new Best(total + 1);
   const downCount: Int32Array[] = new Array(count), downCost: Float64Array[] = new Array(count);
-  const inBest: number[][] = new Array(count);
+  const inBest: Int32Array[] = new Array(count);        // for each block, which of its candidates are in a best solution
+  let withBest = 0;                                      // the blocks that have a place in some best solution
   for (let o = count - 1; o >= 0; o--) {
     const starts = found[order[o]], length = note.blocks[order[o]].code.length;
     const c = new Int32Array(starts.length), k = new Float64Array(starts.length);
-    const best: number[] = [];
+    const best = new Int32Array(starts.length);
+    let bests = 0;
     for (let j = 0; j < starts.length; j++) {
       backward.find(total - starts[j] - length + 1);     // entries are kept at (total - start + 1): those that start after this end
       c[j] = backward.foundCount + 1;
       k[j] = backward.foundCost + far(o, starts[j]);
-      if (upCount[o][j] + backward.foundCount === bestCount && upCost[o][j] + backward.foundCost === bestCost) { best.push(j); }
+      if (upCount[o][j] + backward.foundCount === bestCount && upCost[o][j] + backward.foundCost === bestCost) { best[bests++] = j; }
       if (slicer.due(8)) { yield slicer.done; slicer.resume(); }
     }
     for (let j = 0; j < starts.length; j++) {
@@ -553,15 +736,17 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
     }
     downCount[o] = c;
     downCost[o] = k;
-    inBest[o] = best;
+    inBest[o] = bests === best.length ? best : best.subarray(0, bests);
+    if (bests > 0) { withBest++; }
+    if (slicer.due(4)) { yield slicer.done; slicer.resume(); }
   }
 
   // Plan: "if another best solution places it elsewhere, its state is ambiguous". The plan is silent on a block that
   // one best solution places and another, equally good, leaves out (two blocks that cannot both keep their order).
   // Neither is called current here: both are ambiguous. This can happen only when more blocks have a place in some
   // best solution than one solution holds.
-  const leftOut: boolean[] = new Array(count).fill(false);
-  if (inBest.filter((best) => best.length > 0).length > bestCount) {
+  const leftOut = new Uint8Array(count);
+  if (withBest > bestCount) {
     const after = new Best(total + 1);                   // the blocks after block o
     for (let o = count - 1; o >= 0; o--) {
       const starts = found[order[o]];
@@ -569,40 +754,48 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
         after.find(total + 1);
         let skipped = after.foundCount === bestCount && after.foundCost === bestCost;   // nothing placed before it either
         for (let before = 0; before < o && !skipped; before++) {
-          const length = note.blocks[order[before]].code.length;
-          for (const j of inBest[before]) {
-            after.find(total - found[order[before]][j] - length + 1);
+          const length = note.blocks[order[before]].code.length, places = found[order[before]], best = inBest[before];
+          for (let b = 0; b < best.length; b++) {
+            const j = best[b];
+            after.find(total - places[j] - length + 1);
             if (upCount[before][j] + after.foundCount === bestCount && upCost[before][j] + after.foundCost === bestCost) { skipped = true; break; }
             if (slicer.due(8)) { yield slicer.done; slicer.resume(); }
           }
+          if (slicer.due()) { yield slicer.done; slicer.resume(); }   // a block before it that has no place is a step too
         }
-        leftOut[o] = skipped;
+        leftOut[o] = skipped ? 1 : 0;
       }
       for (let j = 0; j < starts.length; j++) {
         after.add(total - starts[j] + 1, downCount[o][j], downCost[o][j]);
         if (slicer.due(8)) { yield slicer.done; slicer.resume(); }
       }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
     }
   }
 
   const placed: Placed[] = new Array(count);
-  const covered = new Uint8Array(total);
+  const covered = new Uint8Array(total);                  // 1: a line of a block that is current or current-masked
   let loose: NumberedText | undefined;                    // the text with white space at line ends ignored
   for (let o = 0; o < count; o++) {
     const block = note.blocks[order[o]], starts = found[order[o]], length = block.code.length, best = inBest[o];
-    if (best.length === 1 && !leftOut[o]) {
+    if (best.length === 1 && leftOut[o] === 0) {
       const start = starts[best[0]];
-      let masked = false;                                 // exact lines are equal here; any other line that differs matched through a mask
+      let different = false;                              // exact lines are equal here; any other line that differs matched through a mask
       for (let k = 0; k < length; k++) {
-        if (block.code[k] !== text[start + k]) { masked = true; }
+        if (block.code[k] !== withoutEnding(textLines[start + k])) { different = true; }
         covered[start + k] = 1;
         if (slicer.due(1 + whole(block.code[k]))) { yield slicer.done; slicer.resume(); }
       }
-      placed[order[o]] = { block, state: masked ? "current-masked" : "current", at: { from: start + 1, to: start + length } };
+      placed[order[o]] = { block, state: different ? "current-masked" : "current", at: { from: start + 1, to: start + length } };
     } else if (best.length > 0) {
-      const places = best.map((j) => starts[j] + 1);
-      let near = places[0];
-      for (const place of places) { if (Math.abs(place - block.from) < Math.abs(near - block.from)) { near = place; } }
+      const places: number[] = new Array(best.length);    // a list of its final length: every best place, none dropped
+      let near = starts[best[0]] + 1;
+      for (let b = 0; b < best.length; b++) {
+        const place = starts[best[b]] + 1;
+        places[b] = place;
+        if (Math.abs(place - block.from) < Math.abs(near - block.from)) { near = place; }
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      }
       placed[order[o]] = { block, state: "ambiguous", at: { from: near, to: near + length - 1 }, candidates: places };
     } else {
       // Changed. Its marker: where the code is with white space at line ends ignored, else the recorded lines clipped.
@@ -612,14 +805,7 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
       // Design: "differs only in spaces at line ends" is said of code that is nowhere exactly. A block whose exact
       // code is in the text but fits the order nowhere keeps its recorded lines and is not called spaces-only.
       if (starts.length === 0 && length > 0) {
-        if (!loose) {
-          const stripped: string[] = new Array(total);
-          for (let i = 0; i < total; i++) {
-            stripped[i] = text[i].length < STEP ? pyRStrip(text[i]) : yield* rstripped(text[i], slicer);
-            if (slicer.due(4 + (text[i].length >> 6))) { yield slicer.done; slicer.resume(); }
-          }
-          loose = yield* NumberedText.of(note.props, stripped, true, slicer);
-        }
+        if (!loose) { loose = yield* NumberedText.of(masked, textLines, noteLines, true, slicer); }
         const nearly = yield* loose.starts(block, slicer);
         if (nearly.length > 0) {
           changed.at = { from: nearly[0] + 1, to: nearly[0] + length };
@@ -628,18 +814,31 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
       }
       placed[order[o]] = changed;
     }
+    if (slicer.due(4)) { yield slicer.done; slicer.resume(); }
   }
 
-  // Unexplained: non-blank lines outside every block that is current or current-masked.
-  const unexplained: [number, number][] = [];
-  let open = 0;                                           // the first line of the range being collected, or 0
-  for (let i = 0; i < total; i++) {
-    const bare = covered[i] === 0 && (text[i].length < STEP ? pyStrip(text[i]) !== "" : yield* notBlank(text[i], slicer));
-    if (bare && open === 0) { open = i + 1; }
-    if (!bare && open > 0) { unexplained.push([open, i]); open = 0; }
-    if (slicer.due(2 + (text[i].length >> 6))) { yield slicer.done; slicer.resume(); }
+  // Unexplained: non-blank lines outside every block that is current or current-masked. First each such line is
+  // marked and the ranges are counted; then the list of ranges is made at its final length.
+  let ranges = 0;
+  for (let i = 0, inRange = false; i < total; i++) {
+    let bare = false;
+    if (covered[i] === 0) {
+      const line = withoutEnding(textLines[i]);
+      bare = line.length < STEP ? pyStrip(line) !== "" : yield* notBlank(line, slicer);
+      if (slicer.due(2 + (line.length >> 6))) { yield slicer.done; slicer.resume(); }
+    } else if (slicer.due()) { yield slicer.done; slicer.resume(); }
+    if (bare) { covered[i] = 2; }
+    if (bare && !inRange) { ranges++; }
+    inRange = bare;
   }
-  if (open > 0) { unexplained.push([open, total]); }
+  const unexplained: [number, number][] = new Array(ranges);
+  let open = 0;                                           // the first line of the range being collected, or 0
+  for (let i = 0, n = 0; i <= total; i++) {
+    const bare = i < total && covered[i] === 2;
+    if (bare && open === 0) { open = i + 1; }
+    if (!bare && open > 0) { unexplained[n++] = [open, i]; open = 0; }
+    if (slicer.due()) { yield slicer.done; slicer.resume(); }
+  }
   return { placed, unexplained };
 }
 
