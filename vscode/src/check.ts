@@ -28,6 +28,7 @@ interface Per {
   git: GitWatch;                       // whether git's folders are watched, and what a `.git` event means (core/gitWatch.ts)
   gitWatchers: vscode.Disposable[];
   graphWatchers: vscode.Disposable[];  // on the graph file, and on the file it leads to when it is a link
+  graphAsked: number;                  // counts the questions where the graph leads: only the answer to the last one is used
   gitTimer?: NodeJS.Timeout;
   gitWork: Promise<void>;              // git is asked one question at a time
   timer?: NodeJS.Timeout;
@@ -74,7 +75,7 @@ export class Check implements vscode.Disposable {
       let checks = this.kept.get(key);
       if (!checks) { checks = new Checks(this.memory(key)); this.kept.set(key, checks); }
       checks.changed();
-      const per: Per = { project, checks, watchers: [], git: new GitWatch(), gitWatchers: [], graphWatchers: [], gitWork: Promise.resolve(),
+      const per: Per = { project, checks, watchers: [], git: new GitWatch(), gitWatchers: [], graphWatchers: [], graphAsked: 0, gitWork: Promise.resolve(),
         work: Promise.resolve(), running: new Set() };
       this.per.set(key, per);
       this.watch(per, project.sourceRoot, "**/*", true);
@@ -99,8 +100,10 @@ export class Check implements vscode.Disposable {
   private async watchGraph(per: Per): Promise<void> {
     const graph = per.project.graph;
     if (!graph) { return; }
+    const asked = ++per.graphAsked;
     const real = await fs.promises.realpath(graph).catch(() => undefined);
     if (this.per.get(projectKey(per.project)) !== per) { return; }        // the settings changed meanwhile
+    if (asked !== per.graphAsked) { return; }                             // asked again meanwhile: that answer is the newer one
     for (const watcher of per.graphWatchers) { watcher.dispose(); }
     per.graphWatchers = [];
     const windows = process.platform === "win32";
