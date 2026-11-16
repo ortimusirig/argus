@@ -423,7 +423,14 @@ ${this.project ? projectKey(this.project) : ""}`;
       title: "Argus: choose the notes folder", openLabel: "Use as the notes folder" });
     if (!picked || picked.length === 0) { return; }
     const config = vscode.workspace.getConfiguration("argus");
-    const own = config.inspect<unknown>("projects")?.globalValue;
+    const set = config.inspect<unknown>("projects");
+    // Settings of this workspace come before the person's own: an entry written there would hide the new one.
+    if (set?.workspaceValue !== undefined || set?.workspaceFolderValue !== undefined) {
+      this.say("The settings of this workspace set argus.projects, and they come before your own settings. "
+        + "Take argus.projects out of the workspace settings (.vscode/settings.json or the workspace file), then choose the notes folder again. Nothing was changed.");
+      return;
+    }
+    const own = set?.globalValue;
     await config.update("projects", [...(Array.isArray(own) ? own : []), { sourceRoot: folder.uri.fsPath, notesFolder: picked[0].fsPath }],
       vscode.ConfigurationTarget.Global);
   }

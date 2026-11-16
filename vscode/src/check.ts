@@ -108,7 +108,7 @@ export class Check implements vscode.Disposable {
     per.graphWatchers = [];
     const windows = process.platform === "win32";
     for (const place of graphPlaces(graph, real, windows)) {
-      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(place)), "*"));
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(path.resolve(place))), "*"));
       const seen = (uri: vscode.Uri): void => {
         if (!isPlace(uri.fsPath, place, windows)) { return; }
         this.touch(per);
@@ -121,7 +121,7 @@ export class Check implements vscode.Disposable {
   /** `source`: the watcher on the whole source root. What git keeps under it is followed by the git watchers,
    *  through HEAD and the refs only; while there are none, an event there has git asked again (core/gitWatch.ts). */
   private watch(per: Per, folder: string, pattern: string, source = false, into: vscode.Disposable[] = per.watchers): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), pattern));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(folder)), pattern));
     const seen = (kind: "create" | "change" | "delete") => (uri: vscode.Uri): void => {
       const what = source ? per.git.seen(path.relative(folder, uri.fsPath), kind) : { touch: true, discover: false };
       if (what.discover) { this.gitSoon(per); }

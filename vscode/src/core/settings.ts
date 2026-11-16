@@ -30,6 +30,7 @@ function text(value: unknown): string | undefined {
 /** `argus.projects`: the entries that name a source root and a notes folder; anything else is left out. */
 export function projectsFrom(value: unknown): Project[] {
   const projects: Project[] = [];
+  const seen = new Set<string>();                  // the same entry written twice is one project
   if (!Array.isArray(value)) { return projects; }
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null) { continue; }
@@ -40,6 +41,9 @@ export function projectsFrom(value: unknown): Project[] {
     const vaultFolder = text(given.vaultFolder), graph = text(given.graph);
     if (vaultFolder) { project.vaultFolder = vaultFolder; }
     if (graph) { project.graph = graph; }
+    const key = projectKey(project);
+    if (seen.has(key)) { continue; }
+    seen.add(key);
     projects.push(project);
   }
   return projects;

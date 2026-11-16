@@ -62,7 +62,7 @@ export class Index implements vscode.Disposable {
   }
 
   private watch(project: Project, folder: string): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), "**/*"));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(folder)), "**/*"));
     const seen = (uri: vscode.Uri): void => { this.event(project, folder, uri.fsPath); };
     this.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
   }
@@ -70,7 +70,7 @@ export class Index implements vscode.Disposable {
   /** A file or a folder under the source root appeared or went (a move is both): which source each File note
    *  names is asked again after 300 ms of quiet, whether or not a check is stored. A changed text moves no file. */
   private watchSource(project: Project): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(project.sourceRoot), "**/*"));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(project.sourceRoot)), "**/*"));
     const git = `${path.sep}.git${path.sep}`;
     const key = projectKey(project) + "\nsource";
     const seen = (uri: vscode.Uri): void => {
