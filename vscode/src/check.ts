@@ -7,6 +7,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { Index } from "./index";
 import { Outcome, badgeOf, fingerprintOf, stateOf } from "./core/checkResult";
+import { GitWatch } from "./core/gitWatch";
 import { Entry } from "./core/noteIndex";
 import { Badge } from "./core/panelHtml";
 import { Project } from "./core/projects";
@@ -15,12 +16,17 @@ import { projectKey, userPython } from "./core/settings";
 import { Checks, Memory, Stored, memoryOf } from "./core/validity";
 
 const QUIET_MS = 1500;
+const GIT_QUIET_MS = 300;
 const LIMITS: RunOptions = { timeoutMs: 120000, maxBuffer: 20 * 1024 * 1024 };
 const RESTRICTED = "this window is in Restricted Mode";
 
 interface Per {
   project: Project; checks: Checks;
   watchers: vscode.Disposable[];
+  git: GitWatch;                       // whether git's folders are watched, and what a `.git` event means (core/gitWatch.ts)
+  gitWatchers: vscode.Disposable[];
+  gitTimer?: NodeJS.Timeout;
+  gitWork: Promise<void>;              // git is asked one question at a time
   timer?: NodeJS.Timeout;
   work: Promise<void>;                 // fingerprint calls of one project run one after the other
   running: Set<string>;                // the source files whose check is running
@@ -38,7 +44,11 @@ export class Check implements vscode.Disposable {
       index.onDidTouch(touch),            // a note or vault file event
       index.onDidChange(touch),           // the index found the notes changed
       vscode.window.onDidChangeWindowState((state) => {
-        if (state.focused) { for (const per of this.per.values()) { this.touch(per); } }     // covers changes no watcher saw
+        if (!state.focused) { return; }
+        for (const per of this.per.values()) {
+          this.touch(per);                                    // covers changes no watcher saw
+          if (!per.git.watched) { void this.watchGit(per); }  // a repository made where no watcher looks
+        }
       }),
       vscode.workspace.onDidGrantWorkspaceTrust(() => {
         for (const per of this.per.values()) { void this.watchGit(per); this.confirm(per); }   // the pending calls start
@@ -61,9 +71,10 @@ export class Check implements vscode.Disposable {
       let checks = this.kept.get(key);
       if (!checks) { checks = new Checks(this.memory(key)); this.kept.set(key, checks); }
       checks.changed();
-      const per: Per = { project, checks, watchers: [], work: Promise.resolve(), running: new Set() };
+      const per: Per = { project, checks, watchers: [], git: new GitWatch(), gitWatchers: [], gitWork: Promise.resolve(),
+        work: Promise.resolve(), running: new Set() };
       this.per.set(key, per);
-      this.watch(per, project.sourceRoot, "**/*");
+      this.watch(per, project.sourceRoot, "**/*", true);
       if (project.graph) { this.watch(per, path.dirname(project.graph), path.basename(project.graph)); }
       void this.watchGit(per);
       this.confirm(per);                 // on activation: for the files that have a stored result
@@ -72,30 +83,54 @@ export class Check implements vscode.Disposable {
 
   private stop(per: Per): void {
     if (per.timer) { clearTimeout(per.timer); }
-    for (const watcher of per.watchers) { watcher.dispose(); }
+    if (per.gitTimer) { clearTimeout(per.gitTimer); }
+    for (const watcher of [...per.watchers, ...per.gitWatchers]) { watcher.dispose(); }
     per.watchers = [];
+    per.gitWatchers = [];
   }
 
-  private watch(per: Per, folder: string, pattern: string): void {
+  /** `source`: the watcher on the whole source root. What git keeps under it is followed by the git watchers,
+   *  through HEAD and the refs only; while there are none, an event there has git asked again (core/gitWatch.ts). */
+  private watch(per: Per, folder: string, pattern: string, source = false, into: vscode.Disposable[] = per.watchers): void {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), pattern));
-    const git = `${path.sep}.git${path.sep}`;
-    // What git keeps under the source root is followed by the git watchers below, through HEAD and the refs only.
-    const seen = (uri: vscode.Uri): void => { if (pattern !== "**/*" || !uri.fsPath.includes(git)) { this.touch(per); } };
-    per.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
+    const seen = (kind: "create" | "change" | "delete") => (uri: vscode.Uri): void => {
+      const what = source ? per.git.seen(path.relative(folder, uri.fsPath), kind) : { touch: true, discover: false };
+      if (what.discover) { this.gitSoon(per); }
+      if (what.touch) { this.touch(per); }
+    };
+    into.push(watcher, watcher.onDidCreate(seen("create")), watcher.onDidChange(seen("change")), watcher.onDidDelete(seen("delete")));
+  }
+
+  /** Git is asked again after 300 ms of quiet: `git init` writes many files, and one question is enough. */
+  private gitSoon(per: Per): void {
+    if (per.gitTimer) { clearTimeout(per.gitTimer); }
+    per.gitTimer = setTimeout(() => { per.gitTimer = undefined; void this.watchGit(per); }, GIT_QUIET_MS);
   }
 
   /** Asks git where the repository keeps its data, and watches HEAD, the refs, packed-refs and shallow there.
-   *  No git, or not a repository: no git watchers. */
-  private async watchGit(per: Per): Promise<void> {
-    const root = per.project.sourceRoot;
-    const folders = new Set<string>();
-    for (const question of ["--absolute-git-dir", "--git-common-dir"]) {
-      const ran = await mayRun(vscode.workspace, "git", ["-C", root, "rev-parse", question], { timeoutMs: 10000, maxBuffer: 1024 * 1024 });
-      const answer = ran?.exit === 0 ? ran.stdout.replace(/\r?\n$/, "") : "";
-      if (answer !== "") { folders.add(path.resolve(root, answer)); }
-    }
-    if (this.per.get(projectKey(per.project)) !== per) { return; }      // the settings changed meanwhile
-    for (const folder of folders) { this.watch(per, folder, "{HEAD,packed-refs,shallow,refs/**}"); }
+   *  No git, or not a repository: no git watchers. Asked at the start, and again when a repository may have
+   *  appeared or gone: on an event in `.git` that no git watcher covers, on the window's return, before a check. */
+  private watchGit(per: Per): Promise<void> {
+    per.gitWork = per.gitWork.then(async () => {
+      if (this.per.get(projectKey(per.project)) !== per) { return; }
+      const root = per.project.sourceRoot;
+      const folders = new Set<string>();
+      for (const question of ["--absolute-git-dir", "--git-common-dir"]) {
+        const ran = await mayRun(vscode.workspace, "git", ["-C", root, "rev-parse", question], { timeoutMs: 10000, maxBuffer: 1024 * 1024 });
+        if (!ran) { return; }                                             // Restricted Mode: git was not asked
+        const answer = ran.exit === 0 ? ran.stdout.replace(/\r?\n$/, "") : "";
+        if (answer !== "") { folders.add(path.resolve(root, answer)); }
+      }
+      if (this.per.get(projectKey(per.project)) !== per) { return; }      // the settings changed meanwhile
+      const found = per.git.found([...folders]);
+      if (found.replace) {
+        for (const watcher of per.gitWatchers) { watcher.dispose(); }
+        per.gitWatchers = [];
+        for (const folder of folders) { this.watch(per, folder, "{HEAD,packed-refs,shallow,refs/**}", false, per.gitWatchers); }
+      }
+      if (found.touch) { this.touch(per); }                               // history changed while nobody watched it
+    }).catch(() => undefined);
+    return per.gitWork;
   }
 
   /** Something the checker reads may have changed: the generation moves on, and the fingerprint is asked after
@@ -155,6 +190,7 @@ export class Check implements vscode.Disposable {
     per.running.add(key);
     this.changed();
     try {
+      if (!per.git.watched) { await this.watchGit(per); }                 // a repository made since git was last asked
       await this.index.refreshNow(at.project).catch(() => undefined);     // the panel and the checker speak of the same notes
       const startedAt = per.checks.begin();
       const ran = await this.run(at.project, key, "--json");
