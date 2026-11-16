@@ -18,44 +18,74 @@ function andList(numbers: number[]): string {
   return numbers.length < 2 ? numbers.join("") : numbers.slice(0, -1).join(", ") + " and " + numbers[numbers.length - 1];
 }
 
+// The marks of an assignment are made once: a draw and each request for lenses ask for the same ones again.
+const made = new WeakMap<Assignment, Marks>();
+
+/** The marks of an assignment. The work grows with the number of blocks, places and ranges, never with a product
+ *  of two of them: what is said of a block is written once for all its places, and the unexplained ranges are
+ *  set against the warnings in one sweep over both, in the order of the lines. */
 export function marksOf(assignment: Assignment): Marks {
+  let marks = made.get(assignment);
+  if (!marks) {
+    marks = prepare(assignment);
+    made.set(assignment, marks);
+  }
+  return marks;
+}
+
+function byFrom(a: { from: number }, b: { from: number }): number {
+  return a.from - b.from;
+}
+
+function prepare(assignment: Assignment): Marks {
   const marks: Marks = { current: [], warning: [], unexplained: [], masked: [], lenses: [] };
   for (const placed of assignment.placed) {
     const name = `${placed.block.id}: ${placed.block.purpose}`;
+    let say: string, tail = "";
+    if (placed.state === "current") {
+      say = `Argus: block ${name}. Current.`;
+    } else if (placed.state === "current-masked") {
+      say = `Argus: block ${name}. State: current (masked). The note hides part of this code.`;
+      tail = " (masked)";
+    } else if (placed.state === "changed") {
+      say = `Argus: block ${name}. State: changed. Its explanation was written for earlier code`
+        + (placed.spacesOnly ? "; the code here differs only in spaces at line ends." : ".");
+      tail = " (changed)";
+    } else {
+      say = `Argus: block ${name}. State: ambiguous. This code is at lines ${andList(placed.candidates ?? [])}; `
+        + "the order of the blocks does not decide which.";
+      tail = " (ambiguous)";
+    }
+    const title = `Argus ${name}${tail}`;
     for (const at of placesOf(placed)) {
-      let say: string, tail = "";
-      if (placed.state === "current") {
-        say = `Argus: block ${name}. Current.`;
+      if (placed.state === "current" || placed.state === "current-masked") {
         marks.current.push({ ...at, say });
-      } else if (placed.state === "current-masked") {
-        say = `Argus: block ${name}. State: current (masked). The note hides part of this code.`;
-        tail = " (masked)";
-        marks.current.push({ ...at, say });
-        marks.masked.push({ from: at.from, to: at.from, say });
-      } else if (placed.state === "changed") {
-        say = `Argus: block ${name}. State: changed. Its explanation was written for earlier code`
-          + (placed.spacesOnly ? "; the code here differs only in spaces at line ends." : ".");
-        tail = " (changed)";
-        marks.warning.push({ ...at, say });
+        if (placed.state === "current-masked") { marks.masked.push({ from: at.from, to: at.from, say }); }
       } else {
-        say = `Argus: block ${name}. State: ambiguous. This code is at lines ${andList(placed.candidates ?? [])}; `
-          + "the order of the blocks does not decide which.";
-        tail = " (ambiguous)";
         marks.warning.push({ ...at, say });
       }
-      marks.lenses.push({ line: at.from, from: at.from, to: at.to, title: `Argus ${name}${tail}` });
+      marks.lenses.push({ line: at.from, from: at.from, to: at.to, title });
     }
   }
-  marks.warning.sort((a, b) => a.from - b.from);
+  marks.warning.sort(byFrom);
   marks.lenses.sort((a, b) => a.line - b.line);
-  // Unexplained lines that carry a warning already are not marked twice.
+  // Unexplained lines that carry a warning already are not marked twice. One sweep: both lists are in the order
+  // of the lines, and a warning that ends before a range begins is never looked at again. Warnings may overlap
+  // one another (the places of an ambiguous block), so `from` only moves forward.
   const say = "Argus: no explanation for these lines.";
-  for (const [first, last] of assignment.unexplained) {
-    let from = first;
-    for (const warning of marks.warning) {
-      if (warning.to < from || warning.from > last) { continue; }
+  let ranges = assignment.unexplained;
+  if (ranges.some((range, n) => n > 0 && range[0] < ranges[n - 1][0])) { ranges = [...ranges].sort((a, b) => a[0] - b[0]); }
+  const warnings = marks.warning;
+  let next = 0;                                   // the first warning that may still reach a range
+  let reach = 0;                                  // the last line covered by the warnings before `next`
+  for (const [first, last] of ranges) {
+    let from = Math.max(first, reach + 1);
+    while (next < warnings.length && warnings[next].from <= last) {
+      const warning = warnings[next++];
+      if (warning.to > reach) { reach = warning.to; }
+      if (warning.to < from) { continue; }
       if (warning.from > from) { marks.unexplained.push({ from, to: warning.from - 1, say }); }
-      from = Math.max(from, warning.to + 1);
+      from = warning.to + 1;
     }
     if (from <= last) { marks.unexplained.push({ from, to: last, say }); }
   }
