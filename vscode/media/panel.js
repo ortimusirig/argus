@@ -11,6 +11,7 @@
     if (target.dataset.msg === "create") { vscode.postMessage({ type: "create" }); return true; }
     if (target.dataset.msg === "check") { vscode.postMessage({ type: "check" }); return true; }
     if (target.dataset.msg === "setup") { vscode.postMessage({ type: "setup" }); return true; }
+    if (target.dataset.msg === "back") { vscode.postMessage({ type: "back" }); return true; }
     return false;
   }
 

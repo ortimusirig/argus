@@ -3,7 +3,7 @@ import * as assert from "node:assert/strict";
 import { Entry } from "../core/noteIndex";
 import { body } from "../core/panelHtml";
 import { Project } from "../core/projects";
-import { Notes, Shown, shownNote, shownView } from "../core/shown";
+import { Notes, Shown, Trail, shownNote, shownView } from "../core/shown";
 
 const EVIL = "<img src=x onerror=alert(1)>";
 const project: Project = { sourceRoot: "/s", notesFolder: "/v/P" };
@@ -66,4 +66,74 @@ test("a shown note is drawn from the index as it is now: a new text is shown, a 
 test("the places of a name are shown as they are", () => {
   const places: Shown = { kind: "places", name: "Library - z", places: [{ id: 1, name: "Library - z", folder: "/v/A" }] };
   assert.equal(shownView(places, index().notes), places);
+});
+
+test("a shown note, the places of a name, and the sentence that a note is gone all have a way back", () => {
+  const i = index();
+  const first = entry(1, "Text.");
+  i.put(first);
+  const back = '<button data-msg="back">Back</button>';
+  assert.ok(body(shownView(shownNote(first), i.notes)).includes(back));
+  assert.ok(body(shownView({ kind: "places", name: "Library - z", places: [{ id: 1, name: "Library - z", folder: "/v/A" }] }, i.notes)).includes(back));
+  i.put(undefined);
+  assert.ok(body(shownView(shownNote(first), i.notes)).includes(back), "a note that is gone does not trap the person");
+  // The views of a file have none: there is nothing to go back to.
+  assert.ok(!body({ kind: "message", text: "No note: no Argus note explains a.py.", button: "create" }).includes(back));
+});
+
+const note = (id: number): Shown => ({ kind: "note", id, name: `N${id}` });
+const places = (name: string): Shown => ({ kind: "places", name, places: [{ id: 90, name, folder: "/v/A" }, { id: 91, name, folder: "/v/B" }] });
+const never = (): undefined => undefined;
+
+test("Trail: each note opened from a note is a step; back goes one step, and from the first note to the file", () => {
+  const trail = new Trail();
+  assert.equal(trail.now, undefined);
+  assert.equal(trail.back(never), undefined, "nothing is shown: back changes nothing");
+  trail.open(note(1)); trail.open(note(2)); trail.open(note(3));
+  assert.deepEqual(trail.now, note(3));
+  assert.deepEqual(trail.back(never), note(2));
+  assert.deepEqual(trail.back(never), note(1));
+  assert.equal(trail.back(never), undefined, "back from the first note: the file is shown again");
+  assert.equal(trail.now, undefined);
+  assert.equal(trail.back(never), undefined);
+});
+
+test("Trail: a link to the note that is shown is no step; clearing forgets every step", () => {
+  const trail = new Trail();
+  trail.open(note(1)); trail.open(note(1)); trail.open(places("X")); trail.open(places("X")); trail.open(note(1));
+  assert.deepEqual(trail.back(() => places("X")), places("X"));
+  assert.deepEqual(trail.back(never), note(1));
+  assert.equal(trail.back(never), undefined);
+  trail.open(note(1)); trail.open(note(2));
+  trail.clear();
+  assert.equal(trail.now, undefined);
+  assert.equal(trail.back(never), undefined, "the selection moved: nothing of the old trail comes back");
+});
+
+test("Trail: a list of places is built again when the person comes back to it, as the notes are then", () => {
+  const trail = new Trail();
+  trail.open(note(1)); trail.open(places("X")); trail.open(note(90)); trail.open(places("Y")); trail.open(note(5));
+  const asked: string[] = [];
+  // 'Y' has no note any more: that step is left out. 'X' has one note left: it is shown, not a list of one.
+  assert.deepEqual(trail.back((name) => { asked.push(name); return undefined; }), note(90));
+  assert.deepEqual(asked, ["Y"]);
+  assert.deepEqual(trail.back((name) => { asked.push(name); return note(91); }), note(91));
+  assert.deepEqual(asked, ["Y", "X"]);
+  assert.deepEqual(trail.now, note(91));
+  assert.deepEqual(trail.back(never), note(1), "a note is kept by its id only; its text is asked of the index when it is drawn");
+  assert.equal(trail.back(never), undefined);
+  // A list that is what is shown is built again too, when a list below it went.
+  trail.open(places("A")); trail.open(places("B")); trail.open(note(7));
+  const fresh: Shown = { kind: "places", name: "B", places: [{ id: 1, name: "B", folder: "/new" }, { id: 2, name: "B", folder: "/newer" }] };
+  assert.equal(trail.back(() => fresh), fresh);
+  assert.equal(trail.back(never), undefined, "'A' has no note any more and nothing is below it: the file");
+});
+
+test("Trail: the steps kept are bounded, however long the person follows links", () => {
+  const trail = new Trail();
+  for (let id = 1; id <= 5000; id++) { trail.open(note(id)); }
+  let steps = 0;
+  while (trail.back(never)) { steps++; }
+  assert.ok(steps >= 50 && steps <= 200, `${steps} steps back`);
+  assert.equal(trail.now, undefined);
 });

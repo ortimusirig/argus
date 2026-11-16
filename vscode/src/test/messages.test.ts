@@ -24,7 +24,7 @@ function context(over: Partial<Context<N>> = {}): Context<N> {
   };
 }
 
-test("only the seven kinds of message are handled; anything else is dropped", () => {
+test("only the eight kinds of message are handled; anything else is dropped", () => {
   for (const message of [undefined, null, 7, "create", [], {}, { type: "eval", code: "x" }, { type: "openFile", path: "C:/x" },
     { type: ["create"] }, { type: "Create" }, { type: "__proto__" }, { type: "toString" }]) {
     assert.deepEqual(handle(message, context()), { do: "drop" });
@@ -32,6 +32,9 @@ test("only the seven kinds of message are handled; anything else is dropped", ()
   assert.deepEqual(handle({ type: "create" }, context()), { do: "create" });
   assert.deepEqual(handle({ type: "check", extra: "ignored" }, context()), { do: "check" });
   assert.deepEqual(handle({ type: "setup" }, context()), { do: "setup" });
+  // Piece 8: the way back from a shown note. It carries nothing; what it leads back to is the panel's own.
+  assert.deepEqual(handle({ type: "back", id: 3, name: "x", href: "command:x" }, context()), { do: "back" });
+  assert.deepEqual(handle({ type: "Back" }, context()), { do: "drop" });
 });
 
 test("openNote: one note is shown, several are listed, an unknown name is refused in words", () => {

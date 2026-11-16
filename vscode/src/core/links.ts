@@ -74,3 +74,24 @@ export function linkMap<T extends { name: string; path: string }>(projectNotes: 
     },
   };
 }
+
+/** The address that opens a note in Obsidian: `obsidian://open?path=` and the note's full path. Every character
+ *  of the path that is not a letter, a digit or one of `-._~` is percent-encoded, so nothing in a file's name
+ *  (`&`, `#`, `=`, `+`, `%`, a space) can end the path or add a second value to the address. Undefined when the
+ *  path is not a full path of this system, or cannot be written as an address (a NUL, half a character pair).
+ *  The caller has asked first that the note lies in the notes folder or the vault folder, and opens the address
+ *  through VS Code's own "open external" only. */
+export function obsidianAddress(file: string, windows: boolean): string | undefined {
+  const full = windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(file) : file.startsWith("/");
+  if (!full || file.includes("\0")) { return undefined; }
+  let encoded: string;
+  try { encoded = encodeURIComponent(file); } catch { return undefined; }
+  return "obsidian://open?path=" + encoded.replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+/** Whether the address of this path must be opened exactly as `obsidianAddress` wrote it. VS Code writes an
+ *  address again when it is given as a Uri: decoded, then encoded by rules that leave `& # + = ;` as they are.
+ *  A path with one of these would be cut short or changed on the way; a path without them arrives the same. */
+export function needsExactAddress(file: string): boolean {
+  return /[&#+=;]/.test(file);
+}

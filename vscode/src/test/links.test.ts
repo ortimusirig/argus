@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { findLinks, linkMap, resolveLink } from "../core/links";
+import { findLinks, linkMap, needsExactAddress, obsidianAddress, resolveLink } from "../core/links";
 
 test("findLinks: [[Name]], [[Name|shown]] and [[folder/Name]] give names", () => {
   assert.deepEqual(findLinks("See [[Concept - x]], [[Name|shown]] and [[folder/sub/Deep Name]]."), ["Concept - x", "Name", "Deep Name"]);
@@ -71,4 +71,47 @@ test("linkMap gives the answers of resolveLink, and 4,000 links against 20,000 n
   assert.equal(kinds.filter((kind) => kind === "none").length, links.filter((name) => name.startsWith("No note") || Number(name.slice(10)) % 500 === 499).length);
   const map = linkMap(own, shared);
   for (let i = 0; i < links.length; i += 97) { assert.deepEqual(map.resolve(links[i]), resolveLink(links[i], own, shared)); }
+});
+
+test("obsidianAddress: obsidian://open?path= with every character of the path percent-encoded", () => {
+  assert.equal(obsidianAddress("C:\\Vault\\P\\Concept - x & y #1 100%+.md", true),
+    "obsidian://open?path=C%3A%5CVault%5CP%5CConcept%20-%20x%20%26%20y%20%231%20100%25%2B.md");
+  assert.equal(obsidianAddress("/home/me/vault/Concept - x.md", false), "obsidian://open?path=%2Fhome%2Fme%2Fvault%2FConcept%20-%20x.md");
+  const hostile = ["a&vault=Other&file=Secret", "a#fragment", "a?path=/etc/passwd", "a=b", "a+b c", "100%25", "%2e%2e", "it's (1)!*", "ä ö ü 日本 😀",
+    "a;b,c@d$e", "a\"b<c>d", "x&path=C:\\Windows", "a b"];
+  for (const windows of [true, false]) {
+    for (const name of hostile) {
+      const file = windows ? "C:\\Vault\\" + name + ".md" : `/vault/${name}.md`;
+      const address = obsidianAddress(file, windows);
+      assert.ok(address !== undefined, file);
+      assert.match(address, /^obsidian:\/\/open\?path=[A-Za-z0-9._~%-]+$/, "nothing of the path is left as a sign of the address");
+      assert.doesNotMatch(address, /%(?![0-9A-F]{2})/);
+      const read = new URL(address);
+      assert.deepEqual([...read.searchParams.keys()], ["path"], `one value only: ${file}`);
+      assert.equal(read.searchParams.get("path"), file, "Obsidian reads the path back letter for letter");
+      assert.equal(read.hash, "");
+      assert.equal(read.protocol + "//" + read.host, "obsidian://open");
+    }
+  }
+});
+
+test("obsidianAddress: only a full path of a file becomes an address", () => {
+  for (const [file, windows] of [["", true], ["Concept.md", true], ["sub\\Concept.md", true], ["..\\x.md", true], ["C:x.md", true], ["/vault/x.md", true],
+    ["\\x.md", true], ["", false], ["x.md", false], ["./x.md", false], ["../x.md", false], ["C:\\Vault\\x.md", false],
+    ["/vault/a\u0000b.md", false], ["C:\\Vault\\a\u0000b.md", true], ["/vault/\ud800.md", false], ["C:\\Vault\\\udc00.md", true]] as [string, boolean][]) {
+    assert.equal(obsidianAddress(file, windows), undefined, JSON.stringify(file));
+  }
+  assert.ok(obsidianAddress("\\\\server\\share\\Vault\\x.md", true));
+  assert.ok(obsidianAddress("c:/Vault/x.md", true));
+});
+
+test("needsExactAddress: a path with a sign of the address in it must reach Obsidian exactly as encoded", () => {
+  // VS Code writes an address again when it is given as a Uri: it decodes it and encodes it by its own rules, which
+  // leave & # + = ; as they are. A path that holds one of them would then be cut or changed.
+  for (const file of ["C:\\Vault\\a&b.md", "/v/a#b.md", "/v/a+b.md", "/v/a=b.md", "/v/a;b.md", "/v/x&vault=Other.md"]) {
+    assert.equal(needsExactAddress(file), true, file);
+  }
+  for (const file of ["C:\\Vault\\P\\Concept - x.md", "/v/Concept (1) 100% ä 😀 it's.md", "\\\\server\\share\\a b.md", "/v/a?b.md", "/v/a,b@c.md"]) {
+    assert.equal(needsExactAddress(file), false, file);
+  }
 });

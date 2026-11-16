@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (say) { panel.say(say); } else { panel.render(); }
     }),
     vscode.commands.registerCommand("argus.create", () => create.create(panel.document())),
-    vscode.commands.registerCommand("argus.openInObsidian", () => { panel.say("Open in Obsidian is not built yet (piece 8 of the plan)."); }),
+    vscode.commands.registerCommand("argus.openInObsidian", () => panel.openInObsidian()),
 
     vscode.window.onDidChangeTextEditorSelection((event) => {
       if (event.textEditor === vscode.window.activeTextEditor) { panel.follow(); }

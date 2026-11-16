@@ -12,6 +12,7 @@ export type Action<N> =
   | { do: "obsidian"; note: N }
   | { do: "open"; href: string }                     // through VS Code's own "open external"
   | { do: "ask"; href: string }                      // a file address: ask first, showing the whole path
+  | { do: "back" }                                   // one step back from a shown note or list; the steps are the panel's own
   | { do: "create" } | { do: "check" } | { do: "setup" };
 
 export interface Context<N> {
@@ -37,6 +38,7 @@ export function handle<N>(message: unknown, context: Context<N>): Action<N> {
     case "create": return { do: "create" };
     case "check": return { do: "check" };
     case "setup": return { do: "setup" };
+    case "back": return { do: "back" };
     case "openNote": {
       if (typeof given.name !== "string") { return { do: "drop" }; }
       const found = context.resolve(given.name);

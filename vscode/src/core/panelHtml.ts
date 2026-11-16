@@ -39,7 +39,8 @@ export interface Creating { text: string; running: boolean; }
 
 export type View =
   // `problems`, here and below: the notes of the project that the index could not use, each as one sentence.
-  | { kind: "message"; text: string; button?: "setup" | "create"; problems?: string[]; create?: Creating }
+  // `back`: the message stands in place of a shown note (it is gone), so it has the way back that the note had.
+  | { kind: "message"; text: string; button?: "setup" | "create"; problems?: string[]; create?: Creating; back?: boolean }
   | { kind: "duplicates"; file: string; notes: Listed[]; problems?: string[]; create?: Creating }
   | { kind: "places"; name: string; places: Listed[] }
   | { kind: "note"; id: number; folder: string; note: { name: string; body: string }; linkTo: LinkTo }
@@ -52,7 +53,7 @@ export type View =
       create?: Creating;
       problems: string[]; };                   // notes of the project whose source the index could not use
 
-const BUTTONS = { setup: "Choose the notes folder", create: "Create explanation", check: "Check notes" };
+const BUTTONS = { setup: "Choose the notes folder", create: "Create explanation", check: "Check notes", back: "Back" };
 
 function button(msg: keyof typeof BUTTONS): string {
   return `<button data-msg="${msg}">${BUTTONS[msg]}</button>`;
@@ -220,6 +221,7 @@ export function body(view: View, notice?: string): string {
   if (notice) { out.push(`<p class="notice" role="status">${escape(notice)}</p>`); }
   switch (view.kind) {
     case "message":
+      if (view.back) { out.push(`<p class="actions">${button("back")}</p>`); }
       out.push(`<p class="say">${escape(view.text)}</p>`, ...createHtml(view.create));
       if (view.button && !(view.button === "create" && view.create?.running)) { out.push(`<p class="actions">${button(view.button)}</p>`); }
       out.push(...problemsHtml(view.problems));
@@ -229,11 +231,13 @@ export function body(view: View, notice?: string): string {
         + "Pick one for this session; nothing is chosen for you.</p>", ...createHtml(view.create), listed(view.notes), ...problemsHtml(view.problems));
       break;
     case "places":
-      out.push(`<p class="say">${many(view.places.length, "note is", "notes are")} named '${escape(view.name)}'. Pick one:</p>`, listed(view.places));
+      // A list of places and a note are shown in place of the file: each has the way back.
+      out.push(`<p class="actions">${button("back")}</p>`,
+        `<p class="say">${many(view.places.length, "note is", "notes are")} named '${escape(view.name)}'. Pick one:</p>`, listed(view.places));
       break;
     case "note":
       out.push(`<h1>${escape(view.note.name)}</h1>`, `<p class="where">${escape(view.folder)}</p>`,
-        `<p class="actions"><button data-obsidian="${view.id}">Open note in Obsidian</button></p>`,
+        `<p class="actions">${button("back")} <button data-obsidian="${view.id}">Open note in Obsidian</button></p>`,
         `<div class="prose">${render(view.note.body, view.linkTo)}</div>`);
       break;
     case "file":

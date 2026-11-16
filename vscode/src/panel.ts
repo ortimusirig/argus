@@ -1,5 +1,5 @@
 // The Argus panel: a webview view in the side bar. This file only wires VS Code to the core: what is shown is
-// decided and built in src/core (panelHtml.ts, messages.ts, selection.ts), where it is tested.
+// decided and built in src/core (panelHtml.ts, messages.ts, selection.ts, shown.ts, links.ts), where it is tested.
 
 import * as crypto from "node:crypto";
 import * as path from "node:path";
@@ -8,12 +8,13 @@ import { Index } from "./index";
 import { LinkTo } from "./core/markdown";
 import { Matcher } from "./core/matching";
 import { Latest } from "./core/latest";
+import { needsExactAddress, obsidianAddress } from "./core/links";
 import { Context, handle, hrefsIn } from "./core/messages";
 import { Entry } from "./core/noteIndex";
 import { Badge, Creating, Listed, View, body, page, withoutNote } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { projectKey } from "./core/settings";
-import { Shown, shownNote, shownView } from "./core/shown";
+import { Shown, Trail, shownNote, shownView } from "./core/shown";
 
 const QUIET_MS = 200;
 const MATCHING_MS = 400;
@@ -25,7 +26,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly media: vscode.Uri;
   private whole = false;                                      // "Explain this file"
   private pinned?: { uri: string; from: number; to: number };   // lines asked for by a CodeLens
-  private shown?: Shown;                                      // a note (by its id) or a list of places, shown in place of the file
+  private readonly trail = new Trail();                       // a note (by its id) or a list of places, shown in place of the file, and the way back
   private notice?: string;
   private project?: Project;                                  // the project of what is shown
   private duplicates = false;                                 // the file view is the list of duplicate notes
@@ -101,7 +102,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   /** Drops what was kept before the selection last moved. */
   private expire(): void {
-    if (this.latest.stale("shown")) { this.shown = undefined; }
+    if (this.latest.stale("shown")) { this.trail.clear(); }
     if (this.latest.stale("pinned")) { this.pinned = undefined; }
     if (this.latest.stale("notice")) { this.notice = undefined; }
   }
@@ -116,7 +117,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   async explain(whole: boolean, pinned?: { uri: string; from: number; to: number }): Promise<void> {
     this.whole = whole;
     this.pinned = pinned;
-    this.shown = undefined; this.notice = undefined;
+    this.trail.clear(); this.notice = undefined;
     this.latest.asked("pinned", "shown", "notice");
     this.opening = true;
     try { await vscode.commands.executeCommand(`${Panel.viewId}.focus`); } finally { this.opening = false; }
@@ -136,8 +137,9 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     if (this.again) { clearTimeout(this.again); this.again = undefined; }
     // A shown note is asked of the index at each drawing: its text now, or the sentence that it is gone.
     const notes = this.index.notes;
-    const shown = this.shown
-      ? shownView(this.shown, { byId: (id) => notes.noteById(id), holds: (entry) => notes.holds(entry), linkTo: (project) => this.linkTo(project) })
+    const now = this.trail.now;
+    const shown = now
+      ? shownView(now, { byId: (id) => notes.noteById(id), holds: (entry) => notes.holds(entry), linkTo: (project) => this.linkTo(project) })
       : this.fileView();
     if (!shown) { return; }                          // a match is on its way: what is shown stays for a moment
     const inner = body(shown, this.notice);
@@ -214,19 +216,77 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private showNote(entry: Entry): void {
     // Only which note is kept: its text is the index's own copy at the time of each drawing (core/shown.ts).
-    this.shown = shownNote(entry);
+    this.trail.open(shownNote(entry));
     this.latest.asked("shown");
   }
 
-  /** A message from the page. What it may do is decided by `handle`; anything it does not allow is dropped. */
-  private async receive(message: unknown): Promise<void> {
-    const project = this.project, notes = this.index.notes;
-    const context: Context<Entry> = {
+  /** What a message is tested against: the notes of the project being shown, as the index holds them now. */
+  private context(project: Project | undefined): Context<Entry> {
+    const notes = this.index.notes;
+    return {
       resolve: (name) => project ? notes.linksOf(project).resolve(name) : { kind: "none" },
       byId: (id) => notes.noteById(id),
       holds: (entry) => project !== undefined && projectKey(entry.project) === projectKey(project) && notes.holds(entry),
       hrefs: this.hrefs,
     };
+  }
+
+  /** A list of places, built again from the index as it is now: the list, the one note left, or nothing. */
+  private placesAgain(name: string, context: Context<Entry>): Shown | undefined {
+    const found = handle({ type: "openNote", name }, context);
+    if (found.do === "show") { return shownNote(found.note); }
+    return found.do === "list" ? { kind: "places", name: found.name, places: this.listed(found.places) } : undefined;
+  }
+
+  /** Opens a note in Obsidian. The caller has tested that the note lies, now, in the notes folder or the vault
+   *  folder of the project shown (`handle`). The address is built in core/links.ts, every part percent-encoded,
+   *  and goes to VS Code's own "open external" and nowhere else. Returns a sentence when it did not open. */
+  private async openInObsidianNote(entry: Entry): Promise<string | undefined> {
+    const address = obsidianAddress(entry.path, process.platform === "win32");
+    if (address === undefined) { return `the path of '${entry.name}' cannot be written as an obsidian address; it was not opened`; }
+    const closed = `Obsidian did not open '${entry.name}'. Is Obsidian installed, and is the note inside one of its vaults?`;
+    try {
+      // The address is handed over as text, so it reaches Obsidian as it was built. Given as a Uri, VS Code would
+      // write it again by its own rules and turn the encoded & or # of a file name back into a sign of the address.
+      return await vscode.env.openExternal(address as unknown as vscode.Uri) ? undefined : closed;
+    } catch {
+      // This VS Code takes a Uri only. A path without such a sign arrives the same when it is written again
+      // (core/links.ts, needsExactAddress); any other path is not opened, rather than opened wrongly.
+      if (needsExactAddress(entry.path)) {
+        return `'${entry.name}' could not be opened in Obsidian: its path holds one of & # + = ; and this VS Code does not pass such an address on unchanged`;
+      }
+      try {
+        return await vscode.env.openExternal(vscode.Uri.parse(address, true)) ? undefined : closed;
+      } catch {
+        return `this address could not be opened: ${address}`;
+      }
+    }
+  }
+
+  /** "Argus: Open note in Obsidian": the note that is shown, or the note of the file that is shown. */
+  async openInObsidian(): Promise<void> {
+    const now = this.trail.now;
+    let id: number | undefined, project = this.project;
+    if (now?.kind === "note") {
+      id = now.id;
+    } else if (!now) {
+      const document = this.document();
+      const at = document ? this.index.locate(document) : undefined;
+      id = at?.note?.id;
+      project = at?.project;
+    }
+    const action = id === undefined ? undefined : handle({ type: "obsidian", id }, this.context(project));
+    if (action?.do === "obsidian") {
+      const failed = await this.openInObsidianNote(action.note);
+      if (failed !== undefined) { this.say(failed); }
+    } else {
+      this.say(action?.do === "say" ? action.text : "no one note is shown, so there is none to open in Obsidian");
+    }
+  }
+
+  /** A message from the page. What it may do is decided by `handle`; anything it does not allow is dropped. */
+  private async receive(message: unknown): Promise<void> {
+    const context = this.context(this.project);
     const action = handle(message, context);
     switch (action.do) {
       case "drop": return;
@@ -234,14 +294,21 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       case "show": this.tell(undefined); this.showNote(action.note); break;
       case "list":
         this.tell(undefined);
-        this.shown = { kind: "places", name: action.name, places: this.listed(action.places) };
+        this.trail.open({ kind: "places", name: action.name, places: this.listed(action.places) });
         this.latest.asked("shown");
         break;
       case "pick":
         this.tell(undefined);
-        if (this.duplicates && !this.shown && action.note.file) { this.index.choose(action.note); } else { this.showNote(action.note); }
+        if (this.duplicates && !this.trail.now && action.note.file) { this.index.choose(action.note); } else { this.showNote(action.note); }
         break;
-      case "obsidian": this.tell("Open in Obsidian is not built yet (piece 8 of the plan)."); break;
+      case "obsidian": this.tell(await this.openInObsidianNote(action.note)); break;
+      case "back":
+        // One step back: to the note or list shown before, or to the file. Asked for now, so the late follow of
+        // an older selection move leaves it alone.
+        this.tell(undefined);
+        this.trail.back((name) => this.placesAgain(name, context));
+        this.latest.asked("shown");
+        break;
       case "open":
         try {
           await vscode.env.openExternal(vscode.Uri.parse(action.href, true));
