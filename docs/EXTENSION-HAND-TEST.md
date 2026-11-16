@@ -1,6 +1,6 @@
 # Argus VS Code extension: hand test (pieces 4 to 9)
 
-Nothing of the extension has run inside VS Code yet. Use a scratch copy of a project for Create, never a shared repository.
+First run inside VS Code: 2026-11-16, by the agent with clicks only (results at the end of this file). Use a scratch copy of a project for Create, never a shared repository.
 
 The package: `C:\dev\argus-ext\vscode\argus-3.0.0.vsix` (rebuild: `npm run package` in `C:\dev\argus-ext\vscode`).
 
@@ -32,3 +32,13 @@ The package: `C:\dev\argus-ext\vscode\argus-3.0.0.vsix` (rebuild: `npm run packa
 26. Hide the panel, move the selection, show it again. Expect the file view, not the old note.
 
 Write down for each step: passed, or what was seen instead.
+
+## Results of the first run (2026-11-16, agent, clicks only, VS Code on Windows, package of `db6fb4b`)
+
+Setup used: user settings `argus.projects` with source root `C:\devpplexus-chat`, notes folder the vault folder `01.01 Helper Build`, vault folder the vault `Obsidian-ai`; file `aura-helper/src/errors.js`.
+
+Passed: step 1 (installed with `code --install-extension`, activates); step 3 and 7 in the CodeLens form (CodeLens above each block, a click opens the panel on that block, the selected rows are marked, "6 blocks current"); the marker bars; step 8 (Check notes ran the real checker: "check failed" with the checker's own sentences about links of another note, because no vault folder was set then; details block shown); step 21 (a concept link opens the Concept note with Back and Open note in Obsidian); step 22 in part (Back returns to the file); step 24 in part (Open note in Obsidian brought Obsidian to the front; which note it showed was not seen).
+
+Defects found and fixed in this run: a CodeLens of a block without a purpose read "Argus 2:"; code and headers in a narrow table were cut at every letter; the panel dropped the file when the text box of a comment (CodeTour) took the focus; after a settings change the panel showed "no note" with a Create button until a large vault was read.
+
+Not done (need typing, settings edits or a scratch project): steps 2, 4, 5, 6, 9 to 20, 23, 25, 26. A window reload is needed first so that the newest package is the one that runs.
