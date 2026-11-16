@@ -128,3 +128,15 @@ test("a note named like something every object has (constructor, toString, __pro
   assert.deepEqual(badgeOf(outcome, "constructor").details?.masked, [4]);
   assert.deepEqual(badgeOf(outcome, "toString").details?.masked, []);
 });
+
+test("a pass that validated another note of the same file is no success badge for this note", () => {
+  const outcome = stateOf(0, recorded(), "a.py");                 // the checker took note "N" for a.py
+  assert.equal(badgeOf(outcome, "N", undefined, "a.py").label, "checked");
+  const other = badgeOf(outcome, "n", undefined, "a.py");         // a second note for a.py, picked in the panel
+  assert.equal(other.label, "not checked");
+  assert.match(other.why ?? "", /'N'/);
+  assert.equal(other.details, undefined, "no details of a check that was not of this note");
+  // A failure is shown whatever note is picked: it is about the folder.
+  const failed = stateOf(1, recorded({ result: "NOT PASSED", exit_code: 1, fails: [{ note: "N", graph: false, text: "N: differs" }] }), "a.py");
+  assert.equal(badgeOf(failed, "n", undefined, "a.py").label, "check failed");
+});

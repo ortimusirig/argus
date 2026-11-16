@@ -256,7 +256,7 @@ export class Check implements vscode.Disposable {
     if (per.running.has(sourceRel)) { return { label: "not checked", why: "the check is running…" }; }
     const shown = per.checks.shown(sourceRel);
     if ("why" in shown) { return { label: "not checked", why: shown.why }; }
-    return badgeOf(shown.outcome, note.name, shown.time === undefined ? undefined : `last check: ${new Date(shown.time).toLocaleString()}`);
+    return badgeOf(shown.outcome, note.name, shown.time === undefined ? undefined : `last check: ${new Date(shown.time).toLocaleString()}`, sourceRel);
   }
 
   dispose(): void {

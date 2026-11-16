@@ -111,6 +111,13 @@ const LABEL: Record<CheckState, string> = {
 
 /** The badge of an outcome. Every badge that comes from a result carries the details: a success badge is never
  *  shown without them. */
-export function badgeOf(outcome: Outcome, noteName: string, why?: string): { label: string; why?: string; details?: Details } {
+export function badgeOf(outcome: Outcome, noteName: string, why?: string, sourceRel?: string): { label: string; why?: string; details?: Details } {
+  // A success is the success of the note the checker took for the file. When the person picked another note of
+  // the same file, that note was not checked: no success badge for it.
+  const explained = outcome.result?.explained;
+  if (sourceRel !== undefined && explained && outcome.state !== "failed" && outcome.state !== "error"
+    && Object.hasOwn(explained, sourceRel) && explained[sourceRel] !== noteName) {
+    return { label: "not checked", why: `the check validated the note '${explained[sourceRel]}' for this file, not this note` };
+  }
   return { label: LABEL[outcome.state], why: outcome.reason ?? why, details: outcome.result ? detailsOf(outcome.result, noteName) : undefined };
 }
