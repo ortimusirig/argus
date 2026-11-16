@@ -27,8 +27,14 @@ export interface Entry {
 /** `rejected`: the .md files that are not read because their real path lies outside the project's folders (a
  *  symbolic link that leads out), by their path as found, each with the sentence that says so. */
 interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>;
+  // Where each .md path led when it was last read: the path as found (`pathKey`), and the key of its target. A
+  // note is kept under its target's key, so a link that is pointed elsewhere or deleted says nothing of the note
+  // it led to; this says it.
+  from: Map<string, Way>;
   refreshed: number;        // the tick at which the last reading of the folders began
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
+
+interface Way { file: string; key: string; }
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
@@ -77,7 +83,7 @@ export class NoteIndex {
     }
     for (const project of projects) {
       const key = projectKey(project);
-      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), rejected: new Map(), queue: Promise.resolve(), refreshed: 0 }); }
+      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), rejected: new Map(), from: new Map(), queue: Promise.resolve(), refreshed: 0 }); }
     }
   }
 
@@ -92,15 +98,26 @@ export class NoteIndex {
 
   /** The key the file has when it is a plain file: the real path of its folder, and its own name. It is another
    *  key than `keyOf` gives when the file itself is a link. Undefined when the folder cannot be read. */
-  private ownKey(file: string): string | undefined {
+  private ownKey(file: string, folders?: Map<string, string>): string | undefined {
     try {
-      const folder = this.rules.real(path.dirname(file));
+      const parent = path.dirname(file);
+      let folder = folders?.get(parent);
+      if (folder === undefined) {
+        folder = this.rules.real(parent);
+        folders?.set(parent, folder);
+      }
       const sep = this.rules.windows ? "\\" : "/";
       const own = folder + (folder.endsWith(sep) ? "" : sep) + path.basename(file);
       return this.rules.windows ? own.toLowerCase() : own;
     } catch {
       return undefined;
     }
+  }
+
+  /** The path as found, as a key: links in its folders followed, the file itself not. `folders` keeps the real
+   *  path of each folder asked for, for a reading of many files. */
+  private pathKey(file: string, folders?: Map<string, string>): string {
+    return this.ownKey(file, folders) ?? (this.rules.windows ? file.toLowerCase() : file);
   }
 
   /** The folder of the project the file's real path lies in, now: the notes folder before the vault folder.
@@ -135,12 +152,14 @@ export class NoteIndex {
       const rejectedBefore = held.rejected;
       held.rejected = new Map();
       const seen = new Set<string>();
+      const from = new Map<string, Way>(), real = new Map<string, string>();
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
       for (const [, folder] of folders) {
         for (const file of await mdFiles(folder, this.pause)) {
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
+          from.set(this.pathKey(file, real), { file, key });
           if (seen.has(key)) { continue; }           // a notes folder inside the vault: its notes are the project's own
           seen.add(key);
           if (await this.read(held, file, key)) { changed = true; }
@@ -150,6 +169,7 @@ export class NoteIndex {
       for (const [key, entry] of held.entries) {
         if (!seen.has(key)) { held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true; }
       }
+      held.from = from;
       if (rejectedBefore.size !== held.rejected.size
         || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
       return changed;
@@ -209,14 +229,41 @@ export class NoteIndex {
       const own = this.ownKey(file);
       const old = own !== undefined && own !== key ? held.entries.get(own) : undefined;
       if (old && own !== undefined) { held.entries.delete(own); held.links = undefined; this.byId.delete(old.id); }
-      const gone = old !== undefined || was !== undefined;
+      // The note this path led to when it was last read, when it leads somewhere else now: a link that was pointed
+      // at another target, or deleted.
+      const at = this.pathKey(file);
+      const before = held.from.get(at);
+      held.from.delete(at);
+      const left = before !== undefined && before.key !== key && await this.leave(held, before.key);
+      const gone = old !== undefined || was !== undefined || left;
       if (key === undefined) { return gone; }
       const inNotes = relativeIn(project.notesFolder, file, this.rules);
       const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
       if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return gone; }
       const changed = await this.read(held, file, key);
-      return changed || old !== undefined || was !== held.rejected.get(file);
+      let there = true;
+      try { await fs.promises.lstat(file); } catch { there = false; }
+      if (there) { held.from.set(at, { file, key }); }
+      return changed || old !== undefined || left || was !== held.rejected.get(file);
     }
+  }
+
+  /** A path does not lead to the note of this key any more. The note stays when another path still leads to it,
+   *  and is read again by that path, as its name is the path's; else it leaves. True when the index changed. */
+  private async leave(held: Held, key: string): Promise<boolean> {
+    const had = held.entries.get(key);
+    if (!had) { return false; }
+    for (const [at, way] of [...held.from]) {
+      if (way.key !== key) { continue; }
+      let now: string | undefined;
+      try { now = this.keyOf(way.file); } catch { now = undefined; }
+      if (now === key) { return this.read(held, way.file, key); }
+      held.from.delete(at);                        // that path leads elsewhere by now; its own event says where
+    }
+    held.entries.delete(key);
+    held.links = undefined;
+    this.byId.delete(had.id);
+    return true;
   }
 
   /** Reads and parses one note; the only way into the index. Whether the file's real path lies inside the

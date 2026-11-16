@@ -403,3 +403,79 @@ test("the link map of a project is built once for a state of the index, and foll
     assert.deepEqual(index.linksOf(s.project).resolve("Concept - y"), { kind: "none" });
   } finally { s.done(); }
 });
+
+/** Path rules in which the file at `link` is a symbolic link to whatever `target()` names; no link when it names nothing. */
+function linked(link: string, target: () => string | undefined): PathRules {
+  const own = systemRules.real(link);
+  return { ...systemRules, real: (file) => {
+    const at = systemRules.real(file);
+    const to = target();
+    return at === own && to !== undefined ? systemRules.real(to) : at;
+  } };
+}
+
+test("a link to a note that is pointed at another target, or deleted, takes the old target's note with it", async () => {
+  const s = scratch();
+  try {
+    // Alias.md is a link to one.txt, then to two.txt, both in the notes folder; the index keys a note by its target.
+    const one = s.write("vault/P/one.txt", ""), two = s.write("vault/P/two.txt", "");
+    const alias = s.write("vault/P/Alias.md", fileNote("sub/b.py", "first"));
+    let target: string | undefined = one;
+    const index = new NoteIndex(linked(alias, () => target));
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const [first] = index.fileNotesFor(s.project, "sub/b.py");
+    assert.equal(first?.file?.blocks[0].purpose, "first");
+    let changes = 0;
+    index.onChange = () => { changes++; };
+
+    target = two;
+    fs.writeFileSync(alias, fileNote("sub/b.py", "second"));
+    await index.changed(s.project, alias);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.file?.blocks[0].purpose), ["second"],
+      "one note, the new one: no stale explanation and no false duplicate");
+    assert.equal(index.noteById(first.id), undefined);
+    assert.equal(index.notesByName("Alias").length, 1);
+    assert.equal(changes, 1);
+
+    // The link is deleted: its target's note goes too.
+    fs.rmSync(alias);
+    target = undefined;
+    await index.changed(s.project, alias);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
+    assert.deepEqual(index.notesByName("Alias"), []);
+    assert.equal(changes, 2);
+    assert.equal(index.linksOf(s.project).resolve("Alias").kind, "none");
+  } finally { s.done(); }
+});
+
+test("a note reached by its own path and by a link stays when the link goes, and is read by its own path", async () => {
+  const s = scratch();
+  try {
+    const real = s.write("vault/P/Real.md", fileNote("sub/b.py"));
+    const alias = s.write("vault/P/Alias.md", fileNote("sub/b.py"));
+    let target: string | undefined = real;
+    const index = new NoteIndex(linked(alias, () => target));
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.equal(index.fileNotesFor(s.project, "sub/b.py").length, 1, "two paths, one note");
+
+    fs.rmSync(alias);
+    target = undefined;
+    await index.changed(s.project, alias);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.name), ["Real"]);
+
+    // And the other way: the file goes, the link is left hanging. Nothing can be read: no note.
+    const again = new NoteIndex(linked(alias, () => target));
+    fs.writeFileSync(alias, fileNote("sub/b.py"));
+    target = real;
+    again.setProjects([s.project]);
+    await again.refreshNow(s.project);
+    fs.rmSync(alias);
+    target = undefined;
+    fs.rmSync(real);
+    await again.changed(s.project, real);
+    await again.changed(s.project, alias);
+    assert.deepEqual(again.fileNotesFor(s.project, "sub/b.py"), []);
+  } finally { s.done(); }
+});
