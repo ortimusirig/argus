@@ -546,3 +546,37 @@ test("a project that leaves the settings while its notes are read: the reading s
     for (const entry of held) { assert.equal(again.noteById(entry.id), entry, "the id leads to the note the index holds"); }
   } finally { s.done(); }
 });
+
+test("the file a link leads to is changed or deleted: the note read through the link follows", async () => {
+  const s = scratch();
+  try {
+    // Alias.md is a link to one.txt. The watcher reports one.txt, which is no .md file by its name.
+    const one = s.write("vault/P/one.txt", "");
+    const alias = s.write("vault/P/Alias.md", fileNote("sub/b.py", "first"));
+    let pauses = 0;
+    const index = new NoteIndex(linked(alias, () => one), () => { pauses++; return new Promise((go) => setImmediate(go)); });
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const [first] = index.fileNotesFor(s.project, "sub/b.py");
+    assert.equal(first?.file?.blocks[0].purpose, "first");
+
+    fs.writeFileSync(alias, fileNote("sub/b.py", "second"));       // what is read through the link is new
+    await index.changed(s.project, one);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.file?.blocks[0].purpose), ["second"]);
+    assert.equal(index.noteById(first.id)?.file?.blocks[0].purpose, "second", "the same note, read anew");
+
+    // The target goes: the link hangs, nothing can be read through it.
+    // A file that no link leads to costs no reading.
+    const picture = s.write("vault/P/picture.png", "");
+    pauses = 0;
+    await index.changed(s.project, picture);
+    assert.equal(pauses, 0);
+    assert.equal(index.fileNotesFor(s.project, "sub/b.py").length, 1);
+
+    // The target goes: the link hangs, nothing can be read through it.
+    fs.rmSync(one);
+    fs.rmSync(alias);
+    await index.changed(s.project, one);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
+  } finally { s.done(); }
+});

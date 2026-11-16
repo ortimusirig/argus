@@ -191,7 +191,8 @@ export class NoteIndex {
 
   /** A watcher's event for a path under the project's notes folder or vault folder: created, changed or deleted.
    *  What the path is is asked of the disk, never read from its name: a folder (whatever its name, `v1.0` or
-   *  `archive.md`) has the project's folders read again; a .md file is read again; any other file is nothing.
+   *  `archive.md`) has the project's folders read again; a .md file is read again; any other file is nothing,
+   *  unless a link `Name.md` leads to it (`throughLink`).
    *  A path that is gone cannot be asked: when notes are indexed under it, it was a folder, and the folders are
    *  read again (so a rename that reports only the old path leaves no note at a path that is gone); else it is
    *  read again as a note, which drops the note that was there (a folder of links to notes is known by the paths
@@ -225,8 +226,19 @@ export class NoteIndex {
         return false;
       }
       if (folder) { return held.refreshed > asked ? false : this.refreshWork(held); }
-      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, file) : false;
+      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, file) : this.throughLink(held, file);
     });
+  }
+
+  /** An event for a file that is no .md by its name: it may be what a link `Name.md` leads to, changed, made or
+   *  deleted. Then the link is read again. Any other file is nothing to the index, and nothing is read. */
+  private throughLink(held: Held, file: string): Promise<boolean> | boolean {
+    let key: string;
+    try { key = this.keyOf(file); } catch { return false; }
+    for (const [found, way] of held.from) {
+      if (way.key === key && found !== key) { return this.rereadWork(held, way.file); }
+    }
+    return false;
   }
 
   /** Reads one file again after it changed, appeared or went. */
