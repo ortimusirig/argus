@@ -9,10 +9,10 @@ import { LinkTo } from "./core/markdown";
 import { Matcher } from "./core/matching";
 import { Context, handle, hrefsIn } from "./core/messages";
 import { Entry } from "./core/noteIndex";
-import { parseOtherNote } from "./core/notes";
 import { Badge, Listed, View, body, page } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { projectKey } from "./core/settings";
+import { Shown, shownNote, shownView } from "./core/shown";
 
 const QUIET_MS = 200;
 const MATCHING_MS = 400;
@@ -24,7 +24,7 @@ export class Panel implements vscode.WebviewViewProvider {
   private readonly media: vscode.Uri;
   private whole = false;                                      // "Explain this file"
   private pinned?: { uri: string; from: number; to: number };   // lines asked for by a CodeLens
-  private shown?: View;                                       // a note or a list of places, shown in place of the file
+  private shown?: Shown;                                      // a note (by its id) or a list of places, shown in place of the file
   private notice?: string;
   private project?: Project;                                  // the project of what is shown
   private duplicates = false;                                 // the file view is the list of duplicate notes
@@ -99,7 +99,11 @@ export class Panel implements vscode.WebviewViewProvider {
     const view = this.view;
     if (!view || !view.visible) { return; }
     if (this.again) { clearTimeout(this.again); this.again = undefined; }
-    const shown = this.shown ?? this.fileView();
+    // A shown note is asked of the index at each drawing: its text now, or the sentence that it is gone.
+    const notes = this.index.notes;
+    const shown = this.shown
+      ? shownView(this.shown, { byId: (id) => notes.noteById(id), holds: (entry) => notes.holds(entry), linkTo: (project) => this.linkTo(project) })
+      : this.fileView();
     if (!shown) { return; }                          // a match is on its way: what is shown stays for a moment
     const inner = body(shown, this.notice);
     if (inner === this.inner) { return; }            // the same page is not loaded again: scrolling and focus stay
@@ -173,9 +177,8 @@ export class Panel implements vscode.WebviewViewProvider {
   }
 
   private showNote(entry: Entry): void {
-    // The text is the index's own copy of the note; that its path still lies in the folders was tested just now.
-    this.shown = { kind: "note", id: entry.id, folder: path.dirname(entry.path),
-      note: { name: entry.name, body: parseOtherNote(entry.name, entry.path, entry.text).body }, linkTo: this.linkTo(entry.project) };
+    // Only which note is kept: its text is the index's own copy at the time of each drawing (core/shown.ts).
+    this.shown = shownNote(entry);
   }
 
   /** A message from the page. What it may do is decided by `handle`; anything it does not allow is dropped. */
