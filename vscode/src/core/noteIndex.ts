@@ -23,7 +23,8 @@ export interface Entry {
 
 /** `rejected`: the .md files that are not read because their real path lies outside the project's folders (a
  *  symbolic link that leads out), by their path as found, each with the sentence that says so. */
-interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>; }
+interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>;
+  refreshed: number; }      // the tick at which the last reading of the folders began
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
@@ -53,6 +54,7 @@ export class NoteIndex {
   private readonly byId = new Map<number, Entry>();
   private nextId = 1;
   private nextRevision = 1;
+  private tick = 0;           // rises with each event and each reading of the folders: which came first
   /** Called after the notes of a project were found to have changed. */
   onChange?: (project: Project) => void;
 
@@ -71,7 +73,7 @@ export class NoteIndex {
     }
     for (const project of projects) {
       const key = projectKey(project);
-      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), rejected: new Map(), queue: Promise.resolve() }); }
+      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), rejected: new Map(), queue: Promise.resolve(), refreshed: 0 }); }
     }
   }
 
@@ -105,7 +107,13 @@ export class NoteIndex {
   refreshNow(project: Project): Promise<void> {
     const held = this.of(project);
     if (!held) { return Promise.resolve(); }
-    return this.queued(held, async () => {
+    return this.queued(held, () => this.refreshWork(held));
+  }
+
+  private async refreshWork(held: Held): Promise<boolean> {
+    const project = held.project;
+    {
+      held.refreshed = ++this.tick;
       let changed = false;
       const rejectedBefore = held.rejected;
       held.rejected = new Map();
@@ -128,6 +136,39 @@ export class NoteIndex {
       if (rejectedBefore.size !== held.rejected.size
         || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
       return changed;
+    }
+  }
+
+  /** A watcher's event for a path under the project's notes folder or vault folder: created, changed or deleted.
+   *  What the path is is asked of the disk, never read from its name: a folder (whatever its name, `v1.0` or
+   *  `archive.md`) has the project's folders read again; a .md file is read again; any other file is nothing.
+   *  A path that is gone cannot be asked: when notes are indexed under it, it was a folder, and the folders are
+   *  read again (so a rename that reports only the old path leaves no note at a path that is gone); else it is
+   *  read again as a note, which drops the note that was there. Paths under a folder whose name starts with a dot
+   *  are not the index's. Folder events that arrive together are answered by one reading. */
+  changed(project: Project, file: string): Promise<void> {
+    const held = this.of(project);
+    if (!held) { return Promise.resolve(); }
+    const asked = ++this.tick;
+    return this.queued(held, async () => {
+      const inNotes = relativeIn(project.notesFolder, file, this.rules);
+      const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
+      const parts = rel === undefined ? [] : rel.split("/");
+      if (parts.slice(0, -1).some((part) => part.startsWith("."))) { return false; }
+      let folder: boolean | undefined;                       // undefined: gone
+      try { folder = (await fs.promises.stat(file)).isDirectory(); } catch { folder = undefined; }
+      if (folder === undefined) {
+        // The keys are real paths: only a note whose key begins with the path's can lie under it, and only those
+        // are asked of the path rules.
+        let at = "";
+        try { at = this.keyOf(file); } catch { return false; }
+        folder = [...held.entries].some(([key, entry]) => key.length > at.length && key.startsWith(at)
+          && relativeIn(file, entry.path, this.rules) !== undefined);
+      } else if (folder && parts.length > 0 && parts[parts.length - 1].startsWith(".")) {
+        return false;
+      }
+      if (folder) { return held.refreshed > asked ? false : this.refreshWork(held); }
+      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, file) : false;
     });
   }
 
@@ -135,7 +176,12 @@ export class NoteIndex {
   reread(project: Project, file: string): Promise<void> {
     const held = this.of(project);
     if (!held) { return Promise.resolve(); }
-    return this.queued(held, async () => {
+    return this.queued(held, () => this.rereadWork(held, file));
+  }
+
+  private async rereadWork(held: Held, file: string): Promise<boolean> {
+    const project = held.project;
+    {
       const was = held.rejected.get(file);
       held.rejected.delete(file);
       let key: string;
@@ -145,7 +191,7 @@ export class NoteIndex {
       if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return was !== undefined; }
       const changed = await this.read(held, file, key);
       return changed || was !== held.rejected.get(file);
-    });
+    }
   }
 
   /** Reads and parses one note; the only way into the index. Whether the file's real path lies inside the

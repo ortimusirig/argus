@@ -82,20 +82,18 @@ export class Index implements vscode.Disposable {
     this.timers.clear();
   }
 
-  /** A changed file is read again after 300 ms of quiet. A changed folder (a rename, a removal) has the project
-   *  read again. Folders whose name starts with a dot are not the index's. */
+  /** After 300 ms of quiet for the path, the index is told of it; what the path is (a note, a folder, something
+   *  else, or gone) and what follows is decided there (NoteIndex.changed), never here from the path's name. */
   private event(project: Project, folder: string, file: string): void {
-    const parts = path.relative(folder, file).split(path.sep);
-    if (parts.slice(0, -1).some((part) => part.startsWith("."))) { return; }
+    // What lies under a folder whose name starts with a dot is neither the index's nor the checker's.
+    if (path.relative(folder, file).split(path.sep).slice(0, -1).some((part) => part.startsWith("."))) { return; }
     this.touched.fire(project);
-    const isNote = file.toLowerCase().endsWith(".md");
-    if (!isNote && path.extname(file) !== "") { return; }
-    const key = projectKey(project) + "\n" + (isNote ? file : "");
+    const key = projectKey(project) + "\n" + file;
     const waiting = this.timers.get(key);
     if (waiting) { clearTimeout(waiting); }
     this.timers.set(key, setTimeout(() => {
       this.timers.delete(key);
-      void (isNote ? this.notes.reread(project, file) : this.notes.refreshNow(project)).catch(() => undefined);
+      void this.notes.changed(project, file).catch(() => undefined);
     }, QUIET_MS));
   }
 

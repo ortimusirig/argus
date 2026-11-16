@@ -221,3 +221,72 @@ test("a source that appears, goes or moves after its note was read: the note is 
     assert.equal(changes, 3);
   } finally { s.done(); }
 });
+
+test("an event for a folder is a folder's event whatever its name, also when the folder is gone", async () => {
+  const s = scratch();
+  try {
+    const index = new NoteIndex();
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const names = (): string[] => index.notesOf(s.project, "notes").map((e) => e.name).sort();
+    assert.deepEqual(names(), ["Concept - x", "P file - a.py"]);
+
+    // A folder whose name has an extension appears with a note in it; only the folder's event is given.
+    s.write("vault/P/v1.0/Concept - one.md", other("concept"));
+    await index.changed(s.project, path.join(s.root, "vault", "P", "v1.0"));
+    assert.deepEqual(names(), ["Concept - one", "Concept - x", "P file - a.py"]);
+
+    // A folder named as a note is a folder.
+    s.write("vault/P/archive.md/Concept - two.md", other("concept"));
+    await index.changed(s.project, path.join(s.root, "vault", "P", "archive.md"));
+    assert.deepEqual(names(), ["Concept - one", "Concept - two", "Concept - x", "P file - a.py"]);
+    assert.deepEqual(index.notesByName("archive"), []);
+
+    // A folder is renamed, and only its old path is reported: the notes are not kept at paths that are gone.
+    fs.renameSync(path.join(s.root, "vault", "P", "v1.0"), path.join(s.root, "vault", "P", "v2.0"));
+    await index.changed(s.project, path.join(s.root, "vault", "P", "v1.0"));
+    assert.deepEqual(names(), ["Concept - one", "Concept - two", "Concept - x", "P file - a.py"]);
+    assert.equal(index.notesByName("Concept - one")[0].path, systemRules.real(path.join(s.root, "vault", "P", "v2.0", "Concept - one.md")));
+
+    // Folders are deleted; their type can no longer be asked.
+    fs.rmSync(path.join(s.root, "vault", "P", "archive.md"), { recursive: true });
+    await index.changed(s.project, path.join(s.root, "vault", "P", "archive.md"));
+    fs.rmSync(path.join(s.root, "vault", "P", "v2.0"), { recursive: true });
+    await index.changed(s.project, path.join(s.root, "vault", "P", "v2.0"));
+    assert.deepEqual(names(), ["Concept - x", "P file - a.py"]);
+
+    // A file that is no note changes nothing and reads nothing; a note is read again; a deleted note leaves.
+    let changes = 0;
+    index.onChange = () => { changes++; };
+    s.write("vault/P/picture.png", "x");
+    await index.changed(s.project, path.join(s.root, "vault", "P", "picture.png"));
+    s.write("vault/P/LICENSE", "x");
+    await index.changed(s.project, path.join(s.root, "vault", "P", "LICENSE"));
+    assert.equal(changes, 0);
+    const file = s.write("vault/P/Concepts/Concept - x.md", other("concept") + "More.\n");
+    await index.changed(s.project, file);
+    assert.equal(changes, 1);
+    fs.rmSync(file);
+    await index.changed(s.project, file);
+    assert.deepEqual(names(), ["P file - a.py"]);
+    // What lies under a folder whose name starts with a dot is not the index's.
+    await index.changed(s.project, s.write("vault/P/.trash/Concept - three.md", other("concept")));
+    assert.deepEqual(names(), ["P file - a.py"]);
+  } finally { s.done(); }
+});
+
+test("many folder events at once are answered by one reading of the folders", async () => {
+  const s = scratch();
+  try {
+    let lists = 0;
+    const index = new NoteIndex(undefined, () => { lists++; return new Promise((go) => setImmediate(go)); });
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const one = lists;
+    lists = 0;
+    const folders = ["a.b", "c.d", "e.f", "g.h"].map((name) => path.dirname(s.write(`vault/P/${name}/Concept - ${name}.md`, other("concept"))));
+    await Promise.all(folders.map((folder) => index.changed(s.project, folder)));
+    assert.equal(index.notesOf(s.project, "notes").length, 6);
+    assert.ok(lists < 2 * (one + 8), `one reading, not four: ${lists} pauses, ${one} for the first reading`);
+  } finally { s.done(); }
+});
