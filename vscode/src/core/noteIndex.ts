@@ -20,7 +20,9 @@ export interface Entry {
   text: string;             // as read; the same text is the same note
 }
 
-interface Held { project: Project; entries: Map<string, Entry>; queue: Promise<void>; }
+/** `rejected`: the .md files that are not read because their real path lies outside the project's folders (a
+ *  symbolic link that leads out), by their path as found, each with the sentence that says so. */
+interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>; }
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
@@ -67,7 +69,7 @@ export class NoteIndex {
     }
     for (const project of projects) {
       const key = projectKey(project);
-      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), queue: Promise.resolve() }); }
+      if (!this.held.has(key)) { this.held.set(key, { project, entries: new Map(), rejected: new Map(), queue: Promise.resolve() }); }
     }
   }
 
@@ -78,6 +80,14 @@ export class NoteIndex {
   private keyOf(file: string): string {
     const real = this.rules.real(file);
     return this.rules.windows ? real.toLowerCase() : real;
+  }
+
+  /** The folder of the project the file's real path lies in, now: the notes folder before the vault folder.
+   *  Undefined when it lies in neither; such a file is never read. */
+  private placeOf(project: Project, file: string): Place | undefined {
+    if (relativeIn(project.notesFolder, file, this.rules) !== undefined) { return "notes"; }
+    if (project.vaultFolder !== undefined && relativeIn(project.vaultFolder, file, this.rules) !== undefined) { return "vault"; }
+    return undefined;
   }
 
   /** One thing at a time for each project: a refresh never runs into a re-read. */
@@ -95,22 +105,26 @@ export class NoteIndex {
     if (!held) { return Promise.resolve(); }
     return this.queued(held, async () => {
       let changed = false;
+      const rejectedBefore = held.rejected;
+      held.rejected = new Map();
       const seen = new Set<string>();
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
-      for (const [place, folder] of folders) {
+      for (const [, folder] of folders) {
         for (const file of await mdFiles(folder, this.pause)) {
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
           if (seen.has(key)) { continue; }           // a notes folder inside the vault: its notes are the project's own
           seen.add(key);
-          if (await this.read(held, place, file, key)) { changed = true; }
+          if (await this.read(held, file, key)) { changed = true; }
           await this.pause();
         }
       }
       for (const [key, entry] of held.entries) {
         if (!seen.has(key)) { held.entries.delete(key); this.byId.delete(entry.id); changed = true; }
       }
+      if (rejectedBefore.size !== held.rejected.size
+        || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
       return changed;
     });
   }
@@ -120,25 +134,42 @@ export class NoteIndex {
     const held = this.of(project);
     if (!held) { return Promise.resolve(); }
     return this.queued(held, async () => {
+      const was = held.rejected.get(file);
+      held.rejected.delete(file);
       let key: string;
-      try { key = this.keyOf(file); } catch { return false; }
+      try { key = this.keyOf(file); } catch { return was !== undefined; }
       const inNotes = relativeIn(project.notesFolder, file, this.rules);
       const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
-      if (rel === undefined || rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return false; }
-      return this.read(held, inNotes !== undefined ? "notes" : "vault", file, key);
+      if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return was !== undefined; }
+      const changed = await this.read(held, file, key);
+      return changed || was !== held.rejected.get(file);
     });
   }
 
-  /** Reads and parses one note. True when the index changed. */
-  private async read(held: Held, place: Place, file: string, key: string): Promise<boolean> {
+  /** Reads and parses one note; the only way into the index. Whether the file's real path lies inside the
+   *  project's folders is asked first: a file that leads out of them is not read, and is listed as a problem.
+   *  True when the notes of the index changed. */
+  private async read(held: Held, file: string, key: string): Promise<boolean> {
     const had = held.entries.get(key);
     const drop = (): boolean => {
       if (had) { held.entries.delete(key); this.byId.delete(had.id); }
       return had !== undefined;
     };
+    const project = held.project;
+    const place = this.placeOf(project, file);
+    if (place === undefined) {
+      let there = true;
+      try { await fs.promises.lstat(file); } catch { there = false; }
+      if (there) {
+        let real = file;
+        try { real = this.rules.real(file); } catch { /* said with the path as found */ }
+        held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: its real path lies outside the notes folder `
+          + `and the vault folder, so it is not read: '${real}'`);
+      }
+      return drop();
+    }
     let text: string;
     try { text = await fs.promises.readFile(file, "utf8"); } catch { return drop(); }
-    const project = held.project;
     if (had && had.text === text && had.place === place) {
       if (!had.file) { return false; }
       // The same note; whether its source is a file inside the root is asked again, as the disk may have changed.
@@ -191,9 +222,11 @@ export class NoteIndex {
     return this.all(project).filter((entry) => entry.place === place);
   }
 
-  /** The File notes of the project whose `source` the index could not use, each as one sentence. */
+  /** The File notes of the project whose `source` the index could not use, and the files it did not read because
+   *  they lead out of the project's folders, each as one sentence. */
   problemsOf(project: Project): string[] {
-    return this.all(project).filter((entry) => entry.problem !== undefined).map((entry) => entry.problem as string).sort();
+    return [...this.all(project).filter((entry) => entry.problem !== undefined).map((entry) => entry.problem as string),
+      ...(this.of(project)?.rejected.values() ?? [])].sort();
   }
 
   /** Every indexed note of that name, in any project: zero, one or several. */

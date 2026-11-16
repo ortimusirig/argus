@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { NoteIndex } from "../core/noteIndex";
-import { Project } from "../core/projects";
+import { PathRules, Project, systemRules } from "../core/projects";
 
 function fileNote(source: string, purpose = "adds"): string {
   return `---\ntype: file\nwritten_by: argus\nsource: ${source}\ndepth: map\n---\n# note\n\n## Code and explanation\n\n`
@@ -124,5 +124,42 @@ test("a note whose path no longer lies in the folders is not held", async () => 
     assert.equal(index.holds({ ...note, path: path.join(s.root, "outside.md") }), false);
     index.setProjects([]);
     assert.equal(index.noteById(note.id), undefined);
+  } finally { s.done(); }
+});
+
+test("a note whose real path lies outside the folders is not read, on a refresh or a re-read, and is listed as a problem", async () => {
+  const s = scratch();
+  try {
+    // As a symbolic link would be: a .md in the notes folder whose real path is a file outside the folders.
+    const outside = s.write("elsewhere/Secret.md", fileNote("a.py", "leaks"));
+    const link = s.write("vault/P/Link.md", fileNote("a.py", "leaks"));
+    const real = systemRules.real(link);
+    const rules: PathRules = { ...systemRules, real: (file) => {
+      const at = systemRules.real(file);
+      return at === real ? systemRules.real(outside) : at;
+    } };
+    const index = new NoteIndex(rules);
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.deepEqual(index.notesByName("Link"), []);
+    assert.deepEqual(index.fileNotesFor(s.project, "a.py").map((e) => e.name), ["P file - a.py"]);
+    for (const entry of [...index.notesOf(s.project, "notes"), ...index.notesOf(s.project, "vault")]) { assert.ok(index.holds(entry)); }
+    assert.match(index.problemsOf(s.project).join("\n"), /Link: .*outside.*Secret\.md/);
+
+    const again = new NoteIndex(rules);
+    again.setProjects([s.project]);
+    let changes = 0;
+    again.onChange = () => { changes++; };
+    await again.reread(s.project, link);
+    assert.deepEqual(again.notesByName("Link"), []);
+    assert.match(again.problemsOf(s.project).join("\n"), /Link: .*outside.*Secret\.md/);
+    assert.equal(changes, 1, "a new problem is a change the panel shows");
+
+    // The link goes: so does its problem.
+    fs.rmSync(link);
+    await again.reread(s.project, link);
+    assert.deepEqual(again.problemsOf(s.project), []);
+    await index.refreshNow(s.project);
+    assert.deepEqual(index.problemsOf(s.project), []);
   } finally { s.done(); }
 });
