@@ -344,6 +344,11 @@ export class NoteIndex {
       }
       return drop();
     }
+    // The file that was found to lie inside the folders must be the file that was read: where the path leads is
+    // asked before the reading and after it, and both answers must be the same real path, inside the folders.
+    // A link that was pointed elsewhere while the file was read gives a text that is not used.
+    let checked: string;
+    try { checked = this.rules.real(file); } catch { return drop(); }
     let text: string;
     try { text = (await readText(file)).text; } catch { return this.live(held) && drop(); }      // as the checker reads it
     if (!this.live(held)) { return false; }
@@ -351,6 +356,13 @@ export class NoteIndex {
     // `original.md` on Windows, so a note renamed in letter case only is found under the key of the old one.
     let real: string;
     try { real = this.rules.real(file); } catch { return drop(); }
+    let still: string | undefined;
+    try { still = this.rules.real(checked); } catch { still = undefined; }
+    if (real !== checked || still !== checked || this.placeOf(project, file) !== place) {
+      held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file changed where it leads while it was read, `
+        + "so it is not used; it is read again at the next change or refresh");
+      return drop();
+    }
     const name = this.nameOf(file, real);
     if (had && had.text === text && had.place === place && had.name === name && had.path === real) {
       if (!had.file) { return false; }

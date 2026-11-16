@@ -40,7 +40,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("argus.explainSelection", (uri?: unknown, from?: unknown, to?: unknown) =>
       // A CodeLens gives the document and the lines of its block; the menu and the palette give nothing.
       panel.explain(false, typeof uri === "string" && typeof from === "number" && typeof to === "number" ? { uri, from, to } : undefined)),
-    vscode.commands.registerCommand("argus.explainFile", () => panel.explain(true)),
+    // From an editor's title or the explorer the command comes with the file it was clicked on: that file is
+    // explained, also when another editor is the active one.
+    vscode.commands.registerCommand("argus.explainFile", (target?: unknown) =>
+      panel.explain(true, target instanceof vscode.Uri ? { uri: target.toString(), from: 1, to: 1 } : undefined)),
     vscode.commands.registerCommand("argus.refresh", async () => { await index.refreshAll(); redraw(); }),
     vscode.commands.registerCommand("argus.check", async (given?: unknown) => {
       const say = await check.check(asked(given) ?? panel.document());

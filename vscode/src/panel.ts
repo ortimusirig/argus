@@ -198,7 +198,10 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       this.project = undefined;
       return { kind: "message", text: "Argus explains saved files only; this document has no path on disk." };
     }
-    const at = this.index.locate(document);
+    const found = this.index.locate(document);
+    // Only notes that still lie inside the project's folders are drawn, as for a shown note.
+    const holds = (entry: Entry): boolean => this.index.notes.holds(entry);
+    const at = { ...found, notes: found.notes.filter(holds), note: found.note && holds(found.note) ? found.note : undefined };
     this.project = at.project;
     if (!at.project || at.sourceRel === undefined) {
       return this.index.written === 0
