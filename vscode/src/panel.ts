@@ -220,6 +220,10 @@ ${this.project ? projectKey(this.project) : ""}`;
           + "the first workspace folder is taken as the source root.", button: "setup" }
         : { kind: "message", text: `${path.basename(document.uri.fsPath)} is not in an Argus project.` };
     }
+    if (at.notes.length === 0 && !this.index.notes.ready(at.project)) {
+      // The notes are still being read for the first time: "no note" is not known yet, and nothing offers Create.
+      return { kind: "message", text: "Argus is reading the notes of this project…" };
+    }
     if (!at.note || !at.note.file) {
       // No note, or several: the project's problems are shown too, so a refused note is not hidden (core/panelHtml.ts).
       const view = withoutNote(at.sourceRel, this.listed(at.notes), this.index.notes.problemsOf(at.project),

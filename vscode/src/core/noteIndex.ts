@@ -33,6 +33,7 @@ interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<st
   // note: nothing follows from where that led.
   from: Map<string, Way>;
   refreshed: number;        // the tick at which the last reading of the folders began
+  read?: boolean;           // the folders were read to the end at least once
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
 
 interface Way { file: string; key: string; }
@@ -152,6 +153,11 @@ export class NoteIndex {
     return next;
   }
 
+  /** Whether the project's folders were read to the end at least once. Before that, "no note" is not known. */
+  ready(project: Project): boolean {
+    return this.of(project)?.read === true;
+  }
+
   /** Reads the project's folders from disk at once; resolves when the index is up to date. */
   refreshNow(project: Project): Promise<void> {
     const held = this.of(project);
@@ -192,6 +198,8 @@ export class NoteIndex {
       held.from = from;
       if (rejectedBefore.size !== held.rejected.size
         || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
+      // The first reading of the folders is over: what shows the notes is told, also when it found none.
+      if (!held.read) { held.read = true; changed = true; }
       return changed;
     }
   }
