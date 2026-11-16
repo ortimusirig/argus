@@ -37,6 +37,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private again?: NodeJS.Timeout;
   private drawn?: vscode.TextDocument;                        // the document whose explanation the page shows: its buttons act on it
   private viewed?: vscode.TextDocument;                       // the document fileView() last looked at; it becomes `drawn` when its page is shown
+  private innerOf = "";                                       // the file and project the loaded page stands for
   private pageNo = 0;                                         // the number of the page that is shown; a click names its page
   private opening = false;                                    // a command is opening the panel right now
   private editor?: vscode.TextEditor;
@@ -170,8 +171,13 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     if (!shown) { this.project = before.project; this.duplicates = before.duplicates; return; }
     if (!now) { this.drawn = this.viewed; }
     const inner = body(shown, this.notice);
-    if (inner === this.inner) { return; }            // the same page is not loaded again: scrolling and focus stay
+    // The same page for the same file is not loaded again: scrolling and focus stay. The same text for another
+    // file or project is another page, with a number of its own: a click of the old one must not count for it.
+    const of = now ? "" : `${this.viewed?.uri.toString() ?? ""}
+${this.project ? projectKey(this.project) : ""}`;
+    if (inner === this.inner && of === this.innerOf) { return; }
     this.inner = inner;
+    this.innerOf = of;
     this.hrefs = hrefsIn(inner);
     const web = view.webview;
     view.webview.html = page({ cspSource: web.cspSource, nonce: crypto.randomBytes(16).toString("hex"),

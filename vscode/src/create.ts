@@ -11,7 +11,7 @@ import { Index } from "./index";
 import { Creates, Ended, Follow, Run, Status, TASK_NAME, afterRun, alreadyRunning, fileHash, fill, findProgram, noteMark, refusal,
   revisionMark, variableIn } from "./core/create";
 import { Entry } from "./core/noteIndex";
-import { Project } from "./core/projects";
+import { Project, relativeIn } from "./core/projects";
 import { mayStart } from "./core/run";
 import { createDepth, projectKey, userCommand } from "./core/settings";
 
@@ -31,6 +31,8 @@ async function isProgram(file: string): Promise<boolean> {
     return false;
   }
 }
+
+const OUTSIDE = "the file no longer lies inside the source root of its project (its path leads elsewhere now); nothing was started";
 
 export class Create implements vscode.Disposable {
   private readonly runs = new Creates();
@@ -124,7 +126,13 @@ export class Create implements vscode.Disposable {
     if ("problem" in program) { return program.problem; }
     // The hashes from before the start: the file as saved, and the file's notes as they are on disk now.
     await this.index.refreshNow(project).catch(() => undefined);
+    // Where the file really lies is asked of the disk now, not of what was remembered: a file that was replaced
+    // by a link leading out of the source root is not hashed and not handed to the agent. Asked before the
+    // hash and after it.
+    const inside = (): boolean => relativeIn(project.sourceRoot, document.uri.fsPath) === file;
+    if (!inside()) { return OUTSIDE; }
     const source = await fileHash(document.uri.fsPath);
+    if (!inside()) { return OUTSIDE; }
     // Time has passed (the question, the save, the disk): all of it is asked again before anything is started.
     const now = this.index.locate(document);
     if (!this.live(run) || document.isClosed || document.isDirty || !vscode.workspace.isTrusted
