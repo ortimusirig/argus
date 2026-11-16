@@ -33,11 +33,12 @@ export class GitWatch {
     const part = gitPart(rel);
     if (part === "none") { return { touch: true, discover: false }; }
     if (part === "itself") {
-      // A `.git` came or went: a repository was made or deleted. A deleted one takes the watched folders with it.
+      // A `.git` came, went or was written anew: a repository was made or deleted, or a worktree's pointer file
+      // now names another place. A deleted one takes the watched folders with it. Git is asked again each time:
+      // the same answer changes nothing, another one moves the watchers.
       if (kind === "delete") { this.stale = true; }
-      const discover = !this.watched;
-      if (discover) { this.missed = true; }
-      return { touch: true, discover };
+      if (!this.watched) { this.missed = true; }
+      return { touch: true, discover: true };
     }
     if (this.watched) { return { touch: false, discover: false }; }     // the git watchers speak for HEAD and the refs
     this.missed = true;

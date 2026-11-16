@@ -65,3 +65,15 @@ test("git's folder is deleted: its watchers are of no use, git is asked again, a
   assert.deepEqual(git.found(["/r/.git"]), { replace: true, touch: true });
   assert.equal(git.watched, true);
 });
+
+test("a .git that is a file (a worktree's pointer) is written anew: git is asked again, and other folders get the watchers", () => {
+  const git = new GitWatch();
+  git.found(["/main/.git/worktrees/w", "/main/.git"]);
+  assert.equal(git.watched, true);
+  // The repository's data moved and the pointer file was rewritten: the watched folders may be the old ones.
+  assert.deepEqual(git.seen(".git", "change"), { touch: true, discover: true });
+  assert.deepEqual(git.found(["/moved/.git/worktrees/w", "/moved/.git"]), { replace: true, touch: true });
+  // Written anew with the same content: git is asked, and nothing follows from the same answer.
+  assert.deepEqual(git.seen(".git", "change"), { touch: true, discover: true });
+  assert.deepEqual(git.found(["/moved/.git/worktrees/w", "/moved/.git"]), { replace: false, touch: false });
+});
