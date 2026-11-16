@@ -411,3 +411,16 @@ test("withoutInlineCode: backticks cost time in proportion to their number", () 
   }
   assert.deepEqual(linkNames(["[[a]] " + "`".repeat(64000) + " [[b]]"]), ["a", "b"]);
 });
+
+test("linkNames: many different links on a line cost time in proportion to their number", () => {
+  const expected = Array.from({ length: 20000 }, (_, k) => `n${k}`);
+  const line = expected.map((name) => `[[${name}]]`).join(" ");
+  const started = performance.now();
+  const names = linkNames([line, "[[n5]] [[last]] [[n19999|shown]]"]);
+  const took = performance.now() - started;
+  console.log(`timing: 20,000 different links in linkNames (${line.length} characters) read in ${took.toFixed(1)} ms`);
+  assert.ok(took < 50, `took ${took} ms`);
+  assert.deepEqual(names, [...expected, "last"]);
+  // Each name once, in the order of its first appearance, whichever line it stands on.
+  assert.deepEqual(linkNames(["[[b]] [[a]] [[b|x]] [[c#h]]", "[[a]] [[d/c.md]] [[e]] [[b]]"]), ["b", "a", "c", "e"]);
+});

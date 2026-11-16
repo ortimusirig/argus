@@ -278,10 +278,11 @@ export function linkTarget(written: string): string {
  *  Names are read as the checker reads them: no folder, no ".md", no "|shown" and no "#heading" part. */
 export function linkNames(lines: string[]): string[] {
   const names: string[] = [];
+  const seen = new Set<string>();                           // the names already listed
   for (const line of lines) {
     for (const m of withoutInlineCode(line).matchAll(LINK)) {
       const target = linkTarget(m[1]);
-      if (target && !names.includes(target)) { names.push(target); }
+      if (target && !seen.has(target)) { seen.add(target); names.push(target); }
     }
   }
   return names;
