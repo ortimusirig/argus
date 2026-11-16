@@ -49,14 +49,18 @@ function* codePoints(line: string): Generator<void, Uint32Array, void> {
 interface Pattern { text: Uint32Array; fail: Int32Array; ends: Int32Array; count: number; head: string; tail: string; size: number; }
 
 /** The Knuth-Morris-Pratt table of a sequence: for each place, the longest start of the sequence that ends there.
- *  Yields every STEP places. */
+ *  Yields every STEP units of work. A step back in the table is a unit as a place is: over the whole sequence there
+ *  are no more steps back than places, but one place may take nearly all of them. */
 function* failSteps(seq: ArrayLike<number>, from: number, length: number): Generator<void, Int32Array, void> {
   const fail = new Int32Array(length);
-  for (let i = 1, k = 0; i < length; i++) {
-    while (k > 0 && seq[from + i] !== seq[from + k]) { k = fail[k - 1]; }
+  for (let i = 1, k = 0, work = 0; i < length; i++) {
+    while (k > 0 && seq[from + i] !== seq[from + k]) {
+      k = fail[k - 1];
+      if (++work >= STEP) { work = 0; yield; }
+    }
     if (seq[from + i] === seq[from + k]) { k++; }
     fail[i] = k;
-    if (i % STEP === 0) { yield; }
+    if (++work >= STEP) { work = 0; yield; }
   }
   return fail;
 }
@@ -80,7 +84,10 @@ function* compile(noteLine: string): Generator<void, Pattern, void> {
     }
     if (count > 0 && at >= 0) {                           // a piece between two masks: its Knuth-Morris-Pratt table
       for (let i = 1, k = 0; start + i < n; i++) {
-        while (k > 0 && text[start + i] !== text[start + k]) { k = fail[start + k - 1]; }
+        while (k > 0 && text[start + i] !== text[start + k]) {   // a step back is counted as a character is
+          k = fail[start + k - 1];
+          if (++work >= STEP) { work = 0; yield; }
+        }
         if (text[start + i] === text[start + k]) { k++; }
         fail[start + i] = k;
         if (++work >= STEP) { work = 0; yield; }
@@ -119,7 +126,10 @@ function* fits(p: Pattern, t: Uint32Array): Generator<void, boolean, void> {
     }
     let found = -1;
     for (let i = from, k = 0; i < n; i++) {
-      while (k > 0 && t[i] !== text[at + k]) { k = fail[at + k - 1]; }
+      while (k > 0 && t[i] !== text[at + k]) {    // a step back is a step too: one character may take very many
+        k = fail[at + k - 1];
+        if (++steps % STEP === 0) { yield; }
+      }
       if (t[i] === text[at + k]) { k++; }
       if (k === length) { found = i - length + 1; break; }
       if (++steps % STEP === 0) { yield; }
@@ -590,7 +600,10 @@ class NumberedText {
     for (let i = 0, k = 0; i < stop; i++) {
       let start = i;
       if (runLength > 0) {
-        while (k > 0 && seq[i] !== exact[runAt + k]) { k = fail[k - 1]; }
+        while (k > 0 && seq[i] !== exact[runAt + k]) {            // a step back is counted as a line is
+          k = fail[k - 1];
+          if (slicer.due()) { yield slicer.done; slicer.resume(); }
+        }
         if (seq[i] === exact[runAt + k]) { k++; }
         start = -1;
         if (k === runLength) {

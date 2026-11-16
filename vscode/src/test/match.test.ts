@@ -738,3 +738,30 @@ test("16,000 pattern lines against 64,000 different lines, one candidate: array 
   assert.deepEqual(states(a), [["1", "current-masked", 1, 16001]]);
   assert.deepEqual(a.unexplained, [[16002, 64000]]);
 });
+
+// ---------------------------------------------------------------- the steps back of a search are work too
+
+test("a piece of 16,000,000 times a, then b: the steps back of the search table and of the search yield every few milliseconds; right answer", async () => {
+  const N = 16000000;
+  const shapes: { name: string; line: string; fitting: string }[] = [
+    // The reviewer's case: at the b, the table of the piece goes back through every a, one step each.
+    { name: "x[masked], 16,000,000 times a, b[masked]y: the piece's table", line: "x" + MASK + "a".repeat(N) + "b" + MASK + "y",
+      fitting: "xQ" + "a".repeat(N) + "bQy" },
+    // The piece's table has no step back; the search in the line goes back through every a at the c.
+    { name: "x[masked], 16,000,000 times a, [masked]y in a line with a c among the a: the search", line: "x" + MASK + "a".repeat(N) + MASK + "y",
+      fitting: "xQ" + "a".repeat(N - 1) + "c" + "a".repeat(N) + "Qy" },
+  ];
+  for (const { name, line, fitting } of shapes) {
+    const n = note([block("1", 2, [line])], "2");
+    const { result, gaps, took, collector } = await workOf(n, ["before", fitting, "after"]);
+    const sorted = [...gaps].sort((x, y) => x - y);
+    const median = sorted[sorted.length >> 1], longest = sorted[sorted.length - 1];
+    console.log(`timing: ${name}: ran ${took.toFixed(0)} ms in ${gaps.length} slices; `
+      + `work between yields: median ${median.toFixed(2)} ms, longest ${longest.toFixed(2)} ms (collector pauses of ${collector.toFixed(0)} ms taken out)`);
+    assert.deepEqual(states(result), [["1", "current-masked", 2, 2]], name);
+    assert.deepEqual(result.unexplained, [[1, 1], [3, 3]], name);
+    assert.ok(median <= 4, `${name}: median work between yields ${median} ms`);
+    assert.ok(longest <= 25, `${name}: longest work between yields ${longest} ms`);
+    assert.equal(maskedMatch(line, fitting.slice(0, -2) + "y"), false, name);   // nothing left for the last mask
+  }
+});
