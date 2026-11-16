@@ -10,11 +10,11 @@ import * as vscode from "vscode";
 import { Check } from "./check";
 import { Index } from "./index";
 import { Creates, Ended, Follow, Run, Status, TASK_NAME, afterRun, alreadyRunning, fileHash, fill, findProgram, noteMark, refusal,
-  revisionMark, variableIn } from "./core/create";
+  modelArgs, revisionMark, variableIn } from "./core/create";
 import { Entry } from "./core/noteIndex";
 import { Project, relativeIn } from "./core/projects";
 import { mayStart } from "./core/run";
-import { createDepth, projectKey, userCommand } from "./core/settings";
+import { createDepth, projectKey, userCommand, userModel } from "./core/settings";
 
 const SETTLE_MS = 500;        // the agent's last writes reach the watchers before the notes are read
 const AGAIN_MS = 2000;        // a check whose result was not used (the notes still moved) is run once more
@@ -124,6 +124,9 @@ export class Create implements vscode.Disposable {
     const values = { file, notesFolder: path.resolve(project.notesFolder), sourceRoot: path.resolve(project.sourceRoot), depth: createDepth(config.get<unknown>("createDepth")) };
     const variable = variableIn(values);
     if (variable !== undefined) { return variable; }
+    // The model is the user's own setting too, and is tested before anything is looked up or started.
+    const model = modelArgs(userModel(config.inspect<unknown>("createModel")));
+    if ("problem" in model) { return model.problem; }
     const command = fill(userCommand(config.inspect<unknown>("createCommand")), values);
     const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram,
       read: (file) => fs.promises.readFile(file, "utf8") });
@@ -147,7 +150,7 @@ export class Create implements vscode.Disposable {
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
     const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, TASK_NAME, "argus",
-      new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...command.slice(1)], { cwd: path.resolve(project.sourceRoot) }));
+      new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...model.args, ...command.slice(1)], { cwd: path.resolve(project.sourceRoot) }));
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, focus: true, panel: vscode.TaskPanelKind.Dedicated, close: false };
     const follow = new Follow((ended) => { void this.ended(started, ended); });
     this.following = { task, follow };

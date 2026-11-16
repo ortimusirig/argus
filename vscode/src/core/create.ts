@@ -22,6 +22,19 @@ export function fill(command: readonly string[], values: Values): string[] {
     (_whole, name: keyof Values, at: number) => at === 0 && values[name].startsWith("-") ? `./${values[name]}` : values[name]));
 }
 
+/** The arguments that name the model, from the setting `argus.createModel`: none for the empty text, else `--model`
+ *  and the value, two arguments. They are placed right after the program, before the command's other arguments.
+ *  The value is the name of a model and nothing else: letters, digits and `. - _ : /`, at most 100 characters, and
+ *  no `-` at its start, so it can never be read as an option. Anything else: a sentence, and nothing is started. */
+export function modelArgs(model: unknown): { args: string[] } | { problem: string } {
+  if (model === "") { return { args: [] }; }
+  if (typeof model !== "string" || model.length > 100 || model.startsWith("-") || !/^[A-Za-z0-9._:/-]+$/.test(model)) {
+    return { problem: "the setting argus.createModel is not a model name: it may hold letters, digits and . - _ : / only, "
+      + "at most 100 characters, and must not begin with -; nothing was started" };
+  }
+  return { args: ["--model", model] };
+}
+
 /** VS Code's task runner reads `${name}` in a task's arguments and folder as one of its own variables: the value of
  *  an environment variable, or the result of a command it then runs. A path is never handed to it with `${` in it:
  *  a file or a folder named so could make the task read a secret or run a command. The sentence that says so, or

@@ -30,7 +30,7 @@ test("the defaults are the design's, and package.json documents the same ones", 
   const props = pack.contributes.configuration.properties;
   assert.deepEqual(props["argus.createCommand"].default, [...DEFAULT_CREATE_COMMAND]);
   assert.equal(props["argus.python"].default, DEFAULT_PYTHON);
-  assert.deepEqual(pack.capabilities.untrustedWorkspaces.restrictedConfigurations, ["argus.createCommand", "argus.python", "argus.projects"]);
+  assert.deepEqual(pack.capabilities.untrustedWorkspaces.restrictedConfigurations, ["argus.createCommand", "argus.createModel", "argus.python", "argus.projects"]);
   assert.equal(pack.capabilities.untrustedWorkspaces.supported, "limited");
   assert.equal(pack.dependencies, undefined);
 });

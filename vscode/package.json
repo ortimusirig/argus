@@ -29,6 +29,7 @@
       "supported": "limited",
       "restrictedConfigurations": [
         "argus.createCommand",
+        "argus.createModel",
         "argus.python",
         "argus.projects"
       ],
@@ -80,6 +81,12 @@
             "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."
           ],
           "description": "The agent program and its arguments. Placeholders: ${file}, ${notesFolder}, ${sourceRoot}, ${depth}. Read from your user settings only."
+        },
+        "argus.createModel": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "description": "The model the agent uses. When set, the two arguments --model and this value are placed right after the program. This is the option of the Claude Code program; for another agent leave it empty. Read from your user settings only."
         },
         "argus.createDepth": {
           "type": "string",

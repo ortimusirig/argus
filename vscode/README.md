@@ -31,10 +31,13 @@ Open a source file. The Argus panel is in the activity bar. When no project is s
 | --- | --- | --- |
 | `argus.projects` | A list. Each entry has `sourceRoot` (the folder the notes' `source` paths are relative to) and `notesFolder` (the folder with the Argus notes). Optional: `vaultFolder` (the root of the Obsidian vault, for shared Concept and Library notes) and `graph` (the path of a graphify `graph.json` for the check) | Empty |
 | `argus.createCommand` | The agent program and its arguments, as a list. The placeholders `${file}`, `${notesFolder}`, `${sourceRoot}` and `${depth}` are filled in each argument | `["claude", "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."]` |
+| `argus.createModel` | The model the agent uses. When it is not empty, the two arguments `--model` and this value are placed right after the program, before the other arguments of the command | Empty |
 | `argus.createDepth` | The depth asked for on create: `map` or `full` | `full` |
 | `argus.python` | The Python program for the check | `python` |
 
-`argus.createCommand` and `argus.python` are read from your user settings only. A workspace cannot set them. With several workspace folders, each needs its own entry in `argus.projects`.
+`argus.createCommand`, `argus.createModel` and `argus.python` are read from your user settings only. A workspace cannot set them.
+
+`argus.createModel` is the `--model` option of the Claude Code program, for example `sonnet` or `opus`. For another agent leave it empty and write that agent's own option into the command. Leave it empty too when the command names `node` and a script: the option would come before the script. The value may hold letters, digits and `. - _ : /` only, at most 100 characters, and must not begin with `-`. With any other value nothing is started, and the panel says so. With several workspace folders, each needs its own entry in `argus.projects`.
 
 ## Commands
 

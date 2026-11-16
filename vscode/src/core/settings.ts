@@ -23,6 +23,12 @@ export function userPython(inspected: Inspected | undefined): string {
   return typeof own === "string" && own !== "" ? own : DEFAULT_PYTHON;
 }
 
+/** `argus.createModel`: the user's own value as it was written, or the empty text when there is none. A workspace
+ *  cannot set it. Whether the value is a model name is decided by `modelArgs` (core/create.ts). */
+export function userModel(inspected: Inspected | undefined): unknown {
+  return inspected?.globalValue ?? "";
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
