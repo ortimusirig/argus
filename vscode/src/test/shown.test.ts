@@ -137,3 +137,15 @@ test("Trail: the steps kept are bounded, however long the person follows links",
   assert.ok(steps >= 50 && steps <= 200, `${steps} steps back`);
   assert.equal(trail.now, undefined);
 });
+
+test("Trail: more than 100 steps: the oldest are left out, and the trail says how many", () => {
+  const trail = new Trail();
+  for (let n = 1; n <= 103; n++) { trail.open({ kind: "note", id: n, name: `n${n}` } as Shown); }
+  assert.equal(trail.withheld, 2, "102 steps back were asked for, 100 are kept");
+  let steps = 0;
+  while (trail.back(() => undefined)) { steps++; }
+  assert.equal(steps, 100);
+  assert.equal(trail.withheld, 2, "still said at the end of the way back");
+  trail.clear();
+  assert.equal(trail.withheld, 0);
+});

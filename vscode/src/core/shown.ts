@@ -36,7 +36,7 @@ export function shownView(shown: Shown, notes: Notes): View {
     note: { name: entry.name, body: parseOtherNote(entry.name, entry.path, entry.text).body }, linkTo: notes.linkTo(entry.project) };
 }
 
-const STEPS = 100;
+export const STEPS = 100;
 
 function same(a: Shown, b: Shown): boolean {
   return a.kind === "note" ? b.kind === "note" && a.id === b.id : b.kind === "places" && a.name === b.name;
@@ -49,6 +49,10 @@ function same(a: Shown, b: Shown): boolean {
 export class Trail {
   private shown?: Shown;
   private readonly before: Shown[] = [];
+  private left = 0;
+
+  /** How many of the oldest steps were left out, because only the last 100 are kept. The panel says so. */
+  get withheld(): number { return this.left; }
 
   /** What is shown now; undefined when the file's own explanation is. */
   get now(): Shown | undefined { return this.shown; }
@@ -57,7 +61,7 @@ export class Trail {
   open(next: Shown): void {
     if (this.shown && !same(this.shown, next)) {
       this.before.push(this.shown);
-      if (this.before.length > STEPS) { this.before.shift(); }
+      if (this.before.length > STEPS) { this.before.shift(); this.left++; }
     }
     this.shown = next;
   }
@@ -76,5 +80,6 @@ export class Trail {
   clear(): void {
     this.shown = undefined;
     this.before.length = 0;
+    this.left = 0;
   }
 }

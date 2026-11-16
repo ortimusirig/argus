@@ -14,7 +14,7 @@ import { Entry } from "./core/noteIndex";
 import { Badge, Creating, Listed, View, body, page, withoutNote } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { projectKey } from "./core/settings";
-import { Shown, Trail, shownNote, shownView } from "./core/shown";
+import { STEPS, Shown, Trail, shownNote, shownView } from "./core/shown";
 
 const QUIET_MS = 200;
 const MATCHING_MS = 400;
@@ -218,6 +218,13 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     // Only which note is kept: its text is the index's own copy at the time of each drawing (core/shown.ts).
     this.trail.open(shownNote(entry));
     this.latest.asked("shown");
+    this.sayWithheld();
+  }
+
+  /** The way back is bounded: when old steps were left out, the panel says how many. */
+  private sayWithheld(): void {
+    const n = this.trail.withheld;
+    if (n > 0) { this.tell(`Back keeps the last ${STEPS} steps. ${n} older ${n === 1 ? "step is" : "steps are"} not kept.`); }
   }
 
   /** What a message is tested against: the notes of the project being shown, as the index holds them now. */
@@ -296,6 +303,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
         this.tell(undefined);
         this.trail.open({ kind: "places", name: action.name, places: this.listed(action.places) });
         this.latest.asked("shown");
+        this.sayWithheld();
         break;
       case "pick":
         this.tell(undefined);
@@ -308,6 +316,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
         this.tell(undefined);
         this.trail.back((name) => this.placesAgain(name, context));
         this.latest.asked("shown");
+        this.sayWithheld();
         break;
       case "open":
         try {
