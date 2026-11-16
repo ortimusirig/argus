@@ -127,7 +127,8 @@ function blockHtml(placed: Placed, selection: { from: number; to: number } | und
       const from = row.from + shift, to = row.to + shift;
       const chosen = exact && selection !== undefined && from <= selection.to && to >= selection.from;
       const label = from === to ? `${from}` : `${from}-${to}`;
-      out.push(`<tr${chosen ? ' class="selected"' : ""}><td>${chosen ? "▸ " : ""}${label}</td><td>${cell(row.code, linkTo)}</td>`
+      // The Code cell is code, letter for letter (its backticks are off already): never read as Markdown.
+      out.push(`<tr${chosen ? ' class="selected"' : ""}><td>${chosen ? "▸ " : ""}${label}</td><td><code>${escape(row.code)}</code></td>`
         + `<td>${cell(row.what, linkTo)}</td><td>${cell(row.value, linkTo)}</td></tr>`);
     }
     out.push("</tbody></table>");

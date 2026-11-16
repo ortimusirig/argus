@@ -132,3 +132,23 @@ test("the first-use view, the duplicate notes and the places of a name", () => {
   assert.ok(places.includes('data-pick="5"') && places.includes("C:/v/A"));
   assert.ok(body({ kind: "message", text: "x" }, "this kind of address is not opened from a note: command:x").includes("not opened from a note"));
 });
+
+test("the Code column of the line table is the code, letter for letter: Markdown in it is not read", () => {
+  const note = parseFileNote("N", "/n/N.md", ["---", "type: file", "written_by: argus", "source: a.py", "depth: full", "---",
+    "## Code and explanation", "", "### Block 1: labels (lines 1-3)", "", "```py", 'label = "**bold**"', "see = '[[Concept - x]] _a_ <b>'", "p = a + b", "```", "",
+    "| Line | Code | What happens | Real value |", "| --- | --- | --- | --- |",
+    '| 1 | `label = "**bold**"` | sets a **strong** word | `"**bold**"` |',
+    "| 2 | `` see = '[[Concept - x]] _a_ <b>' `` | names [[Concept - x]] | *none* |",
+    "| 3 | p = a + b **c** | written without backticks | none |", ""].join("\n"));
+  const html = body({ kind: "file", file: "a.py", note, noteId: 1, selection: undefined, whole: true,
+    assignment: runToEnd(assign(note, ['label = "**bold**"', "see = '[[Concept - x]] _a_ <b>'", "p = a + b"])),
+    badge: { label: "not checked" }, linkTo, problems: [] });
+  assert.ok(html.includes('<td><code>label = &quot;**bold**&quot;</code></td>'), html);
+  assert.ok(html.includes("<td><code>see = &#39;[[Concept - x]] _a_ &lt;b&gt;&#39;</code></td>"), html);
+  assert.ok(html.includes("<td><code>p = a + b **c**</code></td>"), "a cell that is not one code span is shown as written");
+  // The other columns are prose: Markdown, as before.
+  assert.ok(html.includes("<strong>strong</strong>"));
+  assert.ok(html.includes('<a data-note="Concept - x">'));
+  assert.ok(html.includes("<em>none</em>"));
+  assert.ok(html.includes('<pre><code>label = &quot;**bold**&quot;\n'));
+});
