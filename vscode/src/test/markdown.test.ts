@@ -146,3 +146,96 @@ test("a long line of openers that never close is rendered at once", () => {
   assert.ok(took < 500, `took ${took} ms`);
   assert.doesNotMatch(html, /<a |<strong>/);
 });
+
+// ---------------------------------------------------------------- lists
+
+test("a simple list: - and * at the start of a line give <ul><li>", () => {
+  assert.equal(render("- one\n- two\n- three"), "<ul>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ul>");
+  assert.equal(render("* one\n* two"), "<ul>\n<li>one</li>\n<li>two</li>\n</ul>");
+  assert.equal(render("-   spaced out  \n-\ttabbed\n* a star in the same list"),
+    "<ul>\n<li>spaced out</li>\n<li>tabbed</li>\n<li>a star in the same list</li>\n</ul>");
+  assert.equal(render("- one\r\n- two\r\n"), "<ul>\n<li>one</li>\n<li>two</li>\n</ul>");
+});
+
+test("list items go through the same inline rendering as paragraphs", () => {
+  assert.equal(render("- **bold** and *slanted*\n- `a < b` and [[Concept - x]]\n- [docs](https://example.com/a_(b)) and a\\*star"),
+    "<ul>\n<li><strong>bold</strong> and <em>slanted</em></li>\n"
+    + '<li><code>a &lt; b</code> and <a data-note="Concept - x">Concept - x</a></li>\n'
+    + '<li>docs <a data-href="https://example.com/a_(b)">https://example.com/a_(b)</a> and a*star</li>\n</ul>');
+  assert.equal(render("* *slanted* first\n- - a hyphen first"), "<ul>\n<li><em>slanted</em> first</li>\n<li>- a hyphen first</li>\n</ul>");
+});
+
+test("an ordered list: 1. at the start of a line gives <ol><li>", () => {
+  assert.equal(render("1. first\n2. second\n3. third"), "<ol>\n<li>first</li>\n<li>second</li>\n<li>third</li>\n</ol>");
+  assert.equal(render("1. first\n1. second\n10. third"), "<ol>\n<li>first</li>\n<li>second</li>\n<li>third</li>\n</ol>");
+  // A list that does not begin at 1 keeps its first number, so that a list cut in two by code still counts on.
+  assert.equal(render("3. third\n4. fourth"), '<ol start="3">\n<li>third</li>\n<li>fourth</li>\n</ol>');
+  assert.equal(render("1. one\n\n```\ncode\n```\n\n2. two"), '<ol>\n<li>one</li>\n</ol>\n<pre><code>code</code></pre>\n<ol start="2">\n<li>two</li>\n</ol>');
+  // Another kind of item begins another list.
+  assert.equal(render("- a\n1. b\n2. c\n- d"), "<ul>\n<li>a</li>\n</ul>\n<ol>\n<li>b</li>\n<li>c</li>\n</ol>\n<ul>\n<li>d</li>\n</ul>");
+});
+
+test("a nested list: items indented by two or more spaces belong to the item above", () => {
+  assert.equal(render("- one\n  - inner a\n  - inner b\n- two"),
+    "<ul>\n<li>one\n<ul>\n<li>inner a</li>\n<li>inner b</li>\n</ul>\n</li>\n<li>two</li>\n</ul>");
+  assert.equal(render("1. step\n    - detail\n    - *more*\n2. next\n   1. sub one\n   2. sub two"),
+    "<ol>\n<li>step\n<ul>\n<li>detail</li>\n<li><em>more</em></li>\n</ul>\n</li>\n<li>next\n<ol>\n<li>sub one</li>\n<li>sub two</li>\n</ol>\n</li>\n</ol>");
+  // One level only: a deeper item stays in the inner list; one space is no indentation.
+  assert.equal(render("- one\n  - inner\n      - deeper\n - two"),
+    "<ul>\n<li>one\n<ul>\n<li>inner</li>\n<li>deeper</li>\n</ul>\n</li>\n<li>two</li>\n</ul>");
+  assert.equal(render("- one\n\t- tabbed in\n- two"), "<ul>\n<li>one\n<ul>\n<li>tabbed in</li>\n</ul>\n</li>\n<li>two</li>\n</ul>");
+  // The two kinds inside one item are two inner lists.
+  assert.equal(render("- one\n  - a\n  1. b"), "<ul>\n<li>one\n<ul>\n<li>a</li>\n</ul>\n<ol>\n<li>b</li>\n</ol>\n</li>\n</ul>");
+  // A list that starts indented: its first item sets the level.
+  assert.equal(render("  - one\n  - two\n    - inner"), "<ul>\n<li>one</li>\n<li>two\n<ul>\n<li>inner</li>\n</ul>\n</li>\n</ul>");
+});
+
+test("a list item holding <script> comes out escaped; lists add only <ul>, <ol> and <li>", () => {
+  const hostile = "- <script>alert(1)</script>\n  - <img src=x onerror=alert(2)> & \"more\"\n1. [t](\"><script>alert(3)</script>)\n"
+    + "7. [[<b>x</b>]] `</li></ul><script>alert(4)</script>`";
+  assert.equal(render("- <script>alert(1)</script>"), "<ul>\n<li>&lt;script&gt;alert(1)&lt;/script&gt;</li>\n</ul>");
+  for (const html of [render(hostile), render(hostile, () => "\"><script>alert(5)</script>"), render(hostile, () => undefined)]) {
+    for (const tag of html.match(/<[^>]*>/g) ?? []) {
+      assert.match(tag, /^<\/?(?:ul|ol|li|code|a|span)(?: (?:data-note|data-href|class)="[^"<>]*")?>$/, tag);
+    }
+    assert.doesNotMatch(html, /<script|<img|<b>/);
+    assert.match(html, /<li>&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.match(html, /<li>&lt;img src=x onerror=alert\(2\)&gt; &amp; &quot;more&quot;<\/li>/);
+    assert.match(html, /&lt;\/li&gt;&lt;\/ul&gt;&lt;script&gt;alert\(4\)/);
+  }
+  // The only attribute a list gets is the number an ordered list starts at, digits only.
+  assert.equal(render("007. <b>seven</b>"), '<ol start="7">\n<li>&lt;b&gt;seven&lt;/b&gt;</li>\n</ol>');
+});
+
+test("a list directly after a paragraph and directly before a table", () => {
+  assert.equal(render("The steps:\n- one\n- two\n| a | b |\n| --- | --- |\n| 1 | 2 |\nafter"),
+    "<p>The steps:</p>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n"
+    + "<table>\n<thead><tr><th>a</th><th>b</th></tr></thead>\n<tbody>\n<tr><td>1</td><td>2</td></tr>\n</tbody>\n</table>\n<p>after</p>");
+  assert.equal(render("Two lines,\nthen:\n1. one\n\n## Heading\n- a\n```\ncode\n```\n- b\ntext"),
+    "<p>Two lines,<br>\nthen:</p>\n<ol>\n<li>one</li>\n</ol>\n<h2>Heading</h2>\n<ul>\n<li>a</li>\n</ul>\n<pre><code>code</code></pre>\n"
+    + "<ul>\n<li>b</li>\n</ul>\n<p>text</p>");
+  // A blank line ends a list; the next item begins a new one.
+  assert.equal(render("- a\n\n- b"), "<ul>\n<li>a</li>\n</ul>\n<ul>\n<li>b</li>\n</ul>");
+});
+
+test("lines that are not list items stay as they were", () => {
+  for (const line of ["-no space", "*slanted* words", "**bold** words", "1.5 is a number", "1) one", "a - b", "2 * 3 * 4",
+    "---", "-", "1.", "1234567890. too long a number", "x. y"]) {
+    const html = render(`before\n${line}\nafter`);
+    assert.doesNotMatch(html, /<ul>|<ol|<li>/, line);
+    assert.match(html, /^<p>before<br>\n.*<br>\nafter<\/p>$/, line);
+  }
+  assert.equal(render("- \n1. \n*  "), "<p>-<br>\n1.<br>\n*</p>");                     // a marker with nothing after it
+  assert.equal(render("```\n- code\n1. code\n```"), "<pre><code>- code\n1. code</code></pre>");
+  assert.equal(render("| - a | 1. b |"), "<table>\n<tbody>\n<tr><td>- a</td><td>1. b</td></tr>\n</tbody>\n</table>");
+  assert.equal(render("# - a heading"), "<h1>- a heading</h1>");
+});
+
+test("a very long list is rendered at once", () => {
+  const started = performance.now();
+  const html = render(Array.from({ length: 50000 }, (_, i) => (i % 3 === 2 ? `  ${i}. inner ${i}` : `- item ${i}`)).join("\n"));
+  const took = performance.now() - started;
+  console.log(`timing: a list of 50,000 items rendered in ${took.toFixed(1)} ms`);
+  assert.ok(took < 500, `took ${took} ms`);
+  assert.equal((html.match(/<li>/g) ?? []).length, 50000);
+});

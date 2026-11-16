@@ -1,6 +1,7 @@
 // The small Markdown renderer for the subset the notes use. No import of "vscode".
 // Every piece of text is HTML-escaped before any tag is added: the only tags in the result are the ones written
-// here, and the only attributes are data-note, data-href and class. No raw HTML passes through.
+// here, and the only attributes are data-note, data-href, class and, on <ol>, start (a number). No raw HTML passes
+// through.
 
 import { cells, linkNames, pyLStrip, pyStrip } from "./notes";
 
@@ -171,10 +172,69 @@ function table(rows: string[], linkTo: LinkTo): string {
   return out.join("\n");
 }
 
+interface Item { indent: number; ordered: boolean; number: number; text: string; }
+
+/** The line as a list item: "- ", "* " or a number and ". " at its start, after any indentation, then its text.
+ *  Undefined for every other line, also for a marker with nothing after it. Read by hand, character by character. */
+function listItem(line: string): Item | undefined {
+  let i = 0, indent = 0;
+  for (; i < line.length; i++) {
+    if (line[i] === " ") { indent++; } else if (line[i] === "\t") { indent += 4; } else { break; }
+  }
+  let ordered = false, number = 1;
+  if (line[i] === "-" || line[i] === "*") {
+    i++;
+  } else {
+    const from = i;
+    while (i - from < 9 && line[i] >= "0" && line[i] <= "9") { i++; }      // nine digits at most: a number, never a long text
+    if (i === from || line[i] !== ".") { return undefined; }
+    ordered = true;
+    number = Number(line.slice(from, i));
+    i++;
+  }
+  if (line[i] !== " " && line[i] !== "\t") { return undefined; }
+  const text = pyStrip(line.slice(i));
+  return text === "" ? undefined : { indent, ordered, number, text };
+}
+
+/** A run of list items as <ul> or <ol>. An item indented by two or more spaces beyond the first item belongs to
+ *  the item above it, in a list of its own: one level of nesting, however deep the indentation. An item of the
+ *  other kind (a number after "- ", or the reverse) begins a new list. An ordered list that does not begin at 1
+ *  says where it begins (start="..."), the one attribute a list gets: digits only. */
+function list(items: Item[], linkTo: LinkTo): string {
+  const out: string[] = [];
+  const base = items[0].indent;
+  const opening = (item: Item) => (!item.ordered ? "<ul>" : item.number === 1 ? "<ol>" : `<ol start="${item.number}">`);
+  const closing = (ordered: boolean) => (ordered ? "</ol>" : "</ul>");
+  let outer: boolean | undefined, inner: boolean | undefined;     // the kind of the list that is open at each level
+  let itemOpen = false;                                            // an outer <li> waits for its </li>
+  const closeItem = () => {
+    if (inner !== undefined) { out.push(closing(inner), "</li>"); inner = undefined; }
+    else if (itemOpen) { out[out.length - 1] += "</li>"; }
+    itemOpen = false;
+  };
+  for (const item of items) {
+    if (itemOpen && item.indent >= base + 2) {
+      if (inner !== undefined && inner !== item.ordered) { out.push(closing(inner)); inner = undefined; }
+      if (inner === undefined) { out.push(opening(item)); inner = item.ordered; }
+      out.push(`<li>${inline(item.text, linkTo)}</li>`);
+      continue;
+    }
+    closeItem();
+    if (outer !== undefined && outer !== item.ordered) { out.push(closing(outer)); outer = undefined; }
+    if (outer === undefined) { out.push(opening(item)); outer = item.ordered; }
+    out.push(`<li>${inline(item.text, linkTo)}`);
+    itemOpen = true;
+  }
+  closeItem();
+  if (outer !== undefined) { out.push(closing(outer)); }
+  return out.join("\n");
+}
+
 /**
- * HTML for the subset of Markdown the notes use: headings, paragraphs, tables, fenced code (Mermaid shown as
- * code), bold, italic, inline code, [[links]] as <a data-note="...">, and any other link as its text followed by
- * its address in full, as <a data-href="...">.
+ * HTML for the subset of Markdown the notes use: headings, paragraphs, lists (one level of nesting), tables,
+ * fenced code (Mermaid shown as code), bold, italic, inline code, [[links]] as <a data-note="...">, and any other
+ * link as its text followed by its address in full, as <a data-href="...">.
  */
 export function render(text: string, linkTo: LinkTo = (name) => name): string {
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -210,9 +270,16 @@ export function render(text: string, linkTo: LinkTo = (name) => name): string {
       out.push(table(rows, linkTo));
       continue;
     }
-    // A paragraph: its lines stay on lines of their own, so a list written with "- " still reads as a list.
+    if (listItem(line)) {
+      const items: Item[] = [];
+      for (let item = listItem(lines[i]); item; item = i < lines.length ? listItem(lines[i]) : undefined) { items.push(item); i++; }
+      out.push(list(items, linkTo));
+      continue;
+    }
+    // A paragraph: its lines stay on lines of their own. A list item ends it, as a table row does.
     const paragraph: string[] = [];
-    while (i < lines.length && pyStrip(lines[i]) !== "" && !FENCE.test(lines[i]) && !HEADING.test(lines[i]) && !isRow(lines[i])) {
+    while (i < lines.length && pyStrip(lines[i]) !== "" && !FENCE.test(lines[i]) && !HEADING.test(lines[i]) && !isRow(lines[i])
+      && !listItem(lines[i])) {
       paragraph.push(inline(pyStrip(lines[i++]), linkTo));
     }
     out.push(`<p>${paragraph.join("<br>\n")}</p>`);
