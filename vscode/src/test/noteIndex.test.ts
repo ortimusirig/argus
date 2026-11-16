@@ -479,3 +479,22 @@ test("a note reached by its own path and by a link stays when the link goes, and
     assert.deepEqual(again.fileNotesFor(s.project, "sub/b.py"), []);
   } finally { s.done(); }
 });
+
+test("a folder that held only links is gone: the notes its links led to leave on the folder's event", async () => {
+  const s = scratch();
+  try {
+    const one = s.write("vault/P/one.txt", "");
+    const alias = s.write("vault/P/links/Alias.md", fileNote("sub/b.py"));
+    let target: string | undefined = one;
+    const index = new NoteIndex(linked(alias, () => target));
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.equal(index.fileNotesFor(s.project, "sub/b.py").length, 1);
+
+    // Only the folder's own deletion is reported, as after a rename or a recursive delete.
+    fs.rmSync(path.dirname(alias), { recursive: true });
+    target = undefined;
+    await index.changed(s.project, path.dirname(alias));
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
+  } finally { s.done(); }
+});

@@ -181,7 +181,8 @@ export class NoteIndex {
    *  `archive.md`) has the project's folders read again; a .md file is read again; any other file is nothing.
    *  A path that is gone cannot be asked: when notes are indexed under it, it was a folder, and the folders are
    *  read again (so a rename that reports only the old path leaves no note at a path that is gone); else it is
-   *  read again as a note, which drops the note that was there. Paths under a folder whose name starts with a dot
+   *  read again as a note, which drops the note that was there (a folder of links to notes is known by the paths
+   *  the notes were found at). Paths under a folder whose name starts with a dot
    *  are not the index's. Folder events that arrive together are answered by one reading. */
   changed(project: Project, file: string): Promise<void> {
     const held = this.of(project);
@@ -201,6 +202,12 @@ export class NoteIndex {
         try { at = this.keyOf(file); } catch { return false; }
         folder = [...held.entries].some(([key, entry]) => key.length > at.length && key.startsWith(at)
           && relativeIn(file, entry.path, this.rules) !== undefined);
+        // A note read through a link lies under its target, not under the link's folder: the paths as found are
+        // asked too, so a folder that held only links has the folders read again when it goes.
+        if (!folder) {
+          const under = at + (this.rules.windows ? "\\" : "/");
+          for (const found of held.from.keys()) { if (found.startsWith(under)) { folder = true; break; } }
+        }
       } else if (folder && parts.length > 0 && parts[parts.length - 1].startsWith(".")) {
         return false;
       }
