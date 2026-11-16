@@ -39,8 +39,14 @@ function byFrom(a: { from: number }, b: { from: number }): number {
 
 function prepare(assignment: Assignment): Marks {
   const marks: Marks = { current: [], warning: [], unexplained: [], masked: [], lenses: [] };
+  // The blocks whose places were not all looked at (core/match.ts, PLACES): what is said of them says so.
+  const trimmed = new Map<string, string>();
+  for (const t of assignment.trimmed ?? []) {
+    trimmed.set(t.id, ` This code is at ${t.places} identical places; the ${t.kept} nearest to the block's recorded line were looked at.`);
+  }
   for (const placed of assignment.placed) {
     const name = `${placed.block.id}: ${placed.block.purpose}`;
+    const few = trimmed.get(placed.block.id) ?? "";
     let say: string, tail = "";
     if (placed.state === "current") {
       say = `Argus: block ${name}. Current.`;
@@ -56,7 +62,8 @@ function prepare(assignment: Assignment): Marks {
         + "the order of the blocks does not decide which.";
       tail = " (ambiguous)";
     }
-    const title = `Argus ${name}${tail}`;
+    say += few;
+    const title = `Argus ${name}${tail}${few === "" ? "" : " (not all places looked at)"}`;
     for (const at of placesOf(placed)) {
       if (placed.state === "current" || placed.state === "current-masked") {
         marks.current.push({ ...at, say });

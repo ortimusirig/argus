@@ -95,6 +95,14 @@ function createHtml(create: Creating | undefined): string[] {
 }
 
 /** The "Check details" block: under the badge whenever a check result is stored, whatever the badge. */
+/** The list of the trimmed blocks, written once for each assignment: it can be long, and the panel is drawn often. */
+const TRIMMED_HTML = new WeakMap<object, string>();
+function trimmedHtml<T extends object>(all: T[], line: (t: T) => string): string {
+  let html = TRIMMED_HTML.get(all);
+  if (html === undefined) { html = all.map(line).join("\n"); TRIMMED_HTML.set(all, html); }
+  return html;
+}
+
 const CHECK_HTML = new WeakMap<Details, string>();
 function checkHtml(d: Details): string {
   // Drawn once for each result: the lists can be very long, and the panel is drawn often.
@@ -208,11 +216,12 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
   }
   if (!assignment) { return out.join("\n"); }
   if (assignment.trimmed) {
-    // A bound says what it left out: the blocks whose code is at more places than were looked at.
-    const shown = assignment.trimmed.slice(0, 5).map((t) => `block ${escape(t.id)}: ${t.places} identical places, the ${t.kept} nearest to its recorded line were looked at`);
-    const more = assignment.trimmed.length - shown.length;
-    out.push(`<p class="say">Very many identical places: ${shown.join("; ")}${more > 0 ? `; and ${more} more ${more === 1 ? "block" : "blocks"}` : ""}. `
-      + "A block of these that moved far from its recorded line may show as changed.</p>");
+    // A bound says what it left out: every block whose code is at more places than were looked at, in a fold.
+    const all = assignment.trimmed;
+    const line = (t: { id: string; places: number; kept: number }): string =>
+      `<li>block ${escape(t.id)}: ${t.places} identical places, the ${t.kept} nearest to its recorded line were looked at</li>`;
+    out.push(`<details data-fold="trimmed"><summary>Very many identical places: ${all.length} ${all.length === 1 ? "block" : "blocks"} not looked at in full</summary>`
+      + `<p class="say">A block of these that moved far from its recorded line may show as changed.</p><ul>${trimmedHtml(all, line)}</ul></details>`);
   }
   const last = Number.MAX_SAFE_INTEGER;
   const under = view.whole || !view.selection ? underSelection(assignment, 1, last) : underSelection(assignment, view.selection.from, view.selection.to);

@@ -113,6 +113,13 @@ export class Matcher {
     }
   }
 
+  /** The document was edited and is at this version now: a run for an older version stops at once, so its
+   *  result is never published for a text that is gone. What was published before stays until the new run ends. */
+  edited(uri: string, version: number): void {
+    const going = this.going.get(uri);
+    if (going && going.key.version !== version) { this.going.delete(uri); this.runs.stop(uri); }
+  }
+
   /** The document is closed, or has no note any more. */
   drop(uri: string): void {
     this.going.delete(uri);

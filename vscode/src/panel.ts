@@ -117,6 +117,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     if (this.latest.stale("shown")) { this.trail.clear(); }
     if (this.latest.stale("pinned")) { this.pinned = undefined; }
     if (this.latest.stale("notice")) { this.notice = undefined; }
+    if (this.latest.stale("whole")) { this.whole = false; }          // "Explain this file" lasts until the selection moves
   }
 
   /** Sets the notice (or takes it away) as asked for now. */
@@ -130,7 +131,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.whole = whole;
     this.pinned = pinned;
     this.trail.clear(); this.notice = undefined;
-    this.latest.asked("pinned", "shown", "notice");
+    this.latest.asked("pinned", "shown", "notice", "whole");
     this.opening = true;
     try {
       // The document of the asked lines is shown when no editor shows it (the focus stays where it is).
@@ -141,7 +142,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       await vscode.commands.executeCommand(`${Panel.viewId}.focus`);
     } finally { this.opening = false; }
     // What the opening itself moved is no move of the person: the asked things are the newest again.
-    this.latest.asked("pinned", "shown", "notice");
+    this.latest.asked("pinned", "shown", "notice", "whole");
     this.render();
   }
 

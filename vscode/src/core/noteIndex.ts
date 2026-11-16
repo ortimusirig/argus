@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { LinkMap, linkMap } from "./links";
 import { FileNote, OtherNote, isArgus, parseFileNote, parseOtherNote, parseProps } from "./notes";
 import { PathRules, Project, relativeIn, sourceInRoot, systemRules } from "./projects";
-import { readText } from "./readText";
+import { decode } from "./readText";
 import { projectKey } from "./settings";
 
 export type Place = "notes" | "vault";
@@ -349,9 +349,28 @@ export class NoteIndex {
     // A link that was pointed elsewhere while the file was read gives a text that is not used.
     let checked: string;
     try { checked = this.rules.real(file); } catch { return drop(); }
+    // The file is opened once, and what is read comes from that open file. Afterwards the open file must be the
+    // file that the system finds at the path's own real path, and that real path must lie inside the folders:
+    // so the text is the text of a file inside the folders, whatever a link did while it was read.
     let text: string;
-    try { text = (await readText(file)).text; } catch { return this.live(held) && drop(); }      // as the checker reads it
+    let bound = false;
+    try {
+      const handle = await fs.promises.open(file, "r");
+      try {
+        const opened = await handle.stat({ bigint: true });
+        text = decode(await handle.readFile()).text;                    // as the checker reads it
+        const canonical = systemRules.real(file);
+        const there = await fs.promises.lstat(canonical, { bigint: true });
+        bound = !there.isSymbolicLink() && there.dev === opened.dev && there.ino === opened.ino
+          && systemRules.real(canonical) === canonical && this.placeOf(project, canonical) === place;
+      } finally { await handle.close(); }
+    } catch { return this.live(held) && drop(); }
     if (!this.live(held)) { return false; }
+    if (!bound) {
+      held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file changed where it leads while it was read, `
+        + "so it is not used; it is read again at the next change or refresh");
+      return drop();
+    }
     // The name and the path are asked of the file as it is now: the key is the same for `Original.md` and
     // `original.md` on Windows, so a note renamed in letter case only is found under the key of the old one.
     let real: string;

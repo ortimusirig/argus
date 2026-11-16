@@ -3,7 +3,7 @@
 // CodeLens, a shown note, a notice. A thing asked for after the selection moved is newer than that move: the late
 // follow must leave it alone. Each kept thing remembers when it was asked for; the last move remembers when it was.
 
-export type Kept = "pinned" | "shown" | "notice";
+export type Kept = "pinned" | "shown" | "notice" | "whole";
 
 export class Latest {
   private turn = 0;

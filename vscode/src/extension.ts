@@ -58,6 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveTextEditor(() => { panel.follow(); }),
     vscode.window.onDidChangeVisibleTextEditors(() => { markers.refresh(); }),
     vscode.workspace.onDidChangeTextDocument((event) => {
+      matcher.edited(event.document.uri.toString(), event.document.version);
       if (event.document === active()) { panel.follow(); }
       if (vscode.window.visibleTextEditors.some((editor) => editor.document === event.document)) { markers.later(); }
     }),
