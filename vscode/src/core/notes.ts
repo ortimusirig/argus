@@ -339,9 +339,11 @@ function afterCode(lines: string[], mask: boolean[], from: number, to: number, f
     });
     i = end;
   }
-  while (kept.length > 0 && pyStrip(kept[0]) === "") { kept.shift(); }
-  while (kept.length > 0 && pyStrip(kept[kept.length - 1]) === "") { kept.pop(); }
-  return kept.join("\n");
+  // One cut at each end: shift() on a long array moves every remaining line each time.
+  let first = 0, last = kept.length;
+  while (first < last && pyStrip(kept[first]) === "") { first++; }
+  while (last > first && pyStrip(kept[last - 1]) === "") { last--; }
+  return kept.slice(first, last).join("\n");
 }
 
 /** Reads a File note. What cannot be read is named in `problems`; nothing is guessed. */

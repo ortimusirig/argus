@@ -424,3 +424,16 @@ test("linkNames: many different links on a line cost time in proportion to their
   // Each name once, in the order of its first appearance, whichever line it stands on.
   assert.deepEqual(linkNames(["[[b]] [[a]] [[b|x]] [[c#h]]", "[[a]] [[d/c.md]] [[e]] [[b]]"]), ["b", "a", "c", "e"]);
 });
+
+test("blank lines between a block's code and its explanation cost time in proportion to their number", () => {
+  const small = fileNote("a.py", ["x = 1"], [{ id: "1", purpose: "sets x", from: 1, to: 1,
+    after: ["The explanation.", "", "Its second paragraph."] }]);
+  const text = small.replace("The explanation.", "\n".repeat(200000) + "The explanation.");
+  assert.notEqual(text, small);
+  const started = performance.now();
+  const note = parseFileNote("P file - a.py", "P file - a.py.md", text);
+  const took = performance.now() - started;
+  console.log(`timing: a block with 200,000 blank lines before its explanation read in ${took.toFixed(1)} ms`);
+  assert.ok(took < 1000, `took ${took} ms`);
+  assert.equal(note.blocks[0].prose, "The explanation.\n\nIts second paragraph.");
+});
