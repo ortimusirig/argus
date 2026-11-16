@@ -498,3 +498,18 @@ test("a folder that held only links is gone: the notes its links led to leave on
     assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
   } finally { s.done(); }
 });
+
+test("a gone folder that held no note and no link costs no reading of the folders", async () => {
+  const s = scratch();
+  try {
+    const plain = s.write("vault/Plain/readme.md", "# Not an Argus note\n");
+    let pauses = 0;
+    const index = new NoteIndex(undefined, () => { pauses++; return new Promise((go) => setImmediate(go)); });
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    pauses = 0;
+    fs.rmSync(path.dirname(plain), { recursive: true });
+    await index.changed(s.project, path.dirname(plain));
+    assert.equal(pauses, 0, "nothing of the index lay there: nothing is read");
+  } finally { s.done(); }
+});

@@ -27,9 +27,10 @@ export interface Entry {
 /** `rejected`: the .md files that are not read because their real path lies outside the project's folders (a
  *  symbolic link that leads out), by their path as found, each with the sentence that says so. */
 interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>;
-  // Where each .md path led when it was last read: the path as found (`pathKey`), and the key of its target. A
+  // Where a .md path led when it was last read: the path as found (`pathKey`), and the key of its target. A
   // note is kept under its target's key, so a link that is pointed elsewhere or deleted says nothing of the note
-  // it led to; this says it.
+  // it led to; this says it. Kept for the paths of the notes and for every link, not for a plain file that is no
+  // note: nothing follows from where that led.
   from: Map<string, Way>;
   refreshed: number;        // the tick at which the last reading of the folders began
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
@@ -169,6 +170,9 @@ export class NoteIndex {
       for (const [key, entry] of held.entries) {
         if (!seen.has(key)) { held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true; }
       }
+      for (const [found, way] of from) {
+        if (way.key === found && !held.entries.has(way.key)) { from.delete(found); }
+      }
       held.from = from;
       if (rejectedBefore.size !== held.rejected.size
         || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
@@ -202,11 +206,11 @@ export class NoteIndex {
         try { at = this.keyOf(file); } catch { return false; }
         folder = [...held.entries].some(([key, entry]) => key.length > at.length && key.startsWith(at)
           && relativeIn(file, entry.path, this.rules) !== undefined);
-        // A note read through a link lies under its target, not under the link's folder: the paths as found are
+        // A note read through a link lies under its target, not under the link's folder: the links as found are
         // asked too, so a folder that held only links has the folders read again when it goes.
         if (!folder) {
           const under = at + (this.rules.windows ? "\\" : "/");
-          for (const found of held.from.keys()) { if (found.startsWith(under)) { folder = true; break; } }
+          for (const [found, way] of held.from) { if (way.key !== found && found.startsWith(under)) { folder = true; break; } }
         }
       } else if (folder && parts.length > 0 && parts[parts.length - 1].startsWith(".")) {
         return false;
@@ -250,7 +254,7 @@ export class NoteIndex {
       const changed = await this.read(held, file, key);
       let there = true;
       try { await fs.promises.lstat(file); } catch { there = false; }
-      if (there) { held.from.set(at, { file, key }); }
+      if (there && (key !== at || held.entries.has(key))) { held.from.set(at, { file, key }); }
       return changed || old !== undefined || left || was !== held.rejected.get(file);
     }
   }
