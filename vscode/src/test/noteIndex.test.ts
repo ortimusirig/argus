@@ -322,3 +322,41 @@ test("a note renamed in letter case only takes its new name and path, on the fil
     }
   } finally { s.done(); }
 });
+
+test("a note replaced by a link that leads out of the folders leaves the index on the re-read of that one file", async () => {
+  const s = scratch();
+  try {
+    const outside = s.write("elsewhere/Secret.md", fileNote("a.py", "leaks"));
+    const file = path.join(s.root, "vault", "P", "P file - a.py.md");
+    // As when the note is replaced by a symbolic link: from then on its real path is a file outside the folders.
+    let linked = false;
+    const real = systemRules.real(file);
+    const rules: PathRules = { ...systemRules, real: (at) => {
+      const found = systemRules.real(at);
+      return linked && found === real ? systemRules.real(outside) : found;
+    } };
+    const index = new NoteIndex(rules);
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const [note] = index.fileNotesFor(s.project, "a.py");
+    assert.ok(note && index.holds(note));
+    let changes = 0;
+    index.onChange = () => { changes++; };
+
+    linked = true;
+    fs.writeFileSync(file, fileNote("a.py", "leaks"));
+    await index.changed(s.project, file);
+    assert.deepEqual(index.fileNotesFor(s.project, "a.py"), [], "the old explanation is not shown any more");
+    assert.equal(index.noteById(note.id), undefined);
+    assert.deepEqual(index.notesByName("P file - a.py"), []);
+    assert.match(index.problemsOf(s.project).join("\n"), /P file - a\.py: .*outside.*Secret\.md/);
+    assert.equal(changes, 1);
+    for (const entry of [...index.notesOf(s.project, "notes"), ...index.notesOf(s.project, "vault")]) { assert.ok(index.holds(entry)); }
+
+    // A plain file again at that path is read again.
+    linked = false;
+    await index.reread(s.project, file);
+    assert.equal(index.fileNotesFor(s.project, "a.py").length, 1);
+    assert.equal(index.noteById(note.id)?.file?.blocks[0].purpose, "leaks", "the same path has the same id");
+  } finally { s.done(); }
+});

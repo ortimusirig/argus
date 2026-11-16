@@ -88,6 +88,19 @@ export class NoteIndex {
     return this.rules.windows ? real.toLowerCase() : real;
   }
 
+  /** The key the file has when it is a plain file: the real path of its folder, and its own name. It is another
+   *  key than `keyOf` gives when the file itself is a link. Undefined when the folder cannot be read. */
+  private ownKey(file: string): string | undefined {
+    try {
+      const folder = this.rules.real(path.dirname(file));
+      const sep = this.rules.windows ? "\\" : "/";
+      const own = folder + (folder.endsWith(sep) ? "" : sep) + path.basename(file);
+      return this.rules.windows ? own.toLowerCase() : own;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The folder of the project the file's real path lies in, now: the notes folder before the vault folder.
    *  Undefined when it lies in neither; such a file is never read. */
   private placeOf(project: Project, file: string): Place | undefined {
@@ -186,13 +199,21 @@ export class NoteIndex {
     {
       const was = held.rejected.get(file);
       held.rejected.delete(file);
-      let key: string;
-      try { key = this.keyOf(file); } catch { return was !== undefined; }
+      let key: string | undefined;
+      try { key = this.keyOf(file); } catch { key = undefined; }
+      // The note that was read from this path while it was a plain file. When the path now leads somewhere else
+      // (the file was replaced by a link) or cannot be read, that note is no longer what the path holds: it
+      // leaves, whatever becomes of the new target. A full reading of the folders drops it in the same way.
+      const own = this.ownKey(file);
+      const old = own !== undefined && own !== key ? held.entries.get(own) : undefined;
+      if (old && own !== undefined) { held.entries.delete(own); this.byId.delete(old.id); }
+      const gone = old !== undefined || was !== undefined;
+      if (key === undefined) { return gone; }
       const inNotes = relativeIn(project.notesFolder, file, this.rules);
       const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
-      if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return was !== undefined; }
+      if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return gone; }
       const changed = await this.read(held, file, key);
-      return changed || was !== held.rejected.get(file);
+      return changed || old !== undefined || was !== held.rejected.get(file);
     }
   }
 
