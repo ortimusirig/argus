@@ -22,7 +22,8 @@ export const MASK = "[masked]";
 // differ (they take U+FEFF and leave U+001C to U+001F and U+0085), so neither is used for a rule of the checker.
 const WS = "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 
-function isSpace(c: number): boolean {
+/** True for the code of a character Python's str.strip() removes. */
+export function isSpace(c: number): boolean {
   return (c >= 0x09 && c <= 0x0d) || (c >= 0x1c && c <= 0x20) || c === 0x85 || c === 0xa0 || c === 0x1680
     || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000;
 }
@@ -207,14 +208,23 @@ function withoutInlineCode(line: string): string {
 
 const LINK = /\[\[([^\]|#]+)/g;
 
+/** The note that the text after "[[" names, up to its first "]", "|" or "#": as the checker reads it, no backslash
+ *  at its end (the one of \| in a table), no folder and no ".md". Empty when it names none. Read by hand. */
+export function linkTarget(written: string): string {
+  let end = written.length;
+  while (end > 0 && written[end - 1] === "\\") { end--; }
+  let target = pyStrip(written.slice(0, end));
+  target = target.slice(target.lastIndexOf("/") + 1);
+  return target.toLowerCase().endsWith(".md") ? target.slice(0, -3) : target;
+}
+
 /** The names the [[links]] of these lines point at, in order, each once. Code spans hold no links.
  *  Names are read as the checker reads them: no folder, no ".md", no "|shown" and no "#heading" part. */
 export function linkNames(lines: string[]): string[] {
   const names: string[] = [];
   for (const line of lines) {
     for (const m of withoutInlineCode(line).matchAll(LINK)) {
-      let target = pyStrip(m[1].replace(/\\+$/, "")).split("/").pop() ?? "";
-      if (target.toLowerCase().endsWith(".md")) { target = target.slice(0, -3); }
+      const target = linkTarget(m[1]);
       if (target && !names.includes(target)) { names.push(target); }
     }
   }

@@ -282,3 +282,97 @@ test("backtick runs of many lengths cost time in proportion to the text", () => 
   assert.equal(render(runs(upTo(60))), `<p>${runs(upTo(60))}</p>`);
   assert.equal(render(runs([1, 2, 3, 2, 1])), "<p><code>x``x```x``x</code></p>");
 });
+
+// ---------------------------------------------------------------- one reading of the line
+
+test("emphasis closes on an asterisk outside code spans and escapes", () => {
+  assert.equal(render("*The `a*b` expression*"), "<p><em>The <code>a*b</code> expression</em></p>");
+  assert.equal(render("**bold `a**b` end** and *`*`*"), "<p><strong>bold <code>a**b</code> end</strong> and <em><code>*</code></em></p>");
+  assert.equal(render("*a \\* b* and **c \\** d**"), "<p><em>a * b</em> and <strong>c ** d</strong></p>");
+  assert.equal(render("*a\\* and **b\\*\\*"), "<p>*a* and **b**</p>");                    // the only closer is written with a backslash
+  assert.equal(render("*a `b*` c"), "<p>*a <code>b*</code> c</p>");                       // the only closer is code
+  assert.equal(render("**a *b `*` c* d**"), "<p><strong>a <em>b <code>*</code> c</em> d</strong></p>");
+  assert.equal(render("*a [[Name|b]] `c`* d"), '<p><em>a <a data-note="Name">b</a> <code>c</code></em> d</p>');
+  assert.equal(render("**a *b***"), "<p><strong>a *b</strong>*</p>");
+  assert.equal(render("| *x `a \\| b*` y* |"), "<table>\n<tbody>\n<tr><td><em>x <code>a | b*</code> y</em></td></tr>\n</tbody>\n</table>");
+});
+
+test("a backslash before a punctuation character makes it plain text: \\*, \\[, \\`", () => {
+  assert.equal(render("\\*a\\* \\**b** \\[x](y) \\[[Name]] \\`c`"), "<p>*a* *<em>b</em>* [x](y) [[Name]] `c`</p>");
+  assert.equal(render("[a\\]b](u) and [[Name|c\\]\\]d]]"), '<p>a]b <a data-href="u">u</a> and <a data-note="Name">c]]d</a></p>');
+  assert.equal(render("[x\\](y) and [[Name\\]]"), "<p>[x](y) and [[Name]]</p>");          // the closer itself is written with a backslash
+  assert.equal(render("a\\\\*b*"), "<p>a\\<em>b</em></p>");                               // \\ is a backslash; the asterisk after it opens
+  assert.equal(render("a\\b \\ c\\"), "<p>a\\b \\ c\\</p>");                              // before anything else a backslash is a backslash
+  assert.equal(render("`a\\`*b*"), "<p><code>a\\</code><em>b</em></p>");                  // inside code too
+});
+
+test("nothing inside a code span is read as a link, a bracket or a parenthesis", () => {
+  assert.equal(render("`[[x]]` and [[Name|`a]]b`]] and [[Name `]]` two]]"),
+    '<p><code>[[x]]</code> and <a data-note="Name"><code>a]]b</code></a> and <a data-note="Name   two">Name <code>]]</code> two</a></p>');
+  assert.equal(render("[`a]`](u) and [b](v`)`)"), '<p><code>a]</code> <a data-href="u">u</a> and [b](v<code>)</code>)</p>');
+  assert.equal(render("[`x](y)`](z)"), '<p><code>x](y)</code> <a data-href="z">z</a></p>');
+  assert.equal(render("`[a](` b `)`"), "<p><code>[a](</code> b <code>)</code></p>");
+});
+
+test("a [[ that opens no link is passed over; the next one is read for itself", () => {
+  assert.equal(render("[[#[[b]] and [[a/[[c/|d]]"), '<p>[[#<a data-note="b">b</a> and [[a/[[c/|d]]</p>');
+  assert.equal(render("[[ x.md ]] [[.md]] [[a/]] [[\\]]"), '<p><a data-note="x">x.md</a> [[.md]] [[a/]] [[]]</p>');
+  assert.equal(render("[[Name|]] [[Name| ]] [[a/*b*.md|]]"),
+    '<p><a data-note="Name">Name</a> <a data-note="Name">Name</a> <a data-note="*b*"><em>b</em></a></p>');
+});
+
+test("one line of any shape is rendered in time in proportion to its length", () => {
+  const unit = "**[*x*](y)**";
+  const shapes: [string, string, ((html: string) => void)?][] = [
+    ["32,000 [[# and one ]]", "[[#".repeat(32000) + "]]", (html) => assert.equal(html, `<p>${"[[#".repeat(32000)}]]</p>`)],
+    ["64,000 [[# and one ]]", "[[#".repeat(64000) + "]]"],
+    ["20,000 [[x and one /]]", "[[x".repeat(20000) + "/]]", (html) => assert.equal(html, `<p>${"[[x".repeat(20000)}/]]</p>`)],
+    ["20,000 [[x, 20,000 spaces and one /]]", "[[x".repeat(20000) + " ".repeat(20000) + "/]]"],
+    ["30,000 [[a| and one ]]", "[[a|".repeat(30000) + "]]"],
+    ["30,000 [[ and as many ]]", "[[".repeat(30000) + "]]".repeat(30000)],
+    ["20,000 [[a]] links", "[[a]] ".repeat(20000), (html) => assert.equal((html.match(/<a data-note="a">a<\/a>/g) ?? []).length, 20000)],
+    ["100,000 asterisks", "x" + "*".repeat(100000), (html) => assert.equal(html, `<p>x${"*".repeat(100000)}</p>`)],
+    ["50,000 *a ", "x" + "*a ".repeat(50000), (html) => assert.equal(html, `<p>x${"*a ".repeat(50000).trimEnd()}</p>`)],
+    ["50,000 **a ", "x" + "**a ".repeat(50000)],
+    ["50,000 *a and one closer", "x" + "*a".repeat(50000) + "*"],
+    ["50,000 \\* and 50,000 *", "x" + "\\*".repeat(50000) + "*".repeat(50000)],
+    ["50,000 [a](", "[a](".repeat(50000), (html) => assert.equal(html, `<p>${"[a](".repeat(50000)}</p>`)],
+    ["50,000 [a](b", "[a](b".repeat(50000) + ")".repeat(50000)],
+    [`20,000 ${unit}`, unit.repeat(20000),
+      (html) => assert.equal(html, `<p>${'<strong><em>x</em> <a data-href="y">y</a></strong>'.repeat(20000)}</p>`)],
+    ["20,000 **[*x*](y) inside one another", "**[*x*](y)".repeat(20000) + "**".repeat(20000)],
+    ["20,000 *[[a|**b `c*` inside one another", "*[[a|**b `c*` ".repeat(20000) + "**]]*".repeat(20000)],
+    ["30,000 \\[ then 30,000 ](a)", "\\[".repeat(30000) + "](a)".repeat(30000)],
+    ["30,000 `*` code spans in one emphasis", "*a " + "`*` ".repeat(30000) + "b*",
+      (html) => assert.equal(html, `<p><em>a ${"<code>*</code> ".repeat(30000)}b</em></p>`)],
+    ["50,000 \\* in one emphasis", "*a" + "\\*".repeat(50000) + "b*", (html) => assert.equal(html, `<p><em>a${"*".repeat(50000)}b</em></p>`)],
+    ["50,000 \\` then as many `", "x" + "\\`".repeat(50000) + "` ".repeat(50000)],
+    ["50,000 backslashes in a [[link]]", "[[" + "\\".repeat(50001) + "x]] [[y" + "\\".repeat(50001) + "]]"],
+  ];
+  for (const [name, text, check] of shapes) {
+    const started = performance.now();
+    const html = render(text);
+    const took = performance.now() - started;
+    console.log(`timing: ${name} (${text.length} characters) rendered in ${took.toFixed(1)} ms`);
+    assert.ok(took < 200, `${name}: took ${took} ms`);
+    assert.ok(html.startsWith("<p>") && html.endsWith("</p>"), name);
+    if (check) { check(html); }
+  }
+});
+
+test("four times the line costs about four times the time, not sixteen times", () => {
+  const time = (text: string): number => {
+    let best = Infinity;
+    for (let n = 0; n < 3; n++) {
+      const started = performance.now();
+      render(text);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  for (const unit of ["[[#", "[[x/ ", "*a ", "**[*x*](y)**", "[a](", "`*` [[b|"]) {
+    const small = time(unit.repeat(10000) + "]]"), large = time(unit.repeat(40000) + "]]");
+    console.log(`timing: '${unit}' 10,000 times in ${small.toFixed(1)} ms, 40,000 times in ${large.toFixed(1)} ms`);
+    assert.ok(large < 8 * small + 40, `'${unit}': four times the text took ${(large / small).toFixed(1)} times as long`);
+  }
+});

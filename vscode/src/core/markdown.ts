@@ -3,7 +3,7 @@
 // here, and the only attributes are data-note, data-href, class and, on <ol>, start (a number). No raw HTML passes
 // through.
 
-import { cells, linkNames, pyLStrip, pyStrip } from "./notes";
+import { cells, isSpace, linkTarget, pyLStrip, pyStrip } from "./notes";
 
 function escape(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -17,26 +17,7 @@ export type LinkTo = (name: string) => string | undefined;
 const PUNCTUATION = /[!-/:-@[-`{-~]/;
 const ESCAPED = /\\([!-/:-@[-`{-~])/g;
 const WHITE = /\s/;
-
-/** For each "(" of the text, where the ")" that closes it stands; -1 when it never closes or white space comes
- *  first. Parentheses pair off as they nest; one written \( or \) is no parenthesis. The text is read once. */
-function parenCloses(text: string): Int32Array {
-  const closes = new Int32Array(text.length).fill(-1);
-  const open: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === "\\" && i + 1 < text.length && PUNCTUATION.test(text[i + 1])) { i++; continue; }
-    if (c === "(") {
-      open.push(i);
-    } else if (c === ")") {
-      const from = open.pop();
-      if (from !== undefined) { closes[from] = i; }
-    } else if (WHITE.test(c)) {
-      open.length = 0;                              // an address holds no white space: nothing open closes beyond it
-    }
-  }
-  return closes;
-}
+const SIGNS = /[\\`*[]/;       // without one of these a line holds nothing but text
 
 /** The runs of backticks of the text: for each length, where the runs of that length begin, in order. A run is
  *  all the backticks that stand together. The text is read once. */
@@ -53,42 +34,54 @@ function backtickRuns(text: string): Map<number, number[]> {
 }
 
 /** The first of the ordered positions that is not before `from`; -1 when there is none. A binary search. */
-function runAfter(starts: number[] | undefined, from: number): number {
-  if (!starts) { return -1; }
-  let low = 0, high = starts.length;
+function firstFrom(positions: number[] | undefined, from: number): number {
+  if (!positions) { return -1; }
+  let low = 0, high = positions.length;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (starts[middle] < from) { low = middle + 1; } else { high = middle; }
+    if (positions[middle] < from) { low = middle + 1; } else { high = middle; }
   }
-  return low < starts.length ? starts[low] : -1;
+  return low < positions.length ? positions[low] : -1;
 }
 
-/** One line of text: code spans, [[links]], other links, bold, italic. */
+// What a character of the line is, where it is not simply read as written.
+const LITERAL = 1;     // plain text whatever it is: the character after a backslash, a backtick that opens no code
+const DROPPED = 2;     // the backslash before such a character: not shown
+const CODE = 3;        // the first backtick of a code span; the span is passed over whole
+
+/** One line of text: code spans, [[links]], other links, bold, italic.
+ *
+ *  The line is read twice, each time from left to right, and no part of it is searched again.
+ *  The first reading settles what never depends on anything else: a backslash before a punctuation character makes
+ *  that character plain text; a run of backticks opens a code span when a later run is exactly as long (looked up in
+ *  the index of the runs), and nothing inside the span is looked at. The same reading lists, in order, where the
+ *  signs outside code spans and escapes stand: the asterisks, the closing brackets, the characters that end a link's
+ *  name; and it pairs the parentheses.
+ *  The second reading writes the HTML. An opener finds its closer by a binary search in those lists, never by
+ *  reading on, and the text between the two is rendered as a part of the same line, with the same lists: an opener
+ *  inside it accepts only a closer inside it. The parts lie inside one another a few deep at most (the text of a
+ *  link holds no "]", emphasis holds no asterisk), so a line of n characters costs about n log n, whatever it holds. */
 function inline(text: string, linkTo: LinkTo): string {
-  let out = "", plain = "";
-  // An opener whose closer was looked for once and not found is not looked for again: the line is read once.
-  const noCloser = new Set<string>();
-  const closer = (mark: string, from: number): number => {
-    if (noCloser.has(mark)) { return -1; }
-    const at = text.indexOf(mark, from);
-    if (at < 0) { noCloser.add(mark); }
-    return at;
-  };
-  const flush = () => { out += escape(plain); plain = ""; };
-  // The next "]" is looked for from where the last one was found, and the parentheses of the line are paired once:
-  // a line of openers that are no links is read once, not once for each opener.
-  let bracket = -2;                           // the "]" found last; -1 when none is left
-  const nextBracket = (from: number): number => {
-    if (bracket !== -1 && bracket < from) { bracket = text.indexOf("]", from); }
-    return bracket;
-  };
-  let closes: Int32Array | undefined;
-  let runs: Map<number, number[]> | undefined;     // the runs of backticks of the line, listed once, when one is met
-  let i = 0;
-  while (i < text.length) {
+  if (!SIGNS.test(text)) { return escape(text); }
+  const length = text.length;
+  const kind = new Uint8Array(length);
+  const codeEnd = new Int32Array(length);                  // for the first backtick of a code span: where the span ends
+  const parenClose = new Int32Array(length).fill(-1);      // for each "(": the ")" that closes it; -1 when none does
+  const stars: number[] = [], twoStars: number[] = [];     // each asterisk; each that has another one right after it
+  const closers: number[] = [], twoClosers: number[] = []; // each "]"; each that has another one right after it
+  const stops: number[] = [], bars: number[] = [];         // each "]", "|" or "#", where a link's name ends; each "|"
+  const open: number[] = [];                               // the "(" that may still close
+  let runs: Map<number, number[]> | undefined;             // the runs of backticks of the line, listed once, when one is met
+
+  for (let i = 0; i < length;) {
     const c = text[i];
-    if (c === "\\" && i + 1 < text.length && PUNCTUATION.test(text[i + 1])) {      // \| and \* are the sign itself
-      plain += text[i + 1];
+    if (c === "\\" && i + 1 < length && PUNCTUATION.test(text[i + 1])) {      // \| and \* are the sign itself
+      kind[i] = DROPPED;
+      kind[i + 1] = LITERAL;
+      // The checker reads a link's name in the text as written: it ends at "]", "|" and "#" also after a backslash.
+      const escaped = text[i + 1];
+      if (escaped === "]" || escaped === "|" || escaped === "#") { stops.push(i + 1); }
+      if (escaped === "|") { bars.push(i + 1); }
       i += 2;
       continue;
     }
@@ -96,72 +89,136 @@ function inline(text: string, linkTo: LinkTo): string {
       let run = 1;
       while (text[i + run] === "`") { run++; }
       if (!runs) { runs = backtickRuns(text); }
-      const close = runAfter(runs.get(run), i + run);     // the next run of exactly as many backticks
+      const close = firstFrom(runs.get(run), i + run);     // the next run of exactly as many backticks
       if (close >= 0) {
-        let code = text.slice(i + run, close);
-        if (code.length > 2 && code.startsWith(" ") && code.endsWith(" ")) { code = code.slice(1, -1); }
-        flush();
-        out += `<code>${escape(code)}</code>`;
+        kind[i] = CODE;
+        codeEnd[i] = close + run;
+        open.length = 0;                                   // an address holds no code span: nothing open closes beyond it
         i = close + run;
       } else {
-        plain += text.slice(i, i + run);
+        kind.fill(LITERAL, i, i + run);
         i += run;
       }
       continue;
     }
-    if (c === "[" && text[i + 1] === "[") {
-      const close = closer("]]", i + 2);
-      const inner = close < 0 ? "" : text.slice(i + 2, close);
-      const name = inner ? linkNames([`[[${inner}]]`])[0] : undefined;
-      if (name !== undefined) {
-        const bar = inner.indexOf("|");
-        const shown = pyStrip(bar < 0 ? inner : inner.slice(bar + 1)) || name;
-        const target = linkTo(name);
-        flush();
-        out += target === undefined ? `<span class="no-note">${inline(shown, linkTo)}</span>`
-          : `<a data-note="${escape(target)}">${inline(shown, linkTo)}</a>`;
-        i = close + 2;
-        continue;
-      }
-    }
-    if (c === "[") {
-      // Any other link: [text](address). The address runs to the ")" that closes its "(", so it may hold
-      // parentheses that pair off, and ones written \( and \); it holds no white space and is not empty.
-      const close = nextBracket(i + 1);
-      if (close >= 0 && text[close + 1] === "(") {
-        if (!closes) { closes = parenCloses(text); }
-        const end = closes[close + 1];
-        if (end > close + 2) {
-          // Its text, then its address in full. Nothing opens by itself; a click sends the address.
-          flush();
-          const shown = text.slice(i + 1, close);
-          const address = escape(text.slice(close + 2, end).replace(ESCAPED, "$1"));
-          out += `${shown ? inline(shown, linkTo) + " " : ""}<a data-href="${address}">${address}</a>`;
-          i = end + 1;
-          continue;
-        }
-      }
-    }
     if (c === "*") {
-      const mark = text[i + 1] === "*" ? "**" : "*";
-      const close = closer(mark, i + mark.length);
-      const inner = close < 0 ? "" : text.slice(i + mark.length, close);
-      if (inner && pyStrip(inner[0]) && pyStrip(inner[inner.length - 1])) {     // the marks sit against the words
-        const tag = mark === "**" ? "strong" : "em";
-        flush();
-        out += `<${tag}>${inline(inner, linkTo)}</${tag}>`;
-        i = close + mark.length;
-        continue;
-      }
-      plain += mark;
-      i += mark.length;
-      continue;
+      if (stars.length > 0 && stars[stars.length - 1] === i - 1) { twoStars.push(i - 1); }
+      stars.push(i);
+    } else if (c === "]") {
+      if (closers.length > 0 && closers[closers.length - 1] === i - 1) { twoClosers.push(i - 1); }
+      closers.push(i);
+      stops.push(i);
+    } else if (c === "|" || c === "#") {
+      stops.push(i);
+      if (c === "|") { bars.push(i); }
+    } else if (c === "(") {
+      open.push(i);
+    } else if (c === ")") {
+      const from = open.pop();
+      if (from !== undefined) { parenClose[from] = i; }
+    } else if (WHITE.test(c)) {
+      open.length = 0;                                     // an address holds no white space: nothing open closes beyond it
     }
-    plain += c;
     i++;
   }
-  flush();
-  return out;
+
+  // A "[[" whose name was read and found empty: every later "[[" whose name ends at the same place has an empty
+  // name too (its name is the end of this one), so it is not read again.
+  let noName = -1;
+
+  /** The note named between `from` and `to`, as `linkNames` reads it: a code span counts as one space. */
+  const nameIn = (from: number, to: number): string => {
+    let written = "", kept = from;
+    for (let i = from; i < to;) {
+      if (kind[i] === CODE) {
+        written += text.slice(kept, i) + " ";
+        i = kept = codeEnd[i];
+      } else {
+        i++;
+      }
+    }
+    return linkTarget(written + text.slice(kept, to));
+  };
+
+  /** The HTML of the line from `from` up to `to`. An opener in it takes only a closer in it. */
+  const part = (from: number, to: number): string => {
+    let out = "", plain = "";
+    const flush = () => { out += escape(plain); plain = ""; };
+    let i = from;
+    while (i < to) {
+      const c = text[i], what = kind[i];
+      if (what === DROPPED) { i++; continue; }
+      if (what === LITERAL) { plain += c; i++; continue; }
+      if (what === CODE) {
+        let run = 1;
+        while (text[i + run] === "`") { run++; }
+        let code = text.slice(i + run, codeEnd[i] - run);
+        if (code.length > 2 && code.startsWith(" ") && code.endsWith(" ")) { code = code.slice(1, -1); }
+        flush();
+        out += `<code>${escape(code)}</code>`;
+        i = codeEnd[i];
+        continue;
+      }
+      if (c === "[" && i + 1 < to && text[i + 1] === "[") {
+        const close = firstFrom(twoClosers, i + 2);
+        if (close >= 0 && close + 2 <= to) {
+          const stop = firstFrom(stops, i + 2);            // not after `close`, which is a "]"
+          const name = stop === noName ? "" : nameIn(i + 2, stop);
+          if (name === "") {
+            noName = stop;
+          } else {
+            const bar = firstFrom(bars, i + 2);
+            let first = bar >= 0 && bar < close ? bar + 1 : i + 2, last = close;
+            while (first < last && isSpace(text.charCodeAt(first))) { first++; }
+            while (last > first && isSpace(text.charCodeAt(last - 1))) { last--; }
+            const shown = first < last ? part(first, last) : inline(name, linkTo);
+            const target = linkTo(name);
+            flush();
+            out += target === undefined ? `<span class="no-note">${shown}</span>` : `<a data-note="${escape(target)}">${shown}</a>`;
+            i = close + 2;
+            continue;
+          }
+        }
+      }
+      if (c === "[") {
+        // Any other link: [text](address). The address runs to the ")" that closes its "(", so it may hold
+        // parentheses that pair off, and ones written \( and \); it holds no white space and is not empty.
+        const close = firstFrom(closers, i + 1);
+        if (close >= 0 && close + 1 < to && text[close + 1] === "(") {
+          const end = parenClose[close + 1];
+          if (end > close + 2 && end < to) {
+            // Its text, then its address in full. Nothing opens by itself; a click sends the address.
+            flush();
+            const address = escape(text.slice(close + 2, end).replace(ESCAPED, "$1"));
+            out += `${close > i + 1 ? part(i + 1, close) + " " : ""}<a data-href="${address}">${address}</a>`;
+            i = end + 1;
+            continue;
+          }
+        }
+      }
+      if (c === "*") {
+        const mark = i + 1 < to && text[i + 1] === "*" ? 2 : 1;
+        const close = firstFrom(mark === 2 ? twoStars : stars, i + mark);
+        // The marks sit against the words: what they hold is not empty and neither begins nor ends with a space.
+        if (close > i + mark && close + mark <= to && !isSpace(text.charCodeAt(i + mark)) && !isSpace(text.charCodeAt(close - 1))) {
+          const tag = mark === 2 ? "strong" : "em";
+          flush();
+          out += `<${tag}>${part(i + mark, close)}</${tag}>`;
+          i = close + mark;
+          continue;
+        }
+        plain += text.slice(i, i + mark);
+        i += mark;
+        continue;
+      }
+      plain += c;
+      i++;
+    }
+    flush();
+    return out;
+  };
+
+  return part(0, length);
 }
 
 const FENCE = /^(`{3,})(.*)$/s;
