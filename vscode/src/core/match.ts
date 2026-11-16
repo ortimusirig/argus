@@ -424,7 +424,11 @@ class MaskedLines {
 
 // ---------------------------------------------------------------- candidates
 
-interface Compiled { pattern: Pattern; memo?: Uint8Array; }   // memo: two bits for each distinct text line
+/** A prepared pattern, and which distinct text lines it is known to fit or not to fit. Only pairs that were tested
+ *  are kept, so what is kept grows with them and not with patterns times lines: while they are few, in `sparse`, a
+ *  table in open addressing of (the line's number + 1) * 2 + (1 when it fits), `used` of them; once the table would
+ *  be as large, in `dense`, two bits for each distinct text line (0 not tested yet, 1 no, 2 yes). */
+interface Compiled { pattern: Pattern; sparse?: Uint32Array; dense?: Uint8Array; used: number; }
 
 const NONE = new Int32Array(0);
 
@@ -437,6 +441,8 @@ class NumberedText {
   private readonly points = new Pieces<Uint32Array>();
   private kept = 0;
   private readonly patterns: Table<Compiled>;
+  private readonly seed = (Math.random() * 0x100000000) | 0;   // of the places in the `sparse` tables, drawn as a Table's is
+  private looked = 0;                                          // the places `known` and `put` passed over: work the caller counts
 
   /** `loose`: the text's lines are without the white space at their ends, and the note's lines are read so too. */
   private constructor(private readonly masked: MaskedLines, total: number, noteLines: number, private readonly loose: boolean) {
@@ -469,7 +475,7 @@ class NumberedText {
     const map = noteLine.length < STEP ? this.patterns.near(noteLine) : yield* this.patterns.far(noteLine, slicer);
     let c = map.get(noteLine);
     if (!c) {
-      c = { pattern: yield* drive(compile(noteLine), slicer) };
+      c = { pattern: yield* drive(compile(noteLine), slicer), used: 0 };
       map.set(noteLine, c);
     }
     return c;
@@ -485,6 +491,47 @@ class NumberedText {
       if (this.kept + t.length <= 4_000_000) { this.points.set(id, t); this.kept += t.length; }   // kept while they are few
     }
     return p.size + t.length < STEP ? runToEnd(fits(p, t)) : yield* drive(fits(p, t), slicer);
+  }
+
+  /** What is known of a pattern against a distinct text line: 0 not tested yet, 1 no, 2 yes. */
+  private known(c: Compiled, id: number): number {
+    if (c.dense) { return (c.dense[id >> 2] >> ((id & 3) << 1)) & 3; }
+    const table = c.sparse;
+    if (!table) { return 0; }
+    const mask = table.length - 1;
+    for (let i = stirred(id ^ this.seed) & mask; ; i = (i + 1) & mask) {
+      const entry = table[i];
+      if (entry === 0) { return 0; }
+      if (entry >>> 1 === id + 1) { return 1 + (entry & 1); }
+      this.looked++;
+    }
+  }
+
+  /** Writes an entry into a `sparse` table that has room for it. */
+  private put(table: Uint32Array, entry: number): void {
+    const mask = table.length - 1;
+    let i = stirred(((entry >>> 1) - 1) ^ this.seed) & mask;
+    while (table[i] !== 0) { i = (i + 1) & mask; this.looked++; }
+    table[i] = entry;
+  }
+
+  /** Makes room in a pattern's memory for one answer more: the first table, a table twice as large, or, when that
+   *  table would be no smaller, the two bits for each line. What is known is written again with the slicer asked
+   *  at every place, so that growing is no longer a step than any other. Nothing is as large as the text before
+   *  the pattern was tested against one in 64 of its lines. */
+  private *grow(c: Compiled, slicer: Slicer): Generator<number, void, void> {
+    const old = c.sparse, size = old ? 2 * old.length : 8, bytes = (this.distinct + 3) >> 2;
+    const dense = 4 * size >= bytes ? new Uint8Array(bytes) : undefined, sparse = dense ? undefined : new Uint32Array(size);
+    for (let i = 0; old && i < old.length; i++) {
+      const entry = old[i];
+      if (entry !== 0 && dense) {
+        const id = (entry >>> 1) - 1;
+        dense[id >> 2] |= (1 + (entry & 1)) << ((id & 3) << 1);
+      } else if (entry !== 0) { this.put(sparse as Uint32Array, entry); }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
+    }
+    c.sparse = sparse;
+    c.dense = dense;
   }
 
   /** Every start (0-based) where all lines of the block match in order. None is dropped; there is no cap. */
@@ -527,84 +574,70 @@ class NumberedText {
       if (slicer.due()) { yield slicer.done; slicer.resume(); }
     }
     others -= runLength;                               // the exact lines outside the longest run
-    let starts: Int32Array, count = 0;
-    if (runLength > 0) {
-      const fail = runLength < STEP ? runToEnd(failSteps(exact, runAt, runLength)) : yield* drive(failSteps(exact, runAt, runLength), slicer);
-      // The starts found are kept in pieces, and written into one list of their number at the end.
-      const pieces: number[][] = [];
-      let piece: number[] = [];
-      for (let i = 0, k = 0; i < total; i++) {
+    const at = new Int32Array(others);                 // where they are in the block
+    for (let k = 0, n = 0; others > 0 && k < length; k++) {
+      if (exact[k] >= 0 && (k < runAt || k >= runAt + runLength)) { at[n++] = k; }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
+    }
+    const fail = runLength === 0 ? NONE
+      : runLength < STEP ? runToEnd(failSteps(exact, runAt, runLength)) : yield* drive(failSteps(exact, runAt, runLength), slicer);
+    // Each start the run is found at (every start that leaves room, when no line is exact) is tried at once against
+    // the block's other lines, and only the starts that stay are kept: in pieces, written into one list of their
+    // number at the end. So no list here is as long as the text unless the block's candidates are as many.
+    const pieces: number[][] = [];
+    let piece: number[] = [], count = 0;
+    const last = total - length, stop = runLength > 0 ? total : last + 1;
+    for (let i = 0, k = 0; i < stop; i++) {
+      let start = i;
+      if (runLength > 0) {
         while (k > 0 && seq[i] !== exact[runAt + k]) { k = fail[k - 1]; }
         if (seq[i] === exact[runAt + k]) { k++; }
+        start = -1;
         if (k === runLength) {
-          const start = i - runLength + 1 - runAt;
-          if (start >= 0 && start + length <= total) {
-            if (piece.length === PIECE) { pieces.push(piece); piece = []; }
-            piece.push(start);
-            count++;
-          }
+          start = i - runLength + 1 - runAt;
           k = fail[k - 1];
         }
-        if (slicer.due()) { yield slicer.done; slicer.resume(); }
       }
-      pieces.push(piece);
-      starts = new Int32Array(count);
-      for (let p = 0; p < pieces.length; p++) {
-        starts.set(pieces[p], p * PIECE);
-        if (slicer.due(64)) { yield slicer.done; slicer.resume(); }
+      if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      if (start < 0 || start > last) { continue; }
+      let ok = true;
+      // (2) The other exact lines, as numbers.
+      for (let n = 0; n < others && ok; n++) {
+        if (seq[start + at[n]] !== exact[at[n]]) { ok = false; }
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }   // at every comparison, the one that fails too
       }
-    } else {
-      // No exact line: every start that leaves room, taken directly. All are kept, and the slicer is asked at each.
-      count = total - length + 1;
-      starts = new Int32Array(count);
-      for (let start = 0; start < count; start++) {
-        starts[start] = start;
-        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      // (3) Pattern lines; each (pattern, text line) pair is tested once in the note.
+      // (4) "any" lines are never compared.
+      for (let n = 0; n < patternCount && ok; n++) {
+        const c = patterns.get(n) as Compiled, id = seq[start + patternAt[n]];
+        this.looked = 0;
+        let answer = this.known(c, id);
+        if (answer === 0) {
+          answer = (yield* this.test(c.pattern, id, slicer)) ? 2 : 1;
+          if (!c.dense && (!c.sparse || 2 * c.used >= c.sparse.length)) { yield* this.grow(c, slicer); }   // half empty at least
+          if (c.dense) {
+            c.dense[id >> 2] |= answer << ((id & 3) << 1);
+          } else {
+            this.put(c.sparse as Uint32Array, (((id + 1) << 1) | (answer - 1)) >>> 0);
+            c.used++;
+          }
+          if (slicer.due(16 + this.looked + ((this.lines.get(id) as string).length >> 2))) { yield slicer.done; slicer.resume(); }
+        } else if (slicer.due(1 + this.looked)) { yield slicer.done; slicer.resume(); }
+        if (answer !== 2) { ok = false; }
+      }
+      if (ok) {
+        if (piece.length === PIECE) { pieces.push(piece); piece = []; }
+        piece.push(start);
+        count++;
       }
     }
-    // (2) The other exact lines, as numbers, only at the starts still left.
-    if (others > 0 && count > 0) {
-      const at = new Int32Array(others);
-      for (let k = 0, n = 0; k < length; k++) {
-        if (exact[k] >= 0 && (k < runAt || k >= runAt + runLength)) { at[n++] = k; }
-        if (slicer.due()) { yield slicer.done; slicer.resume(); }
-      }
-      let left = 0;                                    // the starts that stay are written over the start of the list
-      for (let s = 0; s < count; s++) {
-        const start = starts[s];
-        let ok = true;
-        for (let n = 0; n < others && ok; n++) {
-          if (seq[start + at[n]] !== exact[at[n]]) { ok = false; }
-          if (slicer.due()) { yield slicer.done; slicer.resume(); }   // at every comparison, the one that fails too
-        }
-        if (ok) { starts[left++] = start; }
-      }
-      count = left;
+    pieces.push(piece);
+    const starts = new Int32Array(count);
+    for (let p = 0; p < pieces.length; p++) {
+      starts.set(pieces[p], p * PIECE);
+      if (slicer.due(64)) { yield slicer.done; slicer.resume(); }
     }
-    // (3) Pattern lines, only at the starts still left; each (pattern, text line) pair is tested once in the note.
-    // (4) "any" lines are never compared.
-    if (patternCount > 0 && count > 0) {
-      let left = 0;
-      for (let s = 0; s < count; s++) {
-        const start = starts[s];
-        let ok = true;
-        for (let n = 0; n < patternCount; n++) {
-          const c = patterns.get(n) as Compiled;
-          const id = seq[start + patternAt[n]], shift = (id & 3) << 1;
-          const memo = c.memo ?? (c.memo = new Uint8Array((this.distinct + 3) >> 2));
-          let answer = (memo[id >> 2] >> shift) & 3;   // 0 not tested yet, 1 no, 2 yes
-          if (answer === 0) {
-            answer = (yield* this.test(c.pattern, id, slicer)) ? 2 : 1;
-            memo[id >> 2] |= answer << shift;
-            if (slicer.due(16 + ((this.lines.get(id) as string).length >> 2))) { yield slicer.done; slicer.resume(); }
-          } else if (slicer.due()) { yield slicer.done; slicer.resume(); }
-          if (answer !== 2) { ok = false; break; }
-        }
-        if (ok) { starts[left++] = start; }
-      }
-      count = left;
-    }
-    return count === starts.length ? starts : starts.subarray(0, count);
+    return starts;
   }
 }
 

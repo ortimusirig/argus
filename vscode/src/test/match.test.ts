@@ -685,3 +685,56 @@ test("masked_lines: ranges in any order, one inside another, meeting, empty, far
     assert.equal(a.placed[0].state, yes.includes(line) ? "current-masked" : "changed", `a block recorded at line ${line}`);
   }
 });
+
+// ---------------------------------------------------------------- memory grows with the work done, not with the sizes multiplied
+
+test("16,000 pattern lines against 64,000 different lines, one candidate: array buffers grow with the pairs tested, not with patterns times lines; right answers", () => {
+  /** Runs `candidates` to its end: its result, and the most the array buffers grew, looked at at every yield. The
+   *  growth is counted from the least seen before it, so that buffers of earlier tests freed meanwhile do not hide it. */
+  const grown = (n: FileNote, text: string[]): { lines: number[][]; most: number } => {
+    let least = process.memoryUsage().arrayBuffers, most = 0;
+    for (const g = candidates(n, text); ;) {
+      const step = g.next(), now = process.memoryUsage().arrayBuffers;
+      least = Math.min(least, now);
+      most = Math.max(most, now - least);
+      if (step.done) { return { lines: step.value, most }; }
+    }
+  };
+  const MB = 1024 * 1024;
+  const shapes: { name: string; make: () => { n: FileNote; text: string[] }; check: (lines: number[][]) => void }[] = [
+    // The reviewer's case: the exact first line leaves one start, so each pattern is tested against one line.
+    { name: "an exact line and 16,000 different pattern lines, in 64,000 different lines",
+      make: () => ({ n: note([block("1", 1, ["anchor", ...Array.from({ length: 16000 }, (_, i) => `p${i} = ${MASK};`)])], "2-16001"),
+        text: ["anchor", ...Array.from({ length: 16000 }, (_, i) => `p${i} = Q${i};`), ...numbered(47999)] }),
+      check: (lines) => { assert.deepEqual(lines, [[1]]); } },
+    // No exact line: every start is tried, and few stay. Each pattern is tested against every different line.
+    { name: "600 blocks of one pattern line, no exact line, in 50,000 lines of 100 kinds",
+      make: () => ({ n: note(Array.from({ length: 600 }, (_, i) => block("b" + i, i + 1, [`v${MASK} = ${i % 100}`])), "1-600"),
+        text: Array.from({ length: 50000 }, (_, j) => `vQ = ${j % 100}`) }),
+      check: (lines) => {
+        assert.equal(lines.length, 600);
+        for (let i = 0; i < 600; i++) { assert.equal(lines[i].length, 500, `block ${i}`); }
+        assert.deepEqual([lines[7][0], lines[7][1], lines[7][499], lines[107][0]], [8, 108, 49908, 8]);
+      } },
+    // The exact line searched for is at 50,000 starts; the block's other exact line leaves one of them, or none.
+    { name: "600 blocks whose first exact line is at 50,000 starts and whose other exact line is at one",
+      make: () => ({ n: note(Array.from({ length: 600 }, (_, i) => block("b" + i, 1, ["}", MASK, "end " + i])), "2"),
+        text: [...new Array<string>(50000).fill("}"), ...numbered(600, "end ")] }),
+      check: (lines) => {
+        assert.deepEqual(lines.slice(0, 3), [[49999], [50000], []]);
+        assert.equal(lines.reduce((sum, list) => sum + list.length, 0), 2);
+      } },
+  ];
+  for (const { name, make, check } of shapes) {
+    const { n, text } = make();
+    const { lines, most } = grown(n, text);
+    console.log(`memory: ${name}: array buffers grew by ${(most / MB).toFixed(1)} MB at most`);
+    check(lines);
+    assert.ok(most < 32 * MB, `${name}: array buffers grew by ${(most / MB).toFixed(1)} MB`);
+  }
+  // The reviewer's case through `assign`: the block is where it was recorded, through its masks.
+  const { n, text } = shapes[0].make();
+  const a = run(n, text);
+  assert.deepEqual(states(a), [["1", "current-masked", 1, 16001]]);
+  assert.deepEqual(a.unexplained, [[16002, 64000]]);
+});
