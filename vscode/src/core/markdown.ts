@@ -14,7 +14,28 @@ function escape(text: string): string {
 export type LinkTo = (name: string) => string | undefined;
 
 const PUNCTUATION = /[!-/:-@[-`{-~]/;
-const OTHER_LINK = /\[([^\]]*)\]\(([^)\s]+)\)/y;
+const ESCAPED = /\\([!-/:-@[-`{-~])/g;
+const WHITE = /\s/;
+
+/** For each "(" of the text, where the ")" that closes it stands; -1 when it never closes or white space comes
+ *  first. Parentheses pair off as they nest; one written \( or \) is no parenthesis. The text is read once. */
+function parenCloses(text: string): Int32Array {
+  const closes = new Int32Array(text.length).fill(-1);
+  const open: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\" && i + 1 < text.length && PUNCTUATION.test(text[i + 1])) { i++; continue; }
+    if (c === "(") {
+      open.push(i);
+    } else if (c === ")") {
+      const from = open.pop();
+      if (from !== undefined) { closes[from] = i; }
+    } else if (WHITE.test(c)) {
+      open.length = 0;                              // an address holds no white space: nothing open closes beyond it
+    }
+  }
+  return closes;
+}
 
 /** One line of text: code spans, [[links]], other links, bold, italic. */
 function inline(text: string, linkTo: LinkTo): string {
@@ -28,6 +49,14 @@ function inline(text: string, linkTo: LinkTo): string {
     return at;
   };
   const flush = () => { out += escape(plain); plain = ""; };
+  // The next "]" is looked for from where the last one was found, and the parentheses of the line are paired once:
+  // a line of openers that are no links is read once, not once for each opener.
+  let bracket = -2;                           // the "]" found last; -1 when none is left
+  const nextBracket = (from: number): number => {
+    if (bracket !== -1 && bracket < from) { bracket = text.indexOf("]", from); }
+    return bracket;
+  };
+  let closes: Int32Array | undefined;
   let i = 0;
   while (i < text.length) {
     const c = text[i];
@@ -76,16 +105,22 @@ function inline(text: string, linkTo: LinkTo): string {
         continue;
       }
     }
-    if (c === "[" && closer(")", i) >= 0) {
-      OTHER_LINK.lastIndex = i;
-      const m = OTHER_LINK.exec(text);
-      if (m) {
-        // Any other link: its text, then its address in full. Nothing opens by itself; a click sends the address.
-        flush();
-        const address = escape(m[2]);
-        out += `${m[1] ? inline(m[1], linkTo) + " " : ""}<a data-href="${address}">${address}</a>`;
-        i += m[0].length;
-        continue;
+    if (c === "[") {
+      // Any other link: [text](address). The address runs to the ")" that closes its "(", so it may hold
+      // parentheses that pair off, and ones written \( and \); it holds no white space and is not empty.
+      const close = nextBracket(i + 1);
+      if (close >= 0 && text[close + 1] === "(") {
+        if (!closes) { closes = parenCloses(text); }
+        const end = closes[close + 1];
+        if (end > close + 2) {
+          // Its text, then its address in full. Nothing opens by itself; a click sends the address.
+          flush();
+          const shown = text.slice(i + 1, close);
+          const address = escape(text.slice(close + 2, end).replace(ESCAPED, "$1"));
+          out += `${shown ? inline(shown, linkTo) + " " : ""}<a data-href="${address}">${address}</a>`;
+          i = end + 1;
+          continue;
+        }
       }
     }
     if (c === "*") {

@@ -47,7 +47,7 @@ test("any other link becomes its text and its address in full, as <a data-href>:
   assert.equal(render("Read [the *docs*](https://example.com/a?b=1&c=2) now."),
     '<p>Read the <em>docs</em> <a data-href="https://example.com/a?b=1&amp;c=2">https://example.com/a?b=1&amp;c=2</a> now.</p>');
   assert.equal(render("[x](javascript:alert(1)) [y](obsidian://open?vault=V) [](file:///c:/a.txt)"),
-    '<p>x <a data-href="javascript:alert(1">javascript:alert(1</a>) y <a data-href="obsidian://open?vault=V">obsidian://open?vault=V</a> '
+    '<p>x <a data-href="javascript:alert(1)">javascript:alert(1)</a> y <a data-href="obsidian://open?vault=V">obsidian://open?vault=V</a> '
     + '<a data-href="file:///c:/a.txt">file:///c:/a.txt</a></p>');
   const html = render("[a](https://a.example) ![pic](https://b.example/p.png) <https://c.example> https://d.example");
   assert.doesNotMatch(html, /\shref=|\ssrc=|<img/);
@@ -91,6 +91,51 @@ test("the 'Part of line' table kept in a block's prose comes out of render as a 
   assert.equal(block.rows.length, 1);
   assert.equal(render(block.prose), "<table>\n<thead><tr><th>Part of line 6</th><th>Meaning</th></tr></thead>\n<tbody>\n"
     + "<tr><td><code>run(2)</code></td><td>the call</td></tr>\n</tbody>\n</table>");
+});
+
+test("a link's address may hold parentheses, balanced or written with a backslash", () => {
+  const link = (address: string) => `<a data-href="${address}">${address}</a>`;
+  assert.equal(render("[x](https://example.com/a_(b))"), `<p>x ${link("https://example.com/a_(b)")}</p>`);
+  assert.equal(render("[x](https://example.com/a_(b)_(c(d))) after"), `<p>x ${link("https://example.com/a_(b)_(c(d))")} after</p>`);
+  assert.equal(render("([x](https://e.example/y))"), `<p>(x ${link("https://e.example/y")})</p>`);
+  assert.equal(render("[a](u(1)) and [b](v)"), `<p>a ${link("u(1)")} and b ${link("v")}</p>`);
+  assert.equal(render("[x](https://example.com/a_\\(b) end"), `<p>x ${link("https://example.com/a_(b")} end</p>`);
+  assert.equal(render("[x](https://example.com/a\\)b)"), `<p>x ${link("https://example.com/a)b")}</p>`);
+  assert.equal(render("[x](()) [y]((a)(b))"), `<p>x ${link("()")} y ${link("(a)(b)")}</p>`);
+  // No link: the address is never closed, holds white space, is empty, or does not follow the text at once.
+  for (const text of ["[x](a(b)", "[x](https://e.example/a(b c)", "[x](a b)", "[x]()", "[x] (a)", "[x](a\\)", "[x(a)"]) {
+    assert.equal(render(text), `<p>${text.replace(/\\\)/, ")")}</p>`, text);
+  }
+  // A parenthesis left open before a link does not take the link's own.
+  assert.equal(render("(see [x](a(b)c)"), `<p>(see x ${link("a(b)c")}</p>`);
+  assert.equal(render("[x](a(b [y](c)"), `<p>[x](a(b y ${link("c")}</p>`);
+});
+
+test("malformed links cost time in proportion to their length", () => {
+  const time = (text: string): [number, string] => {
+    const started = performance.now();
+    const html = render(text);
+    return [performance.now() - started, html];
+  };
+  const [took, html] = time("[".repeat(100000) + ")");
+  console.log(`timing: 100,000 [ and one ) rendered in ${took.toFixed(1)} ms`);
+  assert.ok(took < 200, `took ${took} ms`);
+  assert.equal(html, `<p>${"[".repeat(100000)})</p>`);
+  const others: [string, string][] = [
+    ["100,000 [ and ]( at the end", "[".repeat(100000) + "](a)"],
+    ["50,000 [](", "[](".repeat(50000)],
+    ["50,000 []( and as many )", "[](".repeat(50000) + ")".repeat(50000)],
+    ["40,000 [x](( a", "[x](( a".repeat(40000)],
+    ["50,000 ]( then 50,000 [", "](".repeat(50000) + "[".repeat(50000) + "](x)"],
+    ["30,000 [a](b\\", "[a](b\\".repeat(30000) + ")"],
+  ];
+  for (const [name, text] of others) {
+    const [ms] = time(text);
+    console.log(`timing: ${name} rendered in ${ms.toFixed(1)} ms`);
+    assert.ok(ms < 200, `${name}: took ${ms} ms`);
+  }
+  // Openers closed in pairs: the first opener's parenthesis closes at the last closer; the address is all between.
+  assert.equal(render("[](".repeat(3) + ")".repeat(3)), '<p><a data-href="[]([]())">[]([]())</a></p>');
 });
 
 test("a long line of openers that never close is rendered at once", () => {
