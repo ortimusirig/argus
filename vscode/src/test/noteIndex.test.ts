@@ -3,6 +3,7 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveLink } from "../core/links";
 import { NoteIndex } from "../core/noteIndex";
 import { PathRules, Project, systemRules } from "../core/projects";
 
@@ -358,5 +359,47 @@ test("a note replaced by a link that leads out of the folders leaves the index o
     await index.reread(s.project, file);
     assert.equal(index.fileNotesFor(s.project, "a.py").length, 1);
     assert.equal(index.noteById(note.id)?.file?.blocks[0].purpose, "leaks", "the same path has the same id");
+  } finally { s.done(); }
+});
+
+test("the link map of a project is built once for a state of the index, and follows every change of its notes", async () => {
+  const s = scratch();
+  try {
+    const index = new NoteIndex();
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const names = ["Concept - x", "Concept - y", "Library - z", "P file - a.py", "Mechanism - m", "concept - x", "Nothing"];
+    const same = (): void => {
+      for (const name of names) {
+        assert.deepEqual(index.linksOf(s.project).resolve(name),
+          resolveLink(name, index.notesOf(s.project, "notes"), index.notesOf(s.project, "vault")), `'${name}'`);
+      }
+    };
+    same();
+    const first = index.linksOf(s.project);
+    const own = first.resolve("Concept - x");
+    assert.ok(own.kind === "one" && own.note.place === "notes", "the project's own note before the vault's");
+    await index.refreshNow(s.project);
+    assert.equal(index.linksOf(s.project), first, "nothing changed: the map is not built again");
+
+    // A second note of a name, a note that goes, a note with a new text: the map follows each.
+    s.write("vault/More/Concept - y.md", other("concept"));
+    await index.refreshNow(s.project);
+    assert.equal(index.linksOf(s.project).resolve("Concept - y").kind, "several");
+    same();
+    const mine = path.join(s.root, "vault", "P", "Concepts", "Concept - x.md");
+    fs.rmSync(mine);
+    await index.changed(s.project, mine);
+    const left = index.linksOf(s.project).resolve("Concept - x");
+    assert.ok(left.kind === "one" && left.note.place === "vault");
+    same();
+    const changed = s.write("vault/Shared/Library - z.md", other("library") + "More.\n");
+    await index.changed(s.project, changed);
+    const z = index.linksOf(s.project).resolve("Library - z");
+    assert.ok(z.kind === "one" && z.note === index.notesByName("Library - z")[0] && z.note.text.endsWith("More.\n"));
+    same();
+
+    index.setProjects([]);
+    assert.deepEqual(index.linksOf(s.project).resolve("Concept - y"), { kind: "none" });
   } finally { s.done(); }
 });

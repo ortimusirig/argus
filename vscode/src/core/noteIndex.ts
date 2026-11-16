@@ -3,6 +3,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { LinkMap, linkMap } from "./links";
 import { FileNote, OtherNote, isArgus, parseFileNote, parseOtherNote, parseProps } from "./notes";
 import { PathRules, Project, relativeIn, sourceInRoot, systemRules } from "./projects";
 import { readText } from "./readText";
@@ -26,7 +27,8 @@ export interface Entry {
 /** `rejected`: the .md files that are not read because their real path lies outside the project's folders (a
  *  symbolic link that leads out), by their path as found, each with the sentence that says so. */
 interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<string, string>; queue: Promise<void>;
-  refreshed: number; }      // the tick at which the last reading of the folders began
+  refreshed: number;        // the tick at which the last reading of the folders began
+  links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
@@ -146,7 +148,7 @@ export class NoteIndex {
         }
       }
       for (const [key, entry] of held.entries) {
-        if (!seen.has(key)) { held.entries.delete(key); this.byId.delete(entry.id); changed = true; }
+        if (!seen.has(key)) { held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true; }
       }
       if (rejectedBefore.size !== held.rejected.size
         || [...held.rejected].some(([file, why]) => rejectedBefore.get(file) !== why)) { changed = true; }
@@ -206,7 +208,7 @@ export class NoteIndex {
       // leaves, whatever becomes of the new target. A full reading of the folders drops it in the same way.
       const own = this.ownKey(file);
       const old = own !== undefined && own !== key ? held.entries.get(own) : undefined;
-      if (old && own !== undefined) { held.entries.delete(own); this.byId.delete(old.id); }
+      if (old && own !== undefined) { held.entries.delete(own); held.links = undefined; this.byId.delete(old.id); }
       const gone = old !== undefined || was !== undefined;
       if (key === undefined) { return gone; }
       const inNotes = relativeIn(project.notesFolder, file, this.rules);
@@ -223,7 +225,7 @@ export class NoteIndex {
   private async read(held: Held, file: string, key: string): Promise<boolean> {
     const had = held.entries.get(key);
     const drop = (): boolean => {
-      if (had) { held.entries.delete(key); this.byId.delete(had.id); }
+      if (had) { held.entries.delete(key); held.links = undefined; this.byId.delete(had.id); }
       return had !== undefined;
     };
     const project = held.project;
@@ -267,6 +269,7 @@ export class NoteIndex {
       entry.other = parseOtherNote(name, real, text);
     }
     held.entries.set(key, entry);
+    held.links = undefined;
     this.byId.set(id, entry);
     return true;
   }
@@ -323,6 +326,19 @@ export class NoteIndex {
   /** The notes of the project in its notes folder, or in its vault outside the notes folder. */
   notesOf(project: Project, place: Place): Entry[] {
     return this.all(project).filter((entry) => entry.place === place);
+  }
+
+  /** The note each linked name means in this project, as `resolveLink` over `notesOf` says it: one lookup for a
+   *  link. */
+  linksOf(project: Project): LinkMap<Entry> {
+    const held = this.of(project);
+    if (!held) { return linkMap<Entry>([], []); }
+    if (!held.links) {
+      const own: Entry[] = [], vault: Entry[] = [];
+      for (const entry of held.entries.values()) { (entry.place === "notes" ? own : vault).push(entry); }
+      held.links = linkMap(own, vault);
+    }
+    return held.links;
   }
 
   /** The File notes of the project whose `source` the index could not use, and the files it did not read because

@@ -5,7 +5,6 @@ import * as crypto from "node:crypto";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { Index } from "./index";
-import { resolveLink } from "./core/links";
 import { LinkTo } from "./core/markdown";
 import { Matcher } from "./core/matching";
 import { Context, handle, hrefsIn } from "./core/messages";
@@ -118,8 +117,9 @@ export class Panel implements vscode.WebviewViewProvider {
 
   /** Which name of a [[link]] is a note of this project or its vault; any other name stays text. */
   private linkTo(project: Project): LinkTo {
-    const own = this.index.notes.notesOf(project, "notes"), vault = this.index.notes.notesOf(project, "vault");
-    return (name) => resolveLink(name, own, vault).kind === "none" ? undefined : name;
+    // One lookup for each link in the index's map of names, which is built once for each state of the notes.
+    const links = this.index.notes.linksOf(project);
+    return (name) => links.resolve(name).kind === "none" ? undefined : name;
   }
 
   private fileView(): View | undefined {
@@ -182,7 +182,7 @@ export class Panel implements vscode.WebviewViewProvider {
   private async receive(message: unknown): Promise<void> {
     const project = this.project, notes = this.index.notes;
     const context: Context<Entry> = {
-      resolve: (name) => project ? resolveLink(name, notes.notesOf(project, "notes"), notes.notesOf(project, "vault")) : { kind: "none" },
+      resolve: (name) => project ? notes.linksOf(project).resolve(name) : { kind: "none" },
       byId: (id) => notes.noteById(id),
       holds: (entry) => project !== undefined && projectKey(entry.project) === projectKey(project) && notes.holds(entry),
       hrefs: this.hrefs,
