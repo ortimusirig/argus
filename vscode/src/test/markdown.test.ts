@@ -309,9 +309,45 @@ test("a backslash before a punctuation character makes it plain text: \\*, \\[, 
 test("nothing inside a code span is read as a link, a bracket or a parenthesis", () => {
   assert.equal(render("`[[x]]` and [[Name|`a]]b`]] and [[Name `]]` two]]"),
     '<p><code>[[x]]</code> and <a data-note="Name"><code>a]]b</code></a> and <a data-note="Name   two">Name <code>]]</code> two</a></p>');
-  assert.equal(render("[`a]`](u) and [b](v`)`)"), '<p><code>a]</code> <a data-href="u">u</a> and [b](v<code>)</code>)</p>');
+  // An address holds no code span: the backtick in it is a character of the address, and its first ")" closes it.
+  assert.equal(render("[`a]`](u) and [b](v`)`)"), '<p><code>a]</code> <a data-href="u">u</a> and b <a data-href="v`">v`</a>`)</p>');
   assert.equal(render("[`x](y)`](z)"), '<p><code>x](y)</code> <a data-href="z">z</a></p>');
   assert.equal(render("`[a](` b `)`"), "<p><code>[a](</code> b <code>)</code></p>");
+});
+
+test("a link's address is literal text: backticks, asterisks and brackets in it are not signs", () => {
+  const link = (address: string) => `<a data-href="${address}">${address}</a>`;
+  assert.equal(render("[docs](file:///repo/`name`.ts)"), `<p>docs ${link("file:///repo/`name`.ts")}</p>`);
+  assert.equal(render("see [docs](file:///repo/`name`.ts) and `code`"), `<p>see docs ${link("file:///repo/`name`.ts")} and <code>code</code></p>`);
+  // Asterisks and brackets.
+  assert.equal(render("[a](x*y*z[1]) and *b*"), `<p>a ${link("x*y*z[1]")} and <em>b</em></p>`);
+  assert.equal(render("*[a](u*v) w* [b](c[[Name]]d**e)"), `<p><em>a ${link("u*v")} w</em> b ${link("c[[Name]]d**e")}</p>`);
+  assert.equal(render("[a](b`\\)`c(`)) d"), `<p>a ${link("b`)`c(`)")} d</p>`);        // parentheses pair as before
+  // A code span before the link, on the same line.
+  assert.equal(render("`c` then [d](u`v)"), `<p><code>c</code> then d ${link("u`v")}</p>`);
+  assert.equal(render("`c` then [d](u`v`w) and `e`"), `<p><code>c</code> then d ${link("u`v`w")} and <code>e</code></p>`);
+  // A code span that begins before the link's text, or in it, and takes the "](": no link.
+  assert.equal(render("a `x [d](u` v)"), "<p>a <code>x [d](u</code> v)</p>");
+  assert.equal(render("[d `x](u)` y"), "<p>[d <code>x](u)</code> y</p>");
+  // Without a "[" before it, "](" opens no address: the code span stays.
+  assert.equal(render("a](`b`)"), "<p>a](<code>b</code>)</p>");
+});
+
+test("links with backticks in their addresses cost time in proportion to the line", () => {
+  const nested = "`x`[a](".repeat(19999) + "`x`" + ")".repeat(19999);
+  const shapes: [string, string, (html: string) => void][] = [
+    ["20,000 [a](`", "[a](`".repeat(20000), (html) => assert.doesNotMatch(html, /<a /)],
+    ["20,000 [a](`x` and as many )", "[a](`x`".repeat(20000) + ")".repeat(20000),
+      (html) => assert.equal(html, `<p>a <a data-href="${nested}">${nested}</a></p>`)],
+  ];
+  for (const [name, text, check] of shapes) {
+    const started = performance.now();
+    const html = render(text);
+    const took = performance.now() - started;
+    console.log(`timing: ${name} (${text.length} characters) rendered in ${took.toFixed(1)} ms`);
+    assert.ok(took < 200, `${name}: took ${took} ms`);
+    check(html);
+  }
 });
 
 test("a [[ that opens no link is passed over; the next one is read for itself", () => {

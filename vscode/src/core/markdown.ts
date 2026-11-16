@@ -51,12 +51,15 @@ const CODE = 3;        // the first backtick of a code span; the span is passed 
 
 /** One line of text: code spans, [[links]], other links, bold, italic.
  *
- *  The line is read twice, each time from left to right, and no part of it is searched again.
+ *  The line is read from left to right a fixed number of times, and no part of it is searched again.
+ *  When it holds a "](", its parentheses are paired first, as an address reads them.
  *  The first reading settles what never depends on anything else: a backslash before a punctuation character makes
  *  that character plain text; a run of backticks opens a code span when a later run is exactly as long (looked up in
- *  the index of the runs), and nothing inside the span is looked at. The same reading lists, in order, where the
- *  signs outside code spans and escapes stand: the asterisks, the closing brackets, the characters that end a link's
- *  name; and it pairs the parentheses.
+ *  the index of the runs), and nothing inside the span is looked at; a "](" that follows a "[" opens an address when
+ *  its parenthesis closes, and nothing inside the address is looked at either. Whichever of the two begins first
+ *  holds the other: a code span that begins before the "](" takes it, an address takes the backticks in it. The same
+ *  reading lists, in order, where the signs outside code spans, addresses and escapes stand: the asterisks, the
+ *  closing brackets, the characters that end a link's name.
  *  The second reading writes the HTML. An opener finds its closer by a binary search in those lists, never by
  *  reading on, and the text between the two is rendered as a part of the same line, with the same lists: an opener
  *  inside it accepts only a closer inside it. The parts lie inside one another a few deep at most (the text of a
@@ -70,8 +73,28 @@ function inline(text: string, linkTo: LinkTo): string {
   const stars: number[] = [], twoStars: number[] = [];     // each asterisk; each that has another one right after it
   const closers: number[] = [], twoClosers: number[] = []; // each "]"; each that has another one right after it
   const stops: number[] = [], bars: number[] = [];         // each "]", "|" or "#", where a link's name ends; each "|"
-  const open: number[] = [];                               // the "(" that may still close
   let runs: Map<number, number[]> | undefined;             // the runs of backticks of the line, listed once, when one is met
+
+  // The parentheses are paired first, as an address reads them: every character is itself, but a backslash before
+  // a punctuation character makes that character plain, and white space ends every address still open. A backslash
+  // stands at the same places here as in the reading below: a code span ends on a backtick, never on a backslash.
+  if (text.includes("](")) {
+    const open: number[] = [];                             // the "(" that may still close
+    for (let i = 0; i < length; i++) {
+      const c = text[i];
+      if (c === "\\") {
+        if (i + 1 < length && PUNCTUATION.test(text[i + 1])) { i++; }
+      } else if (c === "(") {
+        open.push(i);
+      } else if (c === ")") {
+        const from = open.pop();
+        if (from !== undefined) { parenClose[from] = i; }
+      } else if (WHITE.test(c)) {
+        open.length = 0;
+      }
+    }
+  }
+  let bracket = false;                                     // a "[" stands before here with no "]" after it
 
   for (let i = 0; i < length;) {
     const c = text[i];
@@ -93,7 +116,6 @@ function inline(text: string, linkTo: LinkTo): string {
       if (close >= 0) {
         kind[i] = CODE;
         codeEnd[i] = close + run;
-        open.length = 0;                                   // an address holds no code span: nothing open closes beyond it
         i = close + run;
       } else {
         kind.fill(LITERAL, i, i + run);
@@ -108,16 +130,23 @@ function inline(text: string, linkTo: LinkTo): string {
       if (closers.length > 0 && closers[closers.length - 1] === i - 1) { twoClosers.push(i - 1); }
       closers.push(i);
       stops.push(i);
+      // "](" after a link's text: the address, up to the ")" that closes it, is plain text. It is passed over here,
+      // so no backtick, asterisk or bracket in it is a sign.
+      const end = bracket && text[i + 1] === "(" ? parenClose[i + 1] : -1;
+      bracket = false;
+      if (end > i + 2) {
+        for (let j = i + 2; j < end; j++) {
+          if (text[j] === "\\" && PUNCTUATION.test(text[j + 1])) { kind[j++] = DROPPED; }
+          kind[j] = LITERAL;
+        }
+        i = end + 1;
+        continue;
+      }
+    } else if (c === "[") {
+      bracket = true;
     } else if (c === "|" || c === "#") {
       stops.push(i);
       if (c === "|") { bars.push(i); }
-    } else if (c === "(") {
-      open.push(i);
-    } else if (c === ")") {
-      const from = open.pop();
-      if (from !== undefined) { parenClose[from] = i; }
-    } else if (WHITE.test(c)) {
-      open.length = 0;                                     // an address holds no white space: nothing open closes beyond it
     }
     i++;
   }
