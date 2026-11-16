@@ -182,32 +182,41 @@ export class Check implements vscode.Disposable {
   async check(document: vscode.TextDocument | undefined): Promise<string | undefined> {
     if (!document) { return "open a file first; nothing was checked"; }
     const at = this.index.locate(document);
-    const per = at.project ? this.per.get(projectKey(at.project)) : undefined;
-    if (!at.project || at.sourceRel === undefined || !per) { return "this file is not in an Argus project; nothing was checked"; }
-    if (!vscode.workspace.isTrusted) { return `not checked: ${RESTRICTED}`; }
-    const key = at.sourceRel;
-    if (per.running.has(key)) { return undefined; }
+    if (!at.project || at.sourceRel === undefined) { return "this file is not in an Argus project; nothing was checked"; }
+    const done = await this.checkAt(at.project, at.sourceRel);
+    return done.always || !at.note ? done.say : undefined;      // with a note, the badge in the panel says it
+  }
+
+  /** Runs the check for one source file of a project. `say`: the outcome as a sentence; `always`: nothing was
+   *  run, and the sentence says why; `used`: the result was stored for the current generation. Create (piece 7)
+   *  calls this at the end of a run, when the document may be closed already. */
+  async checkAt(project: Project, key: string): Promise<{ say?: string; always?: boolean; used: boolean }> {
+    const per = this.per.get(projectKey(project));
+    if (!per) { return { say: "this file is not in an Argus project; nothing was checked", always: true, used: false }; }
+    if (!vscode.workspace.isTrusted) { return { say: `not checked: ${RESTRICTED}`, always: true, used: false }; }
+    if (per.running.has(key)) { return { used: false }; }
     per.running.add(key);
     this.changed();
+    let used = false;
     try {
       if (!per.git.watched) { await this.watchGit(per); }                 // a repository made since git was last asked
-      await this.index.refreshNow(at.project).catch(() => undefined);     // the panel and the checker speak of the same notes
+      await this.index.refreshNow(project).catch(() => undefined);        // the panel and the checker speak of the same notes
       const startedAt = per.checks.begin();
-      const ran = await this.run(at.project, key, "--json");
-      if (!ran) { return `not checked: ${RESTRICTED}`; }
+      const ran = await this.run(project, key, "--json");
+      if (!ran) { return { say: `not checked: ${RESTRICTED}`, always: true, used: false }; }
       const outcome: Outcome = ran.exit === null
         ? { state: "error", reason: `${ran.reason ?? "the checker did not run"}${ran.started ? "" : "; see the setting argus.python"}` }
         : stateOf(ran.exit, ran.stdout, key);
       // A result for an older generation is thrown away; a fingerprint call for the current one is due.
-      if (!per.checks.checkDone(key, startedAt, outcome, Date.now())) { this.soon(per); }
+      used = per.checks.checkDone(key, startedAt, outcome, Date.now());
+      if (!used) { this.soon(per); }
     } finally {
       per.running.delete(key);
       this.changed();
     }
-    if (at.note) { return undefined; }                         // the badge in the panel says it
     const shown = per.checks.shown(key);
-    return "outcome" in shown ? `${key}: ${badgeOf(shown.outcome, "").label}${shown.outcome.reason ? ` (${shown.outcome.reason})` : ""}`
-      : `${key}: not checked: ${shown.why}`;
+    return { used, say: "outcome" in shown ? `${key}: ${badgeOf(shown.outcome, "").label}${shown.outcome.reason ? ` (${shown.outcome.reason})` : ""}`
+      : `${key}: not checked: ${shown.why}` };
   }
 
   /** The validation badge of a file's note. */

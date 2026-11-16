@@ -1,8 +1,9 @@
-// Argus for VS Code: registers the panel, the markers, the check, the commands and the events. Wiring only; the
+// Argus for VS Code: registers the panel, the markers, the check, Create, the commands and the events. Wiring only; the
 // logic is in src/core.
 
 import * as vscode from "vscode";
 import { Check } from "./check";
+import { Create } from "./create";
 import { Index } from "./index";
 import { Markers } from "./markers";
 import { Panel } from "./panel";
@@ -16,13 +17,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const markers = new Markers(context.extensionUri, index, matcher);
   const check = new Check(context, index, () => { panel.render(); });
   panel.validation = (project, sourceRel, note) => check.badge(project, sourceRel, note);
+  const create = new Create(index, check, (text) => { panel.say(text); }, () => { panel.render(); });
+  panel.creating = (project, sourceRel, notes) => create.status(project, sourceRel, notes);
 
   const active = (): vscode.TextDocument | undefined => vscode.window.activeTextEditor?.document;
   const redraw = (): void => { panel.render(); markers.refresh(); };
   const forget = (): void => { matcher.keep((id) => index.notes.noteById(id) !== undefined); };
-  const configure = (): void => { index.configure(); forget(); check.configure(); redraw(); };
+  const configure = (): void => { index.configure(); forget(); check.configure(); create.configure(); redraw(); };
 
-  context.subscriptions.push(index, matched, markers, check, panel,
+  context.subscriptions.push(index, matched, markers, check, create, panel,
     // Shut down: no match goes on, and none is published to listeners that are gone.
     { dispose: () => { matcher.keep(() => false); } },
     vscode.window.registerWebviewViewProvider(Panel.viewId, panel),
@@ -37,7 +40,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const say = await check.check(panel.document());
       if (say) { panel.say(say); } else { panel.render(); }
     }),
-    vscode.commands.registerCommand("argus.create", () => { panel.say("Create explanation is not built yet (piece 7 of the plan)."); }),
+    vscode.commands.registerCommand("argus.create", () => create.create(panel.document())),
     vscode.commands.registerCommand("argus.openInObsidian", () => { panel.say("Open in Obsidian is not built yet (piece 8 of the plan)."); }),
 
     vscode.window.onDidChangeTextEditorSelection((event) => {

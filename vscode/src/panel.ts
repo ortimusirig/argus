@@ -10,7 +10,7 @@ import { Matcher } from "./core/matching";
 import { Latest } from "./core/latest";
 import { Context, handle, hrefsIn } from "./core/messages";
 import { Entry } from "./core/noteIndex";
-import { Badge, Listed, View, body, page, withoutNote } from "./core/panelHtml";
+import { Badge, Creating, Listed, View, body, page, withoutNote } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { projectKey } from "./core/settings";
 import { Shown, shownNote, shownView } from "./core/shown";
@@ -40,6 +40,8 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   /** The validation badge of a file's note; piece 6 (check.ts) sets it. */
   validation: (project: Project, sourceRel: string, note: Entry) => Badge =
     () => ({ label: "not checked", why: "no check has been run" });
+  /** What a run of Create says for a file of a project, given the notes that explain it; piece 7 (create.ts) sets it. */
+  creating: (project: Project, sourceRel: string, notes: readonly Entry[]) => Creating | undefined = () => undefined;
 
   constructor(extensionUri: vscode.Uri, private readonly index: Index, private readonly matcher: Matcher) {
     this.media = vscode.Uri.joinPath(extensionUri, "media");
@@ -178,7 +180,8 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
     if (!at.note || !at.note.file) {
       // No note, or several: the project's problems are shown too, so a refused note is not hidden (core/panelHtml.ts).
-      const view = withoutNote(at.sourceRel, this.listed(at.notes), this.index.notes.problemsOf(at.project));
+      const view = withoutNote(at.sourceRel, this.listed(at.notes), this.index.notes.problemsOf(at.project),
+        this.creating(at.project, at.sourceRel, at.notes));
       this.duplicates = view.kind === "duplicates";
       return view;
     }
@@ -205,6 +208,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
     return { kind: "file", file: at.sourceRel, note, noteId: entry.id, assignment, matching, selection, whole: this.whole,
       badge: this.validation(at.project, at.sourceRel, entry), linkTo: this.linkTo(at.project),
+      create: this.creating(at.project, at.sourceRel, at.notes),
       problems: this.index.notes.problemsOf(at.project) };
   }
 

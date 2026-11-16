@@ -184,3 +184,28 @@ test("a file without one note to show: no note with Create, or the duplicates to
   assert.deepEqual(twice, { kind: "duplicates", file: "src/a.py", notes, problems });
   assert.ok(body(twice).includes("outside the notes folder") && body(twice).includes("Duplicate notes: 2 notes"));
 });
+
+test("Create: what a run says is shown in words, escaped; while it runs there is no Create button to click again", () => {
+  const running = { text: `agent running in the terminal 'Argus: create explanation' ${EVIL}`, running: true };
+  const ended = { text: "the agent finished without writing the note", running: false };
+  const line = '<p class="create" role="status">';
+  // A file with a note whose selection has unexplained lines: Create is offered, unless a run is going.
+  const plain = body(fileView());
+  assert.ok(plain.includes('data-msg="create"') && !plain.includes(line));
+  const during = body(fileView({ create: running }));
+  assert.ok(during.includes(`${line}agent running in the terminal &#39;Argus: create explanation&#39; &lt;img`), during);
+  assert.ok(!during.includes("<img") && !during.includes('data-msg="create"'));
+  assert.ok(during.includes('data-msg="check"'), "the rest of the view stays");
+  const after = body(fileView({ create: ended }));
+  assert.ok(after.includes(`${line}the agent finished without writing the note</p>`) && after.includes('data-msg="create"'));
+  // A file without a note, and one with several.
+  const none = withoutNote("a.py", [], [], running);
+  assert.deepEqual(none, { kind: "message", text: "No note: no Argus note explains a.py.", button: "create", problems: [], create: running });
+  assert.ok(body(none).includes(line) && !body(none).includes('data-msg="create"') && !body(none).includes("<img"));
+  const noneAfter = body(withoutNote("a.py", [], [], ended));
+  assert.ok(noneAfter.includes(line) && noneAfter.includes('data-msg="create"'));
+  const twice = body(withoutNote("a.py", [{ id: 1, name: "A", folder: "C:/v/P" }, { id: 2, name: "B", folder: "C:/v/Q" }], [], running));
+  assert.ok(twice.includes(line) && twice.includes('data-pick="1"') && !twice.includes("<img"));
+  // The first-use button is no Create button: a status never hides it.
+  assert.ok(body({ kind: "message", text: "x", button: "setup", create: running }).includes('data-msg="setup"'));
+});

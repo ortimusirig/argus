@@ -48,7 +48,7 @@ test("the checker's arguments are the plan's, in its order", () => {
     ["-B", "c.py", "--fingerprint", "--notes", "C:/notes", "--source", "C:/src", "--scope", "a.py", "--vault", "C:/vault", "--graph", "C:/g.json"]);
 });
 
-test("only mayRun starts a program: no other execFile, no exec, no spawn, no shell, no task start in the source", () => {
+test("only mayRun starts a program and only mayStart starts a task: no other execFile, no exec, no spawn, no shell, no terminal in the source", () => {
   const src = path.resolve(__dirname, "../../src");
   const files = fs.readdirSync(src, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".ts") && !f.replace(/\\/g, "/").startsWith("test/"));
   assert.ok(files.length >= 15);
@@ -59,7 +59,12 @@ test("only mayRun starts a program: no other execFile, no exec, no spawn, no she
     // child_process is imported in one file only, and of it only execFile: so no exec, no spawn, no fork anywhere.
     assert.equal(text.includes("child_process"), name === "core/run.ts", `${name}: child_process`);
     if (name === "core/run.ts") { assert.ok(text.includes('import { execFile } from "node:child_process";')); }
-    for (const word of [/shell\s*:\s*true/, /\bexecuteTask\(/, /\bcreateTerminal\(/,/\bfetch\(/, /XMLHttpRequest/, /require\(["']https?["']\)/, /from ["'](node:)?(https?|net|tls|dgram)["']/]) {
+    // Piece 7: Create runs the agent as a task. The one task start is in `mayStart`, beside `mayRun` and behind the
+    // same trust guard; the task is a program with an argument list, never a shell line.
+    assert.equal((text.match(/\bexecuteTask\(/g) ?? []).length, name === "core/run.ts" ? 1 : 0, `${name}: executeTask(`);
+    assert.equal((text.match(/\bProcessExecution\(/g) ?? []).length, name === "create.ts" ? 1 : 0, `${name}: ProcessExecution(`);
+    assert.equal((text.match(/\bmayStart[<(]/g) ?? []).length, name === "create.ts" || name === "core/run.ts" ? 1 : 0, `${name}: mayStart(`);
+    for (const word of [/shell\s*:\s*true/, /ShellExecution/, /CustomExecution/, /\bcreateTerminal\(/, /sendText\(/, /\bfetch\(/, /XMLHttpRequest/, /require\(["']https?["']\)/, /from ["'](node:)?(https?|net|tls|dgram)["']/]) {
       assert.doesNotMatch(text, word, `${name}: ${word}`);
     }
   }

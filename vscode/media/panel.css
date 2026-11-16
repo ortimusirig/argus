@@ -29,3 +29,4 @@ summary { cursor: pointer; }
 ul { margin: 6px 0; padding-left: 20px; }
 ul.places { list-style: none; padding-left: 0; }
 ul.places li { margin: 6px 0; }
+.create { border-left: 3px solid var(--vscode-focusBorder); padding-left: 10px; overflow-wrap: anywhere; }

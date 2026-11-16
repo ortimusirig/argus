@@ -34,10 +34,13 @@ ${o.body}
 export interface Badge { label: string; why?: string; details?: Details; }
 export interface Listed { id: number; name: string; folder: string; }
 
+/** What a run of Create says for the file shown (core/create.ts). While it runs, no Create button is offered. */
+export interface Creating { text: string; running: boolean; }
+
 export type View =
   // `problems`, here and below: the notes of the project that the index could not use, each as one sentence.
-  | { kind: "message"; text: string; button?: "setup" | "create"; problems?: string[] }
-  | { kind: "duplicates"; file: string; notes: Listed[]; problems?: string[] }
+  | { kind: "message"; text: string; button?: "setup" | "create"; problems?: string[]; create?: Creating }
+  | { kind: "duplicates"; file: string; notes: Listed[]; problems?: string[]; create?: Creating }
   | { kind: "places"; name: string; places: Listed[] }
   | { kind: "note"; id: number; folder: string; note: { name: string; body: string }; linkTo: LinkTo }
   | { kind: "file"; file: string; note: FileNote; noteId: number;
@@ -46,6 +49,7 @@ export type View =
       selection?: { from: number; to: number };   // lines, 1-based
       whole: boolean;                          // "Explain this file": the lens table and every block
       badge: Badge; linkTo: LinkTo;
+      create?: Creating;
       problems: string[]; };                   // notes of the project whose source the index could not use
 
 const BUTTONS = { setup: "Choose the notes folder", create: "Create explanation", check: "Check notes" };
@@ -77,10 +81,16 @@ function problemsHtml(problems: string[] | undefined): string[] {
 
 /** The view of a source file that has no one note to show: no note explains it, or several do. The project's
  *  problems go with it: a note that was refused (its link leads out of the folders) is the likely reason. */
-export function withoutNote(file: string, notes: Listed[], problems: string[]): View {
+export function withoutNote(file: string, notes: Listed[], problems: string[], create?: Creating): View {
+  const creating = create ? { create } : {};
   return notes.length === 0
-    ? { kind: "message", text: `No note: no Argus note explains ${file}.`, button: "create", problems }
-    : { kind: "duplicates", file, notes, problems };
+    ? { kind: "message", text: `No note: no Argus note explains ${file}.`, button: "create", problems, ...creating }
+    : { kind: "duplicates", file, notes, problems, ...creating };
+}
+
+/** What a run of Create says, as a line of its own. Nothing when there is nothing to say. */
+function createHtml(create: Creating | undefined): string[] {
+  return create ? [`<p class="create" role="status">${escape(create.text)}</p>`] : [];
 }
 
 /** The "Check details" block: under the badge whenever a check result is stored, whatever the badge. */
@@ -177,7 +187,7 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
   out.push(`<p class="badge"><span class="badge-label">${escape(view.badge.label)}</span>${view.badge.why ? ` <span class="why">${escape(view.badge.why)}</span>` : ""}</p>`);
   if (view.badge.details) { out.push(checkHtml(view.badge.details)); }
   out.push(`<p class="actions">${button("check")} <button data-obsidian="${view.noteId}">Open note in Obsidian</button></p>`);
-  out.push(...problemsHtml(view.problems));
+  out.push(...createHtml(view.create), ...problemsHtml(view.problems));
   if (unreadable) {
     out.push("<ul class=\"problems\">" + note.problems.map((p) => `<li>${escape(p)}</li>`).join("\n") + "</ul>");
     return out.join("\n");
@@ -199,7 +209,7 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
     out.push('<p class="say">Nothing to explain on the selected lines: they are blank.</p>');
   }
   if (under.unexplained.length > 0 || blocks.some((placed) => placed.state === "changed" || placed.state === "ambiguous")) {
-    out.push(`<p class="actions">${button("create")}</p>`);
+    if (!view.create?.running) { out.push(`<p class="actions">${button("create")}</p>`); }
   }
   return out.join("\n");
 }
@@ -210,13 +220,13 @@ export function body(view: View, notice?: string): string {
   if (notice) { out.push(`<p class="notice" role="status">${escape(notice)}</p>`); }
   switch (view.kind) {
     case "message":
-      out.push(`<p class="say">${escape(view.text)}</p>`);
-      if (view.button) { out.push(`<p class="actions">${button(view.button)}</p>`); }
+      out.push(`<p class="say">${escape(view.text)}</p>`, ...createHtml(view.create));
+      if (view.button && !(view.button === "create" && view.create?.running)) { out.push(`<p class="actions">${button(view.button)}</p>`); }
       out.push(...problemsHtml(view.problems));
       break;
     case "duplicates":
       out.push(`<h1>${escape(view.file)}</h1>`, `<p class="say">Duplicate notes: ${view.notes.length} notes explain this file. `
-        + "Pick one for this session; nothing is chosen for you.</p>", listed(view.notes), ...problemsHtml(view.problems));
+        + "Pick one for this session; nothing is chosen for you.</p>", ...createHtml(view.create), listed(view.notes), ...problemsHtml(view.problems));
       break;
     case "places":
       out.push(`<p class="say">${many(view.places.length, "note is", "notes are")} named '${escape(view.name)}'. Pick one:</p>`, listed(view.places));

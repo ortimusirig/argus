@@ -37,6 +37,16 @@ export function mayRun(trust: { isTrusted: boolean }, program: string, args: rea
   });
 }
 
+/**
+ * The same guard for a VS Code task (Create runs the agent as one): hands `task` to `tasks` when the workspace is
+ * trusted. Not trusted: nothing is started and the answer is undefined. This is the one place that starts a task.
+ * The task holds a program and an argument list (a ProcessExecution), never a shell line; src/create.ts builds it.
+ */
+export function mayStart<T, E>(trust: { isTrusted: boolean }, tasks: { executeTask: (task: T) => PromiseLike<E> }, task: T): PromiseLike<E> | undefined {
+  if (!trust.isTrusted) { return undefined; }
+  return tasks.executeTask(task);
+}
+
 /** The arguments of the checker for one source file of a project: `--json` for a check, `--fingerprint` to ask
  *  whether a stored result is still valid. */
 export function checkerArgs(checker: string, project: Project, sourceRel: string, mode: "--json" | "--fingerprint"): string[] {
