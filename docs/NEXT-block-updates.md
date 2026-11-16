@@ -43,3 +43,11 @@ One changed line in a 1,400-line script rewrites a 30,000-word note (about 275,0
 No testing infrastructure and no new test code (owner, 2026-11-16): prove changes by running the product itself.
 Codex reviews stress the product. The 13 points of `docs/SKILL-FEEDBACK-2026-11-16.md` belong to the same skill
 revision where they touch the same text (dirty work tree, `%%` in inline code, a second language).
+
+## Added on 2026-11-16 (owner's question: "it didn't ask for the location of Obsidian?")
+
+6. First-run setup asks once for the vault and the notes folder, checks that the folder exists and lies inside a
+   vault (a `.obsidian` folder above it), and warns when it does not. Today the skill asks only "if unclear", does
+   not check that Obsidian is there, and the extension's "Choose the notes folder" asks for the notes folder only.
+7. The guided walk when the source may not be written to: `make_tour.py` gets a place outside the project, and the
+   notes say how to open it (`CodeTour: Open Tour File...`).
