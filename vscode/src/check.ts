@@ -98,8 +98,8 @@ export class Check implements vscode.Disposable {
    *  file name is no pattern. When the graph is a link, the file it leads to is watched the same way; an event
    *  for the configured path may mean the link leads elsewhere now, so the watchers are set anew. */
   private async watchGraph(per: Per): Promise<void> {
-    const graph = per.project.graph;
-    if (!graph) { return; }
+    if (!per.project.graph) { return; }
+    const graph = path.resolve(per.project.graph);      // as it is read: an event names a full path
     const asked = ++per.graphAsked;
     const real = await fs.promises.realpath(graph).catch(() => undefined);
     if (this.per.get(projectKey(per.project)) !== per) { return; }        // the settings changed meanwhile

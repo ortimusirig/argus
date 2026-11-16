@@ -213,7 +213,9 @@ export class NoteIndex {
       const inNotes = relativeIn(project.notesFolder, file, this.rules);
       const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
       const parts = rel === undefined ? [] : rel.split("/");
-      if (parts.slice(0, -1).some((part) => part.startsWith("."))) { return false; }
+      // Under a folder whose name starts with a dot nothing is the index's, but for the file a known link leads
+      // to: its change is the change of the note that is read through the link.
+      if (parts.slice(0, -1).some((part) => part.startsWith("."))) { return this.throughLink(held, file); }
       let folder: boolean | undefined;                       // undefined: gone
       try { folder = (await fs.promises.stat(file)).isDirectory(); } catch { folder = undefined; }
       if (folder === undefined) {
@@ -251,6 +253,16 @@ export class NoteIndex {
       if (way.key === key && way.file !== file && named(way.file)) { return way.file; }
     }
     return file;
+  }
+
+  /** Whether a link that the index read leads to this file. */
+  leadsTo(project: Project, file: string): boolean {
+    const held = this.of(project);
+    if (!held) { return false; }
+    let key: string;
+    try { key = this.keyOf(file); } catch { return false; }
+    for (const [found, way] of held.from) { if (way.key === key && found !== key) { return true; } }
+    return false;
   }
 
   /** An event for a file that is no .md by its name: it may be what a link `Name.md` leads to, changed, made or
