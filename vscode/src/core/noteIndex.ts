@@ -11,7 +11,8 @@ import { projectKey } from "./settings";
 export type Place = "notes" | "vault";
 
 /** One indexed note. `id` belongs to its real path in its project for as long as the extension runs; `revision`
- *  is new each time the index reads a new text for it: one counter for the whole index, which only rises, so no
+ *  is new each time the index reads a new text for it, or finds it under a new name or path: one counter for the
+ *  whole index, which only rises, so no
  *  revision is used twice, not by another note and not by a note that went and came back. */
 export interface Entry {
   id: number; revision: number; name: string; path: string; project: Project; place: Place;
@@ -219,7 +220,12 @@ export class NoteIndex {
     }
     let text: string;
     try { text = (await readText(file)).text; } catch { return drop(); }      // as the checker reads it
-    if (had && had.text === text && had.place === place) {
+    // The name and the path are asked of the file as it is now: the key is the same for `Original.md` and
+    // `original.md` on Windows, so a note renamed in letter case only is found under the key of the old one.
+    let real: string;
+    try { real = this.rules.real(file); } catch { return drop(); }
+    const name = this.nameOf(file, real);
+    if (had && had.text === text && had.place === place && had.name === name && had.path === real) {
       if (!had.file) { return false; }
       // The same note; whether its source is a file inside the root is asked again, as the disk may have changed.
       const before = had.sourceRel;
@@ -229,8 +235,6 @@ export class NoteIndex {
     const props = parseProps(text);
     const type = props.type.toLowerCase();
     if (!isArgus(props) || (place === "vault" && !VAULT_TYPES.has(type))) { return drop(); }
-    const name = path.basename(file).replace(/\.md$/i, "");
-    const real = this.rules.real(file);
     const idKey = projectKey(project) + "\n" + key;
     let id = this.ids.get(idKey);
     if (id === undefined) { id = this.nextId++; this.ids.set(idKey, id); }
@@ -244,6 +248,16 @@ export class NoteIndex {
     held.entries.set(key, entry);
     this.byId.set(id, entry);
     return true;
+  }
+
+  /** The note's name: the file's name without `.md`. On Windows the path as given may be spelled in another
+   *  letter case than the file on disk (an event for the old name after a rename in case only); the spelling on
+   *  disk is the name then, as links are compared with names letter for letter. */
+  private nameOf(file: string, real: string): string {
+    const given = path.basename(file).replace(/\.md$/i, "");
+    if (!this.rules.windows) { return given; }
+    const onDisk = real.slice(Math.max(real.lastIndexOf("\\"), real.lastIndexOf("/")) + 1).replace(/\.md$/i, "");
+    return onDisk.toLowerCase() === given.toLowerCase() ? onDisk : given;
   }
 
   /** Asks again, for every File note of the project, which file under the source root its `source` names: called

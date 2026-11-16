@@ -290,3 +290,35 @@ test("many folder events at once are answered by one reading of the folders", as
     assert.ok(lists < 2 * (one + 8), `one reading, not four: ${lists} pauses, ${one} for the first reading`);
   } finally { s.done(); }
 });
+
+test("a note renamed in letter case only takes its new name and path, on the file's events and on a refresh", async () => {
+  const s = scratch();
+  try {
+    const folder = path.join(s.root, "vault", "P", "Concepts");
+    const old = s.write("vault/P/Concepts/Original.md", other("concept"));
+    const index = new NoteIndex();
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.equal(index.notesByName("Original").length, 1);
+    const late = new NoteIndex();          // hears of no event: it reads the folders again
+    late.setProjects([s.project]);
+    await late.refreshNow(s.project);
+
+    const now = path.join(folder, "original.md");
+    fs.renameSync(old, now);
+    assert.ok(fs.readdirSync(folder).includes("original.md"));
+    // The watcher tells of the old path and of the new one.
+    await index.changed(s.project, old);
+    await index.changed(s.project, now);
+    await late.refreshNow(s.project);
+    for (const [which, notes] of [["events", index], ["refresh", late]] as const) {
+      assert.deepEqual(notes.notesByName("Original"), [], which);
+      const [entry] = notes.notesByName("original");
+      assert.ok(entry, `${which}: [[original]] finds the note`);
+      assert.equal(path.basename(entry.path), "original.md", which);
+      assert.equal(entry.other?.name, "original", which);
+      assert.equal(notes.noteById(entry.id), entry, which);
+      assert.ok(notes.holds(entry), which);
+    }
+  } finally { s.done(); }
+});
