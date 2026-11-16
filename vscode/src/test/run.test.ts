@@ -43,9 +43,9 @@ test("mayRun: arguments are an argument list, never read by a shell", async () =
 test("the checker's arguments are the plan's, in its order", () => {
   const project = { sourceRoot: "C:/src", notesFolder: "C:/notes" };
   assert.deepEqual(checkerArgs("C:/ext/scripts/check_notes.py", project, "sub/a.py", "--json"),
-    ["-B", "C:/ext/scripts/check_notes.py", "--json", "--notes", "C:/notes", "--source", "C:/src", "--scope", "sub/a.py", "--no-graph"]);
+    ["-B", "C:/ext/scripts/check_notes.py", "--json", "--notes", "C:/notes", "--source", "C:/src", "--scope=sub/a.py", "--no-graph"]);
   assert.deepEqual(checkerArgs("c.py", { ...project, vaultFolder: "C:/vault", graph: "C:/g.json" }, "a.py", "--fingerprint"),
-    ["-B", "c.py", "--fingerprint", "--notes", "C:/notes", "--source", "C:/src", "--scope", "a.py", "--vault", "C:/vault", "--graph", "C:/g.json"]);
+    ["-B", "c.py", "--fingerprint", "--notes", "C:/notes", "--source", "C:/src", "--scope=a.py", "--vault", "C:/vault", "--graph", "C:/g.json"]);
 });
 
 test("only mayRun starts a program and only mayStart starts a task: no other execFile, no exec, no spawn, no shell, no terminal in the source", () => {
@@ -90,4 +90,10 @@ test("the real checker, started through mayRun with these arguments, gives a res
     assert.equal(fingerprintOf(print?.exit ?? null, print?.stdout ?? ""), outcome.result?.fingerprint);
     assert.deepEqual(fs.readdirSync(project.notesFolder), [], "the check changes nothing");
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("checkerArgs: a file name that begins with a dash stays the value of --scope", () => {
+  const args = checkerArgs("c.py", { notesFolder: "C:/notes", sourceRoot: "C:/src" } as never, "-sample.py", "--json");
+  assert.ok(args.includes("--scope=-sample.py"));
+  assert.ok(!args.includes("-sample.py"), "never an argument of its own: the checker would read it as an option");
 });

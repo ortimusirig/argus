@@ -48,9 +48,10 @@ export function mayStart<T, E>(trust: { isTrusted: boolean }, tasks: { executeTa
 }
 
 /** The arguments of the checker for one source file of a project: `--json` for a check, `--fingerprint` to ask
- *  whether a stored result is still valid. */
+ *  whether a stored result is still valid. The file is given as `--scope=<file>`, one argument: a name that
+ *  begins with a dash would else be read as an option. */
 export function checkerArgs(checker: string, project: Project, sourceRel: string, mode: "--json" | "--fingerprint"): string[] {
-  return ["-B", checker, mode, "--notes", project.notesFolder, "--source", project.sourceRoot, "--scope", sourceRel,
+  return ["-B", checker, mode, "--notes", project.notesFolder, "--source", project.sourceRoot, `--scope=${sourceRel}`,
     ...(project.vaultFolder ? ["--vault", project.vaultFolder] : []),
     ...(project.graph ? ["--graph", project.graph] : ["--no-graph"])];
 }
