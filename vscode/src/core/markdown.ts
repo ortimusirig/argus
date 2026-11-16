@@ -38,6 +38,31 @@ function parenCloses(text: string): Int32Array {
   return closes;
 }
 
+/** The runs of backticks of the text: for each length, where the runs of that length begin, in order. A run is
+ *  all the backticks that stand together. The text is read once. */
+function backtickRuns(text: string): Map<number, number[]> {
+  const runs = new Map<number, number[]>();
+  for (let at = text.indexOf("`"); at >= 0;) {
+    let end = at + 1;
+    while (text[end] === "`") { end++; }
+    const starts = runs.get(end - at);
+    if (starts) { starts.push(at); } else { runs.set(end - at, [at]); }
+    at = text.indexOf("`", end);
+  }
+  return runs;
+}
+
+/** The first of the ordered positions that is not before `from`; -1 when there is none. A binary search. */
+function runAfter(starts: number[] | undefined, from: number): number {
+  if (!starts) { return -1; }
+  let low = 0, high = starts.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (starts[middle] < from) { low = middle + 1; } else { high = middle; }
+  }
+  return low < starts.length ? starts[low] : -1;
+}
+
 /** One line of text: code spans, [[links]], other links, bold, italic. */
 function inline(text: string, linkTo: LinkTo): string {
   let out = "", plain = "";
@@ -58,6 +83,7 @@ function inline(text: string, linkTo: LinkTo): string {
     return bracket;
   };
   let closes: Int32Array | undefined;
+  let runs: Map<number, number[]> | undefined;     // the runs of backticks of the line, listed once, when one is met
   let i = 0;
   while (i < text.length) {
     const c = text[i];
@@ -69,16 +95,8 @@ function inline(text: string, linkTo: LinkTo): string {
     if (c === "`") {
       let run = 1;
       while (text[i + run] === "`") { run++; }
-      const mark = "`".repeat(run);
-      let close = -1;
-      for (let at = i + run; !noCloser.has(mark);) {     // the next run of exactly as many backticks
-        at = text.indexOf("`", at);
-        if (at < 0) { noCloser.add(mark); break; }
-        let length = 1;
-        while (text[at + length] === "`") { length++; }
-        if (length === run) { close = at; break; }
-        at += length;
-      }
+      if (!runs) { runs = backtickRuns(text); }
+      const close = runAfter(runs.get(run), i + run);     // the next run of exactly as many backticks
       if (close >= 0) {
         let code = text.slice(i + run, close);
         if (code.length > 2 && code.startsWith(" ") && code.endsWith(" ")) { code = code.slice(1, -1); }
@@ -86,7 +104,7 @@ function inline(text: string, linkTo: LinkTo): string {
         out += `<code>${escape(code)}</code>`;
         i = close + run;
       } else {
-        plain += mark;
+        plain += text.slice(i, i + run);
         i += run;
       }
       continue;

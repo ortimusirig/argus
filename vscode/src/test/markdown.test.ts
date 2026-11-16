@@ -239,3 +239,46 @@ test("a very long list is rendered at once", () => {
   assert.ok(took < 500, `took ${took} ms`);
   assert.equal((html.match(/<li>/g) ?? []).length, 50000);
 });
+
+// ---------------------------------------------------------------- backtick runs
+
+test("code spans: a run of backticks closes on the next run of exactly as many", () => {
+  assert.equal(render("`a`"), "<p><code>a</code></p>");
+  assert.equal(render("``a ` b``"), "<p><code>a ` b</code></p>");
+  assert.equal(render("`` a ` b ``"), "<p><code>a ` b</code></p>");
+  assert.equal(render("a ` b"), "<p>a ` b</p>");                                   // no closer: the backtick is text
+  assert.equal(render("a `` b ` c"), "<p>a `` b ` c</p>");                         // runs of other lengths close nothing
+  assert.equal(render("`a`` b` c"), "<p><code>a`` b</code> c</p>");                // a longer run inside is code
+  assert.equal(render("``a` b`` `c`"), "<p><code>a` b</code> <code>c</code></p>");
+  assert.equal(render("`a` ``b`` ```c``` `d"), "<p><code>a</code> <code>b</code> <code>c</code> `d</p>");
+  assert.equal(render("\\`a` b`"), "<p>`a<code> b</code></p>");                    // \` is the sign; the next backtick opens
+  assert.equal(render("\\``a` b``"), "<p>`<code>a</code> b``</p>");               // the rest of the run opens, one backtick long
+  assert.equal(render("`a\\` b`"), "<p><code>a\\</code> b`</p>");                  // inside code a backslash is a backslash
+  assert.equal(render("`<b>` and *`x`* `*y*`"), "<p><code>&lt;b&gt;</code> and <em><code>x</code></em> <code>*y*</code></p>");
+  assert.equal(render("- `a` and ``b` ``\n\n| `c` | `d |\n"),
+    "<ul>\n<li><code>a</code> and <code>b` </code></li>\n</ul>\n<table>\n<tbody>\n<tr><td><code>c</code></td><td>`d</td></tr>\n</tbody>\n</table>");
+});
+
+test("backtick runs of many lengths cost time in proportion to the text", () => {
+  const runs = (lengths: number[], between = "x") => lengths.map((n) => "`".repeat(n)).join(between);
+  const upTo = (n: number) => Array.from({ length: n }, (_, k) => k + 1);
+  const shapes: [string, string][] = [
+    ["runs of every length from 1 to 1,600", runs(upTo(1600))],
+    ["runs of every length from 1,600 down to 1", runs(upTo(1600).reverse())],
+    ["runs of 1 to 1,000, each after a backslash", "\\" + runs(upTo(1000), "x\\")],
+    ["runs of 1 to 600 and of 601 to 1,200, by turns", runs(upTo(600).flatMap((n) => [n, n + 600]))],
+    ["runs of 2 to 1,200, then 20,000 single backticks", runs(upTo(1200).slice(1)) + " ` x".repeat(20000)],
+    ["40,000 runs of 2 and of 3 by turns, then one of 1", "`` x ``` y ".repeat(20000).replace(/^``/, "`````") + "`"],
+  ];
+  for (const [name, text] of shapes) {
+    const started = performance.now();
+    const html = render("x" + text);                // the x: a line that begins with ``` would be a fence
+    const took = performance.now() - started;
+    console.log(`timing: ${name} (${text.length} characters) rendered in ${took.toFixed(1)} ms`);
+    assert.ok(took < 200, `${name}: took ${took} ms`);
+    assert.ok(html.startsWith("<p>") && html.endsWith("</p>"));
+  }
+  // What the first shape is: no run has a partner, so every backtick is text.
+  assert.equal(render(runs(upTo(60))), `<p>${runs(upTo(60))}</p>`);
+  assert.equal(render(runs([1, 2, 3, 2, 1])), "<p><code>x``x```x``x</code></p>");
+});
