@@ -259,3 +259,59 @@ test("agreement with the checker: the same source and the same number of blocks"
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- decimal digits of other scripts
+
+const cp = (...points: number[]) => String.fromCodePoint(...points);
+
+test("decimal digits of other scripts are read as Python's int() reads them, also where two groups of ten are neighbours", () => {
+  const ranges = (written: string) => parseProps(`---\nwritten_by: argus\nmasked_lines: ${written}\n---\n`).maskedRanges;
+  // Mathematical digits: five groups of ten with nothing between them, U+1D7CE to U+1D7FF.
+  assert.deepEqual(ranges(`${cp(0x1d7d9)}, ${cp(0x1d7db)}`), [[1, 1], [3, 3]]);                      // double-struck 1 and 3
+  assert.deepEqual(ranges(cp(0x1d7d9, 0x1d7d8)), [[10, 10]]);                                         // double-struck 10
+  for (let group = 0; group < 5; group++) {
+    const zero = 0x1d7ce + 10 * group;
+    const all = Array.from({ length: 10 }, (_, digit) => cp(zero + digit));
+    assert.deepEqual(ranges(all.join(", ")), all.map((_, digit) => [digit, digit]), `the group at U+${zero.toString(16)}`);
+    assert.deepEqual(ranges(all.join("")), [[123456789, 123456789]]);
+  }
+  assert.deepEqual(ranges(`${cp(0x1d7ff)}-${cp(0x1d7cf, 0x1d7ce)}`), [[9, 10]]);                      // monospace 9 to bold 10
+  // Groups that stand alone, and digits of several scripts in one number.
+  assert.deepEqual(ranges(`${cp(0x663)}, ${cp(0x967, 0x968)}, ${cp(0xff17)}-${cp(0xff19)}`), [[3, 3], [12, 12], [7, 9]]);
+  assert.deepEqual(ranges(`1${cp(0x1d7da)}${cp(0x669)}`), [[129, 129]]);
+  assert.deepEqual(ranges("0, 7, 10-12, 007"), [[0, 0], [7, 7], [10, 12], [7, 7]]);
+  // The same digits in a block's range and in the Line cell of its rows.
+  const two = cp(0x1d7da), four = cp(0x1d7dc), one = cp(0x1d7d9);
+  const text = ["---", "type: file", "written_by: argus", "source: a.py", "depth: full", "---",
+    `### Block 1: the lines (lines ${one}${two}-${one}${four})`, "", "```py", "a", "b", "c", "```", "",
+    "| Line | Code | What happens | Real value |", "| --- | --- | --- | --- |",
+    `| ${one}${two} | \`a\` | it happens | none |`, `| ${one}${cp(0x1d7db)}-${one}${four} | \`b\` | it happens | none |`, ""].join("\n");
+  const note = parseFileNote("n", "p", text);
+  assert.deepEqual(note.problems, []);
+  assert.deepEqual([note.blocks[0].from, note.blocks[0].to], [12, 14]);
+  assert.deepEqual(note.blocks[0].rows.map((row) => [row.from, row.to]), [[12, 12], [13, 14]]);
+});
+
+test("every decimal digit of Unicode has the value Python's int() gives it", { skip: noPython }, (t) => {
+  const program = ["import json, sys, unicodedata",
+    "print(json.dumps([[c, int(chr(c))] for c in range(sys.maxunicode + 1) if unicodedata.category(chr(c)) == 'Nd']))"].join("\n");
+  const out = spawnSync("python", ["-B", "-c", program], { encoding: "utf8" });
+  assert.equal(out.status, 0, out.stderr);
+  const digits = JSON.parse(out.stdout) as [number, number][];
+  assert.ok(digits.length >= 650, `Python named ${digits.length} decimal digits`);
+  // Node and Python may know different versions of Unicode: a digit only one of them knows is counted, not compared.
+  const known = digits.filter(([c]) => /^\p{Nd}$/u.test(cp(c)));
+  const props = parseProps(`---\nmasked_lines: ${known.map(([c]) => cp(c)).join(", ")}\n---\n`);
+  assert.equal(props.maskedRanges.length, known.length);
+  known.forEach(([c, value], i) => assert.deepEqual(props.maskedRanges[i], [value, value], `U+${c.toString(16).toUpperCase()}`));
+  // Two digits together: each digit after a 1 of its own group, and after an ASCII 1.
+  const pairs = known.map(([c, value]) => `${cp(c - value + 1, c)}-1${cp(c)}`);
+  const paired = parseProps(`---\nmasked_lines: ${pairs.join(", ")}\n---\n`).maskedRanges;
+  known.forEach(([c, value], i) => assert.deepEqual(paired[i], [10 + value, 10 + value], `1 and U+${c.toString(16).toUpperCase()}`));
+  const python = new Set(digits.map(([c]) => c));
+  let onlyNode = 0;
+  for (let c = 0; c <= 0x10ffff; c++) {
+    if ((c < 0xd800 || c > 0xdfff) && !python.has(c) && /^\p{Nd}$/u.test(cp(c))) { onlyNode++; }
+  }
+  t.diagnostic(`${known.length} decimal digits compared; ${digits.length - known.length} known to Python only, ${onlyNode} to Node only`);
+});

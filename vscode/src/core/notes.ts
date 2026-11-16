@@ -61,10 +61,13 @@ function pyInt(digits: string): number {
   if (/^[0-9]+$/.test(digits)) { return Number(digits); }
   let value = 0;
   for (const ch of digits) {
-    // Unicode keeps each script's digits 0 to 9 together and in order: the digit's value is its place in its run.
-    let c = ch.codePointAt(0) ?? 0, place = 0;
-    while (place < 10 && DECIMAL.test(String.fromCodePoint(c - 1))) { c--; place++; }
-    value = value * 10 + (place % 10);
+    // Unicode keeps each script's digits 0 to 9 together and in order, and groups of ten may stand side by side
+    // (the mathematical digits are five groups in one run). A run of decimal digits therefore starts at a zero and
+    // holds whole groups: the digit's value is its distance from the start of its run, counted in tens.
+    const c = ch.codePointAt(0) ?? 0;
+    let start = c;
+    while (start > 0 && DECIMAL.test(String.fromCodePoint(start - 1))) { start--; }
+    value = value * 10 + ((c - start) % 10);
   }
   return value;
 }
