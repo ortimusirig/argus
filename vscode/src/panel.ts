@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 import { Index } from "./index";
 import { LinkTo } from "./core/markdown";
 import { Matcher } from "./core/matching";
+import { Latest } from "./core/latest";
 import { Context, handle, hrefsIn } from "./core/messages";
 import { Entry } from "./core/noteIndex";
 import { Badge, Listed, View, body, page } from "./core/panelHtml";
@@ -31,6 +32,7 @@ export class Panel implements vscode.WebviewViewProvider {
   private hrefs: ReadonlySet<string> = new Set();
   private inner = "";
   private quiet?: NodeJS.Timeout;
+  private readonly latest = new Latest();                     // what was asked for after the selection moved stays (core/latest.ts)
   private again?: NodeJS.Timeout;
   private editor?: vscode.TextEditor;
   private asked?: { key: string; at: number };                // the match the panel waits for, and since when
@@ -68,15 +70,25 @@ export class Panel implements vscode.WebviewViewProvider {
     return this.current()?.document;
   }
 
-  /** The selection or the text changed: the panel follows after 200 ms of quiet, and shows the file again. */
+  /** The selection or the text changed: the panel follows after 200 ms of quiet, and shows the file again.
+   *  What the person asked for in that time (a CodeLens, a linked note, a notice) is newer than the change and stays. */
   follow(): void {
     if (!this.visible) { return; }
+    this.latest.moved();
     if (this.quiet) { clearTimeout(this.quiet); }
     this.quiet = setTimeout(() => {
       this.quiet = undefined;
-      this.shown = undefined; this.pinned = undefined; this.notice = undefined;
+      if (this.latest.stale("shown")) { this.shown = undefined; }
+      if (this.latest.stale("pinned")) { this.pinned = undefined; }
+      if (this.latest.stale("notice")) { this.notice = undefined; }
       this.render();
     }, QUIET_MS);
+  }
+
+  /** Sets the notice (or takes it away) as asked for now. */
+  private tell(text: string | undefined): void {
+    this.notice = text;
+    this.latest.asked("notice");
   }
 
   /** "Explain selection" and "Explain this file": opens the panel on the lines or on the file. */
@@ -84,13 +96,14 @@ export class Panel implements vscode.WebviewViewProvider {
     this.whole = whole;
     this.pinned = pinned;
     this.shown = undefined; this.notice = undefined;
+    this.latest.asked("pinned", "shown", "notice");
     await vscode.commands.executeCommand(`${Panel.viewId}.focus`);
     this.render();
   }
 
   /** A sentence shown above everything in the panel. */
   say(text: string): void {
-    this.notice = text;
+    this.tell(text);
     this.render();
     if (!this.visible) { void vscode.window.showInformationMessage(`Argus: ${text}`); }
   }
@@ -179,6 +192,7 @@ export class Panel implements vscode.WebviewViewProvider {
   private showNote(entry: Entry): void {
     // Only which note is kept: its text is the index's own copy at the time of each drawing (core/shown.ts).
     this.shown = shownNote(entry);
+    this.latest.asked("shown");
   }
 
   /** A message from the page. What it may do is decided by `handle`; anything it does not allow is dropped. */
@@ -193,24 +207,28 @@ export class Panel implements vscode.WebviewViewProvider {
     const action = handle(message, context);
     switch (action.do) {
       case "drop": return;
-      case "say": this.notice = action.text; break;
-      case "show": this.notice = undefined; this.showNote(action.note); break;
-      case "list": this.notice = undefined; this.shown = { kind: "places", name: action.name, places: this.listed(action.places) }; break;
+      case "say": this.tell(action.text); break;
+      case "show": this.tell(undefined); this.showNote(action.note); break;
+      case "list":
+        this.tell(undefined);
+        this.shown = { kind: "places", name: action.name, places: this.listed(action.places) };
+        this.latest.asked("shown");
+        break;
       case "pick":
-        this.notice = undefined;
+        this.tell(undefined);
         if (this.duplicates && !this.shown && action.note.file) { this.index.choose(action.note); } else { this.showNote(action.note); }
         break;
-      case "obsidian": this.notice = "Open in Obsidian is not built yet (piece 8 of the plan)."; break;
+      case "obsidian": this.tell("Open in Obsidian is not built yet (piece 8 of the plan)."); break;
       case "open":
         try {
           await vscode.env.openExternal(vscode.Uri.parse(action.href, true));
         } catch {
-          this.notice = `this address could not be opened: ${action.href}`;
+          this.tell(`this address could not be opened: ${action.href}`);
         }
         break;
       case "ask": {
         let target: vscode.Uri;
-        try { target = vscode.Uri.parse(action.href, true); } catch { this.notice = `this address could not be opened: ${action.href}`; break; }
+        try { target = vscode.Uri.parse(action.href, true); } catch { this.tell(`this address could not be opened: ${action.href}`); break; }
         const answer = await vscode.window.showWarningMessage("A note asks to open a file on this computer.",
           { modal: true, detail: target.fsPath }, "Open");
         if (answer === "Open") { await vscode.env.openExternal(target); }
