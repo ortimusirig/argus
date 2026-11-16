@@ -48,23 +48,25 @@ function prepare(assignment: Assignment): Marks {
     trimmed.set(t.id, ` This code is at ${t.places} identical places; the ${t.kept} nearest to the block's recorded line were looked at.`);
   }
   for (const placed of assignment.placed) {
-    const name = `${placed.block.id}: ${placed.block.purpose}`;
+    // A block without a purpose in its heading is named by its number alone (no colon with nothing after it).
+    const name = placed.block.purpose === "" ? `block ${placed.block.id}` : `${placed.block.id}: ${placed.block.purpose}`;
+    const named = placed.block.purpose === "" ? name : `block ${name}`;
     const few = trimmed.get(placed.block.id) ?? "";
     let say: string, tail = "";
     if (placed.state === "current") {
-      say = `Argus: block ${name}. Current.`;
+      say = `Argus: ${named}. Current.`;
     } else if (placed.state === "current-masked") {
-      say = `Argus: block ${name}. State: current (masked). The note hides part of this code.`;
+      say = `Argus: ${named}. State: current (masked). The note hides part of this code.`;
       tail = " (masked)";
     } else if (placed.state === "changed") {
-      say = `Argus: block ${name}. State: changed. Its explanation was written for earlier code`
+      say = `Argus: ${named}. State: changed. Its explanation was written for earlier code`
         + (placed.spacesOnly ? "; the code here differs only in spaces at line ends." : ".");
       tail = " (changed)";
     } else {
       // A hover is sent to the editor once for each marked place: it names the first places only and says how
       // many more there are; the panel lists every one.
       const places = placed.candidates ?? [], first = places.slice(0, HOVER_PLACES), more = places.length - first.length;
-      say = `Argus: block ${name}. State: ambiguous. This code is at lines ${andList(first)}`
+      say = `Argus: ${named}. State: ambiguous. This code is at lines ${andList(first)}`
         + (more > 0 ? ` and at ${more} more places (the Argus panel lists all)` : "") + "; the order of the blocks does not decide which.";
       tail = " (ambiguous)";
     }

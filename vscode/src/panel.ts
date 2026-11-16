@@ -83,8 +83,11 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       const asked = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === pinned.uri);
       if (asked) { this.editor = asked; return asked; }
     }
+    // An editor that holds no file (the text box of a comment, an output view) is no place the person reads code
+    // at: while the last file's editor is still shown, the panel stays with it.
     const active = vscode.window.activeTextEditor;
-    if (active) { this.editor = active; }
+    const file = (editor: vscode.TextEditor): boolean => editor.document.uri.scheme === "file" && !editor.document.isUntitled;
+    if (active && (file(active) || !this.editor || !vscode.window.visibleTextEditors.includes(this.editor))) { this.editor = active; }
     return this.editor && vscode.window.visibleTextEditors.includes(this.editor) ? this.editor : active;
   }
 
