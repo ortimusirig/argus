@@ -20,22 +20,34 @@ export interface PosixDisk {
   isFile(file: string): boolean;
 }
 
-const MOST_LINKS = 40;     // as many links as the system itself follows in one path
-
 /** The real path on a POSIX system, read one component at a time as the file system reads it, and as Python's
  *  (base / rel).resolve() does: a symbolic link is replaced by what is written in it (from the root, or from the
  *  link's folder) whether or not that exists; a `..` goes up from where the components before it have led; a name
- *  that is not on disk is kept as written (a file not saved yet). Throws when the links do not end. */
+ *  that is not on disk is kept as written (a file not saved yet).
+ *  No count of links is a limit. A link is read once: where it leads is kept, and a path that meets it again goes
+ *  there at once. Throws when the links lead round in a circle: a link is met while it is itself being resolved. */
 function posixReal(full: string, link: (file: string) => string | undefined): string {
-  const left = full.split("/").reverse();      // the components still to read, the next one last
-  let at = "", followed = 0;                   // the real path so far; "" is the root
+  // The components still to read, the next one last. Where a link's own components end, the link is written down
+  // instead of a component: all before it are read, so the path reached is where the link leads.
+  const left: (string | { resolved: string })[] = full.split("/").reverse();
+  const leads = new Map<string, string | undefined>();     // each link met: where it leads; undefined while it is being resolved
+  let at = "";                                             // the real path so far; "" is the root
   while (left.length > 0) {
-    const name = left.pop() as string;
+    const name = left.pop() as string | { resolved: string };
+    if (typeof name !== "string") { leads.set(name.resolved, at); continue; }
     if (name === "" || name === ".") { continue; }
     if (name === "..") { at = at.slice(0, at.lastIndexOf("/")); continue; }
-    const target = link(at + "/" + name);
-    if (target === undefined) { at += "/" + name; continue; }
-    if (++followed > MOST_LINKS) { throw new Error(`too many symbolic links in '${full}'`); }
+    const here = at + "/" + name;
+    if (leads.has(here)) {
+      const known = leads.get(here);
+      if (known === undefined) { throw new Error(`symbolic links lead round in a circle at '${here}', in '${full}'`); }
+      at = known;
+      continue;
+    }
+    const target = link(here);
+    if (target === undefined) { at = here; continue; }
+    leads.set(here, undefined);
+    left.push({ resolved: here });
     if (target.startsWith("/")) { at = ""; }
     const parts = target.split("/");
     for (let k = parts.length - 1; k >= 0; k--) { left.push(parts[k]); }

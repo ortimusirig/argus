@@ -268,10 +268,66 @@ test("sourceInRoot: links that lead round in a circle are refused, and at once (
   const here = project("/repo"), nowhere = project("/repo/a");
   assert.equal(projectFor("/repo/self/x.py", [here], loop), undefined);
   assert.equal(projectFor("/repo/target.py", [nowhere, here], loop), here);              // a root that is nowhere is passed over
-  // As many links as the system follows in one path, 40, and one more.
-  const row = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, k) => [`/repo/l${k}`, k + 1 < n ? `l${k + 1}` : "sub"]));
-  assert.equal(sourceInRoot("/repo", "l0/target.py", disk(row(40), files)), "sub/target.py");
-  assert.equal(sourceInRoot("/repo", "l0/target.py", disk(row(41), files)), undefined);
+});
+
+/** A chain of `n` links in /repo: l0 names l1, l1 names l2, and so on; the last one names the folder `sub`. */
+const chain = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, k) => [`/repo/l${k}`, k + 1 < n ? `l${k + 1}` : "sub"]));
+
+test("sourceInRoot: a long chain of links that is no circle resolves, as Python's resolve() resolves it (POSIX rules)", () => {
+  const files = ["/repo/target.py", "/repo/sub/target.py"];
+  // No count of links is a limit: 40, 41 (one more than the system follows in one path) and 1,000 all resolve.
+  for (const n of [40, 41, 1000]) {
+    const rules = disk(chain(n), files);
+    assert.equal(sourceInRoot("/repo", "l0/target.py", rules), "sub/target.py", `a chain of ${n} links`);
+    assert.equal(sourceInRoot("/repo", `l${n - 1}/../l0/../target.py`, rules), "target.py", `a chain of ${n} links, entered twice`);
+    assert.equal(relativeIn("/repo", "/repo/l0/unsaved.py", rules), "sub/unsaved.py");
+    assert.equal(projectFor("/repo/l0/target.py", [project("/repo/sub")], rules)?.sourceRoot, "/repo/sub");
+  }
+});
+
+test("sourceInRoot: a link met twice in one path, but not while it is being resolved, is no circle (POSIX rules)", () => {
+  const files = ["/repo/target.py", "/repo/sub/target.py", "/repo/sub/deep/inner.py"];
+  const links = { "/repo/a": "sub", "/repo/twice": "a/../a", "/repo/both": "a/deep/../../a/deep", "/repo/sub/deep/up": "../../a",
+    "/repo/left": "a", "/repo/right": "a", "/repo/fork": "left/../right" };
+  const rules = disk(links, files);
+  assert.equal(sourceInRoot("/repo", "a/../a/target.py", rules), "sub/target.py");               // twice in the path as written
+  assert.equal(sourceInRoot("/repo", "twice/target.py", rules), "sub/target.py");                // twice in what one link names
+  assert.equal(sourceInRoot("/repo", "both/inner.py", rules), "sub/deep/inner.py");
+  assert.equal(sourceInRoot("/repo", "fork/target.py", rules), "sub/target.py");                 // through two links that name it
+  assert.equal(sourceInRoot("/repo", "a/deep/up/deep/up/target.py", rules), "sub/target.py");    // back to it through a link below it
+  assert.equal(sourceInRoot("/repo", "left/../right/../a/../target.py", rules), "target.py");
+});
+
+test("sourceInRoot: a circle of two links and a link to itself are refused at once, however they are reached (POSIX rules)", () => {
+  const files = ["/repo/target.py", "/repo/sub/target.py"];
+  const reads = { count: 0 };
+  const links = new Map(Object.entries({ "/repo/a": "b", "/repo/b": "a", "/repo/self": "self", "/repo/self2": "./self2",
+    "/repo/in": "sub/../in/x", "/repo/to-circle": "a", ...Object.fromEntries(Object.entries(chain(1000)).map(([k, v]) => [k, v === "sub" ? "a" : v])) }));
+  const rules = posixRules({ link: (file) => { reads.count++; return links.get(file); }, isFile: (file) => files.includes(file) });
+  for (const source of ["a", "b", "a/target.py", "a/../target.py", "self", "self/../target.py", "self2/target.py", "in/../target.py",
+    "to-circle/../target.py", "sub/../b/../target.py", "l0/../target.py"]) {
+    reads.count = 0;
+    const started = performance.now();
+    assert.equal(sourceInRoot("/repo", source, rules), undefined, `source '${source}'`);
+    const took = performance.now() - started;
+    assert.ok(took < 100, `source '${source}': refused after ${took} ms`);
+    assert.ok(reads.count < 1100, `source '${source}': the disk was asked ${reads.count} times`);   // l0: 1,000 links, each read once
+  }
+  assert.equal(sourceInRoot("/repo", "target.py", rules), "target.py");
+});
+
+test("a link already resolved is not read again: a long chain costs each of its links once (POSIX rules)", () => {
+  const files = ["/repo/sub/target.py"];
+  const links = new Map(Object.entries(chain(1000)));
+  let reads = 0;
+  const rules = posixRules({ link: (file) => { if (links.has(file)) { reads++; } return links.get(file); }, isFile: (file) => files.includes(file) });
+  // The whole chain is named 200 times in one path. Followed again each time, that is 200,000 links read.
+  const started = performance.now();
+  assert.equal(rules.real("/repo/" + "l0/../".repeat(200) + "l0/target.py"), "/repo/sub/target.py");
+  const took = performance.now() - started;
+  console.log(`timing: a chain of 1,000 links named 200 times in one path resolved in ${took.toFixed(1)} ms, ${reads} links read`);
+  assert.ok(reads <= 1200, `${reads} links were read`);
+  assert.ok(took < 200, `took ${took} ms`);
 });
 
 test("on the disk of this system: a link whose target does not exist, as the system and the checker read it", (t) => {
