@@ -1,0 +1,201 @@
+// The check inside VS Code: runs the skill's own checker, stores its result, and asks the checker's fingerprint
+// whether a stored result still holds. Wiring only. The rules are in src/core: validity.ts (which finished call
+// may be used), checkResult.ts (what a result means), run.ts (`mayRun`, the trust guard and the only process start).
+// Nothing here ever changes a note.
+
+import * as path from "node:path";
+import * as vscode from "vscode";
+import { Index } from "./index";
+import { Outcome, badgeOf, fingerprintOf, stateOf } from "./core/checkResult";
+import { Entry } from "./core/noteIndex";
+import { Badge } from "./core/panelHtml";
+import { Project } from "./core/projects";
+import { Ran, RunOptions, checkerArgs, mayRun } from "./core/run";
+import { projectKey, userPython } from "./core/settings";
+import { Checks, Memory, Stored } from "./core/validity";
+
+const QUIET_MS = 1500;
+const LIMITS: RunOptions = { timeoutMs: 120000, maxBuffer: 20 * 1024 * 1024 };
+const RESTRICTED = "this window is in Restricted Mode";
+
+interface Per {
+  project: Project; checks: Checks;
+  watchers: vscode.Disposable[];
+  timer?: NodeJS.Timeout;
+  work: Promise<void>;                 // fingerprint calls of one project run one after the other
+  running: Set<string>;                // the source files whose check is running
+}
+
+export class Check implements vscode.Disposable {
+  private readonly per = new Map<string, Per>();
+  private readonly kept = new Map<string, Checks>();          // a project's results outlive a change of the settings
+  private readonly listeners: vscode.Disposable[];
+
+  /** `changed` is called when a badge may have changed. */
+  constructor(private readonly context: vscode.ExtensionContext, private readonly index: Index, private readonly changed: () => void) {
+    const touch = (project: Project): void => { this.inputChanged(project); };
+    this.listeners = [
+      index.onDidTouch(touch),            // a note or vault file event
+      index.onDidChange(touch),           // the index found the notes changed
+      vscode.window.onDidChangeWindowState((state) => {
+        if (state.focused) { for (const per of this.per.values()) { this.touch(per); } }     // covers changes no watcher saw
+      }),
+      vscode.workspace.onDidGrantWorkspaceTrust(() => {
+        for (const per of this.per.values()) { void this.watchGit(per); this.confirm(per); }   // the pending calls start
+      }),
+    ];
+  }
+
+  /** The results of a project in the workspace storage, by source path. */
+  private memory(key: string): Memory {
+    const name = `argus.check ${key}`;
+    const all: Record<string, Stored> = { ...this.context.workspaceState.get<Record<string, Stored>>(name, {}) };
+    return {
+      keys: () => Object.keys(all),
+      get: (source) => Object.prototype.hasOwnProperty.call(all, source) ? all[source] : undefined,
+      set: (source, value) => {
+        if (value) { all[source] = value; } else { delete all[source]; }
+        void this.context.workspaceState.update(name, { ...all });
+      },
+    };
+  }
+
+  /** The projects of the settings changed, or were read for the first time: a settings change is an input event. */
+  configure(): void {
+    for (const per of this.per.values()) { this.stop(per); }
+    this.per.clear();
+    for (const project of this.index.projects) {
+      const key = projectKey(project);
+      let checks = this.kept.get(key);
+      if (!checks) { checks = new Checks(this.memory(key)); this.kept.set(key, checks); }
+      checks.changed();
+      const per: Per = { project, checks, watchers: [], work: Promise.resolve(), running: new Set() };
+      this.per.set(key, per);
+      this.watch(per, project.sourceRoot, "**/*");
+      if (project.graph) { this.watch(per, path.dirname(project.graph), path.basename(project.graph)); }
+      void this.watchGit(per);
+      this.confirm(per);                 // on activation: for the files that have a stored result
+    }
+  }
+
+  private stop(per: Per): void {
+    if (per.timer) { clearTimeout(per.timer); }
+    for (const watcher of per.watchers) { watcher.dispose(); }
+    per.watchers = [];
+  }
+
+  private watch(per: Per, folder: string, pattern: string): void {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), pattern));
+    const git = `${path.sep}.git${path.sep}`;
+    // What git keeps under the source root is followed by the git watchers below, through HEAD and the refs only.
+    const seen = (uri: vscode.Uri): void => { if (pattern !== "**/*" || !uri.fsPath.includes(git)) { this.touch(per); } };
+    per.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
+  }
+
+  /** Asks git where the repository keeps its data, and watches HEAD, the refs, packed-refs and shallow there.
+   *  No git, or not a repository: no git watchers. */
+  private async watchGit(per: Per): Promise<void> {
+    const root = per.project.sourceRoot;
+    const folders = new Set<string>();
+    for (const question of ["--absolute-git-dir", "--git-common-dir"]) {
+      const ran = await mayRun(vscode.workspace, "git", ["-C", root, "rev-parse", question], { timeoutMs: 10000, maxBuffer: 1024 * 1024 });
+      const answer = ran?.exit === 0 ? ran.stdout.replace(/\r?\n$/, "") : "";
+      if (answer !== "") { folders.add(path.resolve(root, answer)); }
+    }
+    if (this.per.get(projectKey(per.project)) !== per) { return; }      // the settings changed meanwhile
+    for (const folder of folders) { this.watch(per, folder, "{HEAD,packed-refs,shallow,refs/**}"); }
+  }
+
+  /** Something the checker reads may have changed: the generation moves on, and the fingerprint is asked after
+   *  1500 ms of quiet. Also called after a finished Create. */
+  inputChanged(project: Project): void {
+    const per = this.per.get(projectKey(project));
+    if (per) { this.touch(per); }
+  }
+
+  private touch(per: Per): void {
+    per.checks.changed();
+    this.soon(per);
+  }
+
+  /** A fingerprint call for the current generation is due, 1500 ms after the last event. */
+  private soon(per: Per): void {
+    const first = per.timer === undefined;
+    if (per.timer) { clearTimeout(per.timer); }
+    per.timer = setTimeout(() => { per.timer = undefined; this.confirm(per); }, QUIET_MS);
+    if (first) { this.changed(); }       // the badges fell to "not checked"; further events of this burst change nothing more
+  }
+
+  /** Starts the checker for one source file. Undefined when the workspace is not trusted: nothing was started. */
+  private run(project: Project, sourceRel: string, mode: "--json" | "--fingerprint"): Promise<Ran> | undefined {
+    // argus.python is read from the user's own settings only; a workspace cannot choose the program.
+    const python = userPython(vscode.workspace.getConfiguration("argus").inspect<unknown>("python"));
+    const checker = vscode.Uri.joinPath(this.context.extensionUri, "scripts", "check_notes.py").fsPath;
+    return mayRun(vscode.workspace, python, checkerArgs(checker, project, sourceRel, mode), LIMITS);
+  }
+
+  /** Asks the fingerprint for every stored result that waits for an answer for the current generation. */
+  private confirm(per: Per): void {
+    per.work = per.work.then(async () => {
+      if (this.per.get(projectKey(per.project)) !== per || per.checks.due().length === 0) { return; }
+      if (!vscode.workspace.isTrusted) { return; }             // onDidGrantWorkspaceTrust starts these calls
+      await this.index.refreshNow(per.project).catch(() => undefined);
+      for (const sourceRel of per.checks.due()) {
+        const startedAt = per.checks.begin();
+        const ran = await this.run(per.project, sourceRel, "--fingerprint");
+        if (!ran) { return; }
+        per.checks.fingerprintDone(sourceRel, startedAt, fingerprintOf(ran.exit, ran.stdout));
+        if (!per.checks.accept(startedAt)) { break; }          // the event that moved the generation asks again
+      }
+      this.changed();
+    }).catch(() => undefined);
+  }
+
+  /** "Argus: Check notes" for a document. Returns a sentence for the panel when there is one to say. */
+  async check(document: vscode.TextDocument | undefined): Promise<string | undefined> {
+    if (!document) { return "open a file first; nothing was checked"; }
+    const at = this.index.locate(document);
+    const per = at.project ? this.per.get(projectKey(at.project)) : undefined;
+    if (!at.project || at.sourceRel === undefined || !per) { return "this file is not in an Argus project; nothing was checked"; }
+    if (!vscode.workspace.isTrusted) { return `not checked: ${RESTRICTED}`; }
+    const key = at.sourceRel;
+    if (per.running.has(key)) { return undefined; }
+    per.running.add(key);
+    this.changed();
+    try {
+      await this.index.refreshNow(at.project).catch(() => undefined);     // the panel and the checker speak of the same notes
+      const startedAt = per.checks.begin();
+      const ran = await this.run(at.project, key, "--json");
+      if (!ran) { return `not checked: ${RESTRICTED}`; }
+      const outcome: Outcome = ran.exit === null
+        ? { state: "error", reason: `${ran.reason ?? "the checker did not run"}${ran.started ? "" : "; see the setting argus.python"}` }
+        : stateOf(ran.exit, ran.stdout, key);
+      // A result for an older generation is thrown away; a fingerprint call for the current one is due.
+      if (!per.checks.checkDone(key, startedAt, outcome, Date.now())) { this.soon(per); }
+    } finally {
+      per.running.delete(key);
+      this.changed();
+    }
+    if (at.note) { return undefined; }                         // the badge in the panel says it
+    const shown = per.checks.shown(key);
+    return "outcome" in shown ? `${key}: ${badgeOf(shown.outcome, "").label}${shown.outcome.reason ? ` (${shown.outcome.reason})` : ""}`
+      : `${key}: not checked: ${shown.why}`;
+  }
+
+  /** The validation badge of a file's note. */
+  badge(project: Project, sourceRel: string, note: Entry): Badge {
+    const per = this.per.get(projectKey(project));
+    if (!vscode.workspace.isTrusted) { return { label: "not checked", why: RESTRICTED }; }
+    if (!per) { return { label: "not checked", why: "no check has been run" }; }
+    if (per.running.has(sourceRel)) { return { label: "not checked", why: "the check is running…" }; }
+    const shown = per.checks.shown(sourceRel);
+    if ("why" in shown) { return { label: "not checked", why: shown.why }; }
+    return badgeOf(shown.outcome, note.name, shown.time === undefined ? undefined : `last check: ${new Date(shown.time).toLocaleString()}`);
+  }
+
+  dispose(): void {
+    for (const per of this.per.values()) { this.stop(per); }
+    this.per.clear();
+    for (const listener of this.listeners) { listener.dispose(); }
+  }
+}

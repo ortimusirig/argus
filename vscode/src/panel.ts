@@ -64,6 +64,11 @@ export class Panel implements vscode.WebviewViewProvider {
     return this.editor && vscode.window.visibleTextEditors.includes(this.editor) ? this.editor : active;
   }
 
+  /** The document the panel speaks of. */
+  document(): vscode.TextDocument | undefined {
+    return this.current()?.document;
+  }
+
   /** The selection or the text changed: the panel follows after 200 ms of quiet, and shows the file again. */
   follow(): void {
     if (!this.visible) { return; }

@@ -4,7 +4,7 @@
   "private": true,
   "description": "Argus for VS Code: the Argus notes shown beside the code they explain",
   "scripts": {
-    "build": "tsc -p .",
+    "build": "tsc -p . && npm run copy-checker",
     "test": "npm run build && node --test \"out/test/**/*.test.js\"",
     "copy-checker": "node -e \"const fs=require('fs');fs.mkdirSync('scripts',{recursive:true});for(const f of ['check_notes.py','_common.py'])fs.copyFileSync('../skills/argus/scripts/'+f,'scripts/'+f)\""
   },

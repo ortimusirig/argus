@@ -2,6 +2,7 @@
 // through the renderer of markdown.ts or its escaper; the only tags are the ones written here and there.
 
 import { LinkTo, escape, render } from "./markdown";
+import { Details } from "./checkResult";
 import { Assignment, Placed } from "./match";
 import { Block, FileNote } from "./notes";
 import { placesOf, summary, underSelection } from "./selection";
@@ -29,8 +30,8 @@ ${o.body}
 </html>`;
 }
 
-/** The validation badge: its words, and why. */
-export interface Badge { label: string; why?: string; }
+/** The validation badge: its words, why, and the details of the check result it comes from. */
+export interface Badge { label: string; why?: string; details?: Details; }
 export interface Listed { id: number; name: string; folder: string; }
 
 export type View =
@@ -59,6 +60,32 @@ function many(n: number, one: string, more: string): string {
 function listed(items: Listed[]): string {
   return "<ul class=\"places\">" + items.map((item) =>
     `<li><button data-pick="${item.id}">${escape(item.name)}</button> <span class="where">${escape(item.folder)}</span></li>`).join("\n") + "</ul>";
+}
+
+function items(list: string[]): string {
+  return "<ul>" + list.map((text) => `<li>${escape(text)}</li>`).join("\n") + "</ul>";
+}
+
+/** The "Check details" block: under the badge whenever a check result is stored, whatever the badge. */
+function checkHtml(d: Details): string {
+  const out: string[] = ['<div class="check">'];
+  const groups: [string, string[]][] = [["About this note", d.fails.mine], ["About the graph", d.fails.graph],
+    ["About other notes", d.fails.others], ["Files without a note", d.fails.missing]];
+  for (const [title, list] of groups) {
+    if (list.length > 0) { out.push(`<h3>${title}</h3>`, items(list)); }
+  }
+  out.push(`<p>Graph: ${escape(d.graph)}.</p>`);
+  if (d.masked.length > 0) {
+    out.push(`<p>Masked lines of this note: ${d.masked.join(", ")}; confirm each hides a secret and nothing else.</p>`);
+  }
+  if (d.warnings.length > 3) {
+    out.push(`<details data-fold="warnings"><summary>${d.warnings.length} warnings</summary>${items(d.warnings)}</details>`);
+  } else if (d.warnings.length > 0) {
+    out.push(`<h3>${many(d.warnings.length, "warning", "warnings")}</h3>`, items(d.warnings));
+  }
+  if (d.stale.length > 0) { out.push("<h3>Stale</h3>", items(d.stale)); }
+  out.push("</div>");
+  return out.join("\n");
 }
 
 function andList(numbers: number[]): string {
@@ -130,6 +157,7 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
       + `${many(s.unexplained, "line", "lines")} unexplained</p>`);
   }
   out.push(`<p class="badge"><span class="badge-label">${escape(view.badge.label)}</span>${view.badge.why ? ` <span class="why">${escape(view.badge.why)}</span>` : ""}</p>`);
+  if (view.badge.details) { out.push(checkHtml(view.badge.details)); }
   out.push(`<p class="actions">${button("check")} <button data-obsidian="${view.noteId}">Open note in Obsidian</button></p>`);
   if (view.problems.length > 0) {
     out.push(`<details data-fold="problems"><summary>Problems: ${many(view.problems.length, "note", "notes")} of this project not used</summary><ul>`
