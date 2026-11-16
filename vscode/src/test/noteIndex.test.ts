@@ -183,3 +183,41 @@ test("a revision is never used twice: not by two notes, not by a note that went 
     assert.ok(after.revision > Math.max(...all), "the note that came back is not taken for the one that went");
   } finally { s.done(); }
 });
+
+test("a source that appears, goes or moves after its note was read: the note is found for it, or not, without a refresh", async () => {
+  const s = scratch();
+  try {
+    s.write("vault/P/Later.md", fileNote("later/new.py"));
+    const index = new NoteIndex();
+    let changes = 0;
+    index.onChange = () => { changes++; };
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.deepEqual(index.fileNotesFor(s.project, "later/new.py"), []);
+    assert.match(index.problemsOf(s.project).join("\n"), /Later: /);
+    changes = 0;
+
+    s.write("src/later/new.py", "x = 1\n");                       // the source is created
+    await index.relocate(s.project);
+    assert.deepEqual(index.fileNotesFor(s.project, "later/new.py").map((e) => e.name), ["Later"]);
+    assert.deepEqual(index.problemsOf(s.project), []);
+    assert.equal(changes, 1);
+    const revision = index.fileNotesFor(s.project, "later/new.py")[0].revision;
+
+    await index.relocate(s.project);                               // nothing moved: nothing changed
+    assert.equal(changes, 1);
+
+    fs.renameSync(path.join(s.root, "src", "later"), path.join(s.root, "src", "moved"));      // its folder is renamed
+    await index.relocate(s.project);
+    assert.deepEqual(index.fileNotesFor(s.project, "later/new.py"), []);
+    assert.match(index.problemsOf(s.project).join("\n"), /Later: /);
+    assert.equal(changes, 2);
+
+    fs.renameSync(path.join(s.root, "src", "moved"), path.join(s.root, "src", "later"));      // and restored
+    await index.relocate(s.project);
+    const back = index.fileNotesFor(s.project, "later/new.py");
+    assert.equal(back.length, 1);
+    assert.equal(back[0].revision, revision, "the note's text is the same: so is its revision");
+    assert.equal(changes, 3);
+  } finally { s.done(); }
+});

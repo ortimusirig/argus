@@ -45,6 +45,7 @@ export class Index implements vscode.Disposable {
     for (const project of this.projects) {
       this.watch(project, project.notesFolder);
       if (project.vaultFolder) { this.watch(project, project.vaultFolder); }
+      this.watchSource(project);
     }
     void this.refreshAll();
   }
@@ -53,6 +54,25 @@ export class Index implements vscode.Disposable {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), "**/*"));
     const seen = (uri: vscode.Uri): void => { this.event(project, folder, uri.fsPath); };
     this.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
+  }
+
+  /** A file or a folder under the source root appeared or went (a move is both): which source each File note
+   *  names is asked again after 300 ms of quiet, whether or not a check is stored. A changed text moves no file. */
+  private watchSource(project: Project): void {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(project.sourceRoot), "**/*"));
+    const git = `${path.sep}.git${path.sep}`;
+    const key = projectKey(project) + "\nsource";
+    const seen = (uri: vscode.Uri): void => {
+      if (uri.fsPath.includes(git)) { return; }
+      const waiting = this.timers.get(key);
+      if (waiting) { clearTimeout(waiting); }
+      this.timers.set(key, setTimeout(() => {
+        this.timers.delete(key);
+        this.where.clear();
+        void this.notes.relocate(project).catch(() => undefined);
+      }, QUIET_MS));
+    };
+    this.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidDelete(seen));
   }
 
   private unwatch(): void {

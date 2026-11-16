@@ -199,6 +199,25 @@ export class NoteIndex {
     return true;
   }
 
+  /** Asks again, for every File note of the project, which file under the source root its `source` names: called
+   *  after a file or a folder under the source root appeared, went or moved. A note read before its source was
+   *  there is found for it from now on; a note whose source went is listed as a problem. No note is read. */
+  relocate(project: Project): Promise<void> {
+    const held = this.of(project);
+    if (!held) { return Promise.resolve(); }
+    return this.queued(held, async () => {
+      let changed = false;
+      for (const entry of [...held.entries.values()]) {
+        if (!entry.file) { continue; }
+        const before = entry.sourceRel;
+        this.locate(entry, project);
+        if (before !== entry.sourceRel) { changed = true; }
+        await this.pause();
+      }
+      return changed;
+    });
+  }
+
   private locate(entry: Entry, project: Project): void {
     const source = entry.file?.props.source ?? "";
     const rel = sourceInRoot(project.sourceRoot, source, this.rules);
