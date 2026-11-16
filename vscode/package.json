@@ -6,11 +6,13 @@
   "scripts": {
     "build": "tsc -p . && npm run copy-checker",
     "test": "npm run build && node --test \"out/test/**/*.test.js\"",
+    "package": "npm test && vsce package --no-dependencies --allow-missing-repository --skip-license --out argus-3.0.0.vsix",
     "copy-checker": "node -e \"const fs=require('fs');fs.mkdirSync('scripts',{recursive:true});for(const f of ['check_notes.py','_common.py'])fs.copyFileSync('../skills/argus/scripts/'+f,'scripts/'+f)\""
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^4.1.1",
     "typescript": "^7.0.2"
   },
   "displayName": "Argus",

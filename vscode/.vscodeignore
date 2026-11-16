@@ -1,0 +1,17 @@
+# What is left out of the .vsix. The package holds: package.json, README.md, out/ (compiled code without
+# the tests), media/ (the panel's page) and scripts/ (the checker, copied from skills/argus/scripts).
+.vscode/**
+.vscode-test/**
+src/**
+out/test/**
+**/*.map
+**/*.ts
+node_modules/**
+**/__pycache__/**
+**/*.pyc
+tsconfig.json
+package-lock.json
+**/*.vsix
+**/.env*
+.vscodeignore
+.gitignore
