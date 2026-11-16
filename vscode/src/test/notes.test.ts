@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fenceMask, isArgus, isMasked, parseFileNote, parseOtherNote, parseProps } from "../core/notes";
+import { fenceMask, isArgus, isMasked, parseFileNote, parseOtherNote, parseProps, linkNames, withoutInlineCode } from "../core/notes";
 
 const LENS = ["In one sentence", "What we gain", "What we lose", "What was not possible without it", "Issues today",
   "What it makes possible", "Open source used", "Risks"];
@@ -314,4 +314,100 @@ test("every decimal digit of Unicode has the value Python's int() gives it", { s
     if ((c < 0xd800 || c > 0xdfff) && !python.has(c) && /^\p{Nd}$/u.test(cp(c))) { onlyNode++; }
   }
   t.diagnostic(`${known.length} decimal digits compared; ${digits.length - known.length} known to Python only, ${onlyNode} to Node only`);
+});
+
+// ---------------------------------------------------------------- inline code spans, as the checker removes them
+
+test("withoutInlineCode: each code span becomes one space, as the checker's regular expression reads it", () => {
+  const cases: [string, string][] = [
+    ["a `b` c", "a   c"], ["``a ` b``", " "], ["`[[x]]` [[y]]", "  [[y]]"], ["| `a \\| b` | [[c]] |", "|   | [[c]] |"],
+    ["`a` ``b`` ```c``` `d", "      `d"],
+    ["", ""], ["no code", "no code"], ["a ` b", "a ` b"], ["`", "`"],                // a run that never closes stays as text
+    // A run closes at the next place where as many backticks stand together, also at the start of a longer run.
+    ["`a`` b` c", "   c"], ["`a``b```c", "   c"],
+    // A run with no such place opens with fewer of its backticks; its own second half may be what closes it.
+    ["```x``", " "], ["```a``b`c", " b`c"], ["``a`", " a`"], ["a `` b ` c", "a   b ` c"], ["``", " "], ["```", " `"], ["````", " "],
+    ["`````a``", "  `"], ["x`` `` ``y", "x   y"], ["``[[x]]` [[y]]", " [[x]]` [[y]]"], ["`\\`[[x]]`", " [[x]]`"],
+    // A span does not run over a line break.
+    ["`a\nb`", "`a\nb`"], ["`a` \n `b`", "  \n  "],
+  ];
+  for (const [line, expected] of cases) { assert.equal(withoutInlineCode(line), expected, JSON.stringify(line)); }
+  assert.deepEqual(linkNames(["`[[a]]` [[b]] ``[[c]]`` [[d]] `[[e]]", "```[[f]]`` [[g]]"]), ["b", "d", "e", "g"]);
+});
+
+/** Lines of backticks, letters and line breaks: every one up to a length, and long ones made by a fixed rule. */
+function backtickLines(): string[] {
+  const lines: string[] = ["", "`", "[[a]] `[[b]]` ``[[c]]", "| `a \\| b` | `` c ` d `` |", "é` `😀``x``"];
+  const all = (alphabet: string, longest: number) => {
+    let level = [""];
+    for (let n = 1; n <= longest; n++) {
+      level = level.flatMap((s) => [...alphabet].map((c) => s + c));
+      lines.push(...level);
+    }
+  };
+  all("`a", 11);
+  all("`a\n", 7);
+  let seed = 20261115;
+  const next = (n: number) => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % n; };
+  for (let n = 0; n < 600; n++) {
+    let line = "";
+    for (let k = 2 + next(40); k > 0; k--) { line += next(3) === 0 ? "a [\n".charAt(next(4)) : "`".repeat(1 + next(n % 2 === 0 ? 4 : 9)); }
+    lines.push(line);
+  }
+  return lines;
+}
+
+test("withoutInlineCode gives what without_inline_code in check_notes.py gives", { skip: noPython }, (t) => {
+  const lines = backtickLines();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argus-code-"));
+  try {
+    const list = path.join(tmp, "lines.json");
+    fs.writeFileSync(list, JSON.stringify(lines), "utf8");
+    const program = ["import json, sys", "sys.path.insert(0, sys.argv[1])", "from check_notes import without_inline_code",
+      "print(json.dumps([without_inline_code(line) for line in json.load(open(sys.argv[2], encoding='utf-8'))]))"].join("\n");
+    const out = spawnSync("python", ["-B", "-c", program, path.resolve(__dirname, "../../../skills/argus/scripts"), list],
+      { encoding: "utf8", maxBuffer: 1 << 26 });
+    assert.equal(out.status, 0, out.stderr);
+    const answers = JSON.parse(out.stdout) as string[];
+    assert.equal(answers.length, lines.length);
+    let changed = 0;
+    lines.forEach((line, i) => {
+      assert.equal(withoutInlineCode(line), answers[i], JSON.stringify(line));
+      if (answers[i] !== line) { changed++; }
+    });
+    assert.ok(changed > 5000, `only ${changed} lines held a code span`);
+    t.diagnostic(`${lines.length} lines compared with the checker; ${changed} of them held a code span`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("withoutInlineCode: backticks cost time in proportion to their number", () => {
+  const upTo = (n: number) => Array.from({ length: n }, (_, k) => k + 1);
+  const runs = (lengths: number[], between = "x") => lengths.map((n) => "`".repeat(n)).join(between);
+  const shapes: [string, string, string?][] = [
+    ["64,000 backticks", "`".repeat(64000), " "],
+    ["64,001 backticks", "`".repeat(64001), " `"],
+    ["x and 64,000 backticks", "x" + "`".repeat(64000) + "y", "x y"],
+    ["runs of every length from 1 to 350", runs(upTo(350))],
+    ["runs of every length from 350 down to 1", runs(upTo(350).reverse())],
+    ["runs of 1 to 200 and of 201 to 400, by turns", runs(upTo(200).flatMap((n) => [n, n + 200]))],
+    ["32,000 single backticks, a letter after each", "`a".repeat(32000), " a".repeat(16000)],
+    ["32,001 single backticks, a letter after each", "`a".repeat(32001), " a".repeat(16000) + "`a"],
+    ["20,000 runs of 1 and of 2 by turns", "` a `` b ".repeat(20000)],
+    ["20,000 runs of 3 and of 2 by turns, then one of 1", "``` a `` b ".repeat(20000) + "`"],
+    ["a run of 30,000, then 30,000 single backticks", "`".repeat(30000) + " ` x".repeat(30000)],
+    ["30,000 single backticks, then a run of 30,000", "x ` ".repeat(30000) + "`".repeat(30000)],
+    ["32,000 lines of one backtick", "`\n".repeat(32000), "`\n".repeat(32000)],
+    ["64,000 backticks in linkNames", "[[a]] " + "`".repeat(64000) + " [[b]]"],
+  ];
+  for (const [name, text, expected] of shapes) {
+    const started = performance.now();
+    const result = name.endsWith("linkNames") ? linkNames([text]).join(",") : withoutInlineCode(text);
+    const took = performance.now() - started;
+    console.log(`timing: ${name} (${text.length} characters) read in ${took.toFixed(1)} ms`);
+    assert.ok(took < 100, `${name}: took ${took} ms`);
+    if (expected !== undefined) { assert.equal(result, expected, name); }
+  }
+  assert.deepEqual(linkNames(["[[a]] " + "`".repeat(64000) + " [[b]]"]), ["a", "b"]);
 });

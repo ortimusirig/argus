@@ -201,9 +201,65 @@ function unescapePipes(cell: string): string {
   return cell.replace(/\\\|/g, "|");
 }
 
-/** `without_inline_code` of the checker: the line with every `code span` removed. */
-function withoutInlineCode(line: string): string {
-  return line.replace(/(`+)(?:(?!\1).)*?\1/gs, " ");
+/** `without_inline_code` of the checker: the line with every `code span` replaced by one space.
+ *
+ *  The checker's rule is the regular expression (`+)(?:(?!\1).)*?\1, and this is what it means, read by hand in one
+ *  pass (the expression itself backtracks: 64,000 backticks took it 1.6 seconds here).
+ *  Where backticks stand, the opener is as many of them as can find a closer, the most first. An opener of k
+ *  backticks closes at the next place where k backticks stand together: in its own run when twice k fit into what is
+ *  left of it (the span is then empty), else at the start of the first later run that is at least k long; no span
+ *  runs over a line break. So with `rest` backticks left in the run and `most` the longest later run of the line:
+ *  when most >= rest, the opener is all the rest; when not, it is max(most, half the rest, rounded down) backticks;
+ *  with one backtick and no later run there is no span, and the backtick stays as text. Reading goes on right after
+ *  the closer, in the middle of a run when the closer was the start of a longer one. */
+export function withoutInlineCode(line: string): string {
+  if (!line.includes("`")) { return line; }
+  return line.includes("\n") ? line.split("\n").map(withoutCodeInLine).join("\n") : withoutCodeInLine(line);
+}
+
+function withoutCodeInLine(line: string): string {
+  const starts: number[] = [], lengths: number[] = [];      // the runs of backticks of the line
+  for (let at = line.indexOf("`"); at >= 0;) {
+    let end = at + 1;
+    while (line[end] === "`") { end++; }
+    starts.push(at);
+    lengths.push(end - at);
+    at = line.indexOf("`", end);
+  }
+  const count = starts.length;
+  if (count === 0) { return line; }
+  const later = new Int32Array(count);                      // for each run: the longest of the runs after it
+  for (let r = count - 2; r >= 0; r--) { later[r] = Math.max(later[r + 1], lengths[r + 1]); }
+  const out: string[] = [];
+  let kept = 0;                                             // the text up to here is written
+  let r = 0, at = starts[0], rest = lengths[0];             // where reading stands: in run r, with `rest` backticks left
+  while (r < count) {
+    const most = later[r];
+    const opener = most >= rest ? rest : Math.max(most, rest >> 1);
+    let end = -1;                                           // where the span ends
+    if (opener > 0 && opener < rest && 2 * opener <= rest) {
+      end = at + 2 * opener;                                // closed by the backticks right after the opener
+      rest -= 2 * opener;
+    } else if (opener > 0) {
+      // The first later run at least as long as the opener: there is one, as `most` says. The runs passed over
+      // lie inside the span and are not read again.
+      let closer = r + 1;
+      while (lengths[closer] < opener) { closer++; }
+      end = starts[closer] + opener;
+      r = closer;
+      rest = lengths[closer] - opener;
+    }
+    if (end >= 0) {
+      out.push(line.slice(kept, at), " ");
+      kept = at = end;
+    }
+    if (end < 0 || rest === 0) {
+      r++;
+      if (r < count) { at = starts[r]; rest = lengths[r]; }
+    }
+  }
+  out.push(line.slice(kept));
+  return out.join("");
 }
 
 const LINK = /\[\[([^\]|#]+)/g;
