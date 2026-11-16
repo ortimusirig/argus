@@ -22,7 +22,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const forget = (): void => { matcher.keep((id) => index.notes.noteById(id) !== undefined); };
   const configure = (): void => { index.configure(); forget(); check.configure(); redraw(); };
 
-  context.subscriptions.push(index, matched, markers, check,
+  context.subscriptions.push(index, matched, markers, check, panel,
+    // Shut down: no match goes on, and none is published to listeners that are gone.
+    { dispose: () => { matcher.keep(() => false); } },
     vscode.window.registerWebviewViewProvider(Panel.viewId, panel),
     vscode.languages.registerCodeLensProvider({ scheme: "file" }, markers),
 

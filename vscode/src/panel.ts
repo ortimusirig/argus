@@ -19,7 +19,7 @@ const QUIET_MS = 200;
 const MATCHING_MS = 400;
 const PATIENCE_MS = 80;      // a match that ends sooner is shown at once, without "matching…" in between
 
-export class Panel implements vscode.WebviewViewProvider {
+export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   static readonly viewId = "argus.panel";
   private view?: vscode.WebviewView;
   private readonly media: vscode.Uri;
@@ -52,6 +52,13 @@ export class Panel implements vscode.WebviewViewProvider {
     view.onDidDispose(() => { if (this.view === view) { this.view = undefined; this.inner = ""; } });
     this.inner = "";
     this.render();
+  }
+
+  /** Shut down: no timer is left to draw the panel later. */
+  dispose(): void {
+    if (this.quiet) { clearTimeout(this.quiet); this.quiet = undefined; }
+    if (this.again) { clearTimeout(this.again); this.again = undefined; }
+    this.view = undefined;
   }
 
   get visible(): boolean {
