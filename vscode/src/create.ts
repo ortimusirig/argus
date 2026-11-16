@@ -5,6 +5,7 @@
 // settings only). Nothing here ever writes a note: the agent does.
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { Check } from "./check";
 import { Index } from "./index";
@@ -118,7 +119,9 @@ export class Create implements vscode.Disposable {
     }
     // The command is the user's own (never the workspace's); each argument is filled on its own.
     const config = vscode.workspace.getConfiguration("argus");
-    const values = { file, notesFolder: project.notesFolder, sourceRoot: project.sourceRoot, depth: createDepth(config.get<unknown>("createDepth")) };
+    // The folders are handed over as full paths: the agent runs in the source root, and a folder written
+    // relative in the settings would mean another place there than it means to the extension.
+    const values = { file, notesFolder: path.resolve(project.notesFolder), sourceRoot: path.resolve(project.sourceRoot), depth: createDepth(config.get<unknown>("createDepth")) };
     const variable = variableIn(values);
     if (variable !== undefined) { return variable; }
     const command = fill(userCommand(config.inspect<unknown>("createCommand")), values);
@@ -143,7 +146,7 @@ export class Create implements vscode.Disposable {
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
     const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, TASK_NAME, "argus",
-      new vscode.ProcessExecution(program.path, command.slice(1), { cwd: project.sourceRoot }));
+      new vscode.ProcessExecution(program.path, command.slice(1), { cwd: path.resolve(project.sourceRoot) }));
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, focus: true, panel: vscode.TaskPanelKind.Dedicated, close: false };
     const follow = new Follow((ended) => { void this.ended(started, ended); });
     this.following = { task, follow };

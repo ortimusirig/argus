@@ -14,6 +14,9 @@ export interface Marks {
   lenses: Lens[];         // the block's purpose above its first line; a click opens the panel on its lines
 }
 
+/** How many places of an ambiguous block a hover names. */
+const HOVER_PLACES = 20;
+
 function andList(numbers: number[]): string {
   return numbers.length < 2 ? numbers.join("") : numbers.slice(0, -1).join(", ") + " and " + numbers[numbers.length - 1];
 }
@@ -58,8 +61,11 @@ function prepare(assignment: Assignment): Marks {
         + (placed.spacesOnly ? "; the code here differs only in spaces at line ends." : ".");
       tail = " (changed)";
     } else {
-      say = `Argus: block ${name}. State: ambiguous. This code is at lines ${andList(placed.candidates ?? [])}; `
-        + "the order of the blocks does not decide which.";
+      // A hover is sent to the editor once for each marked place: it names the first places only and says how
+      // many more there are; the panel lists every one.
+      const places = placed.candidates ?? [], first = places.slice(0, HOVER_PLACES), more = places.length - first.length;
+      say = `Argus: block ${name}. State: ambiguous. This code is at lines ${andList(first)}`
+        + (more > 0 ? ` and at ${more} more places (the Argus panel lists all)` : "") + "; the order of the blocks does not decide which.";
       tail = " (ambiguous)";
     }
     say += few;

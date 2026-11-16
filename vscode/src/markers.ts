@@ -63,8 +63,15 @@ export class Markers implements vscode.CodeLensProvider, vscode.Disposable {
     const document = editor.document;
     const marks = this.marksFor(document, ask);
     const last = document.lineCount;
+    // One hover text for all places of a block: plain text (nothing of a note is read as Markdown), made once.
+    const hovers = new Map<string, vscode.MarkdownString>();
+    const hover = (say: string): vscode.MarkdownString => {
+      let made = hovers.get(say);
+      if (!made) { made = new vscode.MarkdownString().appendText(say); hovers.set(say, made); }
+      return made;
+    };
     const ranges = (list: Mark[] | undefined): vscode.DecorationOptions[] => (list ?? []).filter((mark) => mark.from <= last)
-      .map((mark) => ({ range: new vscode.Range(mark.from - 1, 0, Math.min(mark.to, last) - 1, 0), hoverMessage: new vscode.MarkdownString().appendText(mark.say) }));
+      .map((mark) => ({ range: new vscode.Range(mark.from - 1, 0, Math.min(mark.to, last) - 1, 0), hoverMessage: hover(mark.say) }));
     editor.setDecorations(this.current, ranges(marks?.current));
     editor.setDecorations(this.warning, ranges(marks?.warning));
     editor.setDecorations(this.unexplained, ranges(marks?.unexplained));
