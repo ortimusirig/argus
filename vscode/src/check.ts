@@ -3,11 +3,13 @@
 // may be used), checkResult.ts (what a result means), run.ts (`mayRun`, the trust guard and the only process start).
 // Nothing here ever changes a note.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { Index } from "./index";
 import { Outcome, badgeOf, fingerprintOf, stateOf } from "./core/checkResult";
 import { GitWatch } from "./core/gitWatch";
+import { graphPlaces, isPlace } from "./core/graphWatch";
 import { Entry } from "./core/noteIndex";
 import { Badge } from "./core/panelHtml";
 import { Project } from "./core/projects";
@@ -25,6 +27,7 @@ interface Per {
   watchers: vscode.Disposable[];
   git: GitWatch;                       // whether git's folders are watched, and what a `.git` event means (core/gitWatch.ts)
   gitWatchers: vscode.Disposable[];
+  graphWatchers: vscode.Disposable[];  // on the graph file, and on the file it leads to when it is a link
   gitTimer?: NodeJS.Timeout;
   gitWork: Promise<void>;              // git is asked one question at a time
   timer?: NodeJS.Timeout;
@@ -71,11 +74,11 @@ export class Check implements vscode.Disposable {
       let checks = this.kept.get(key);
       if (!checks) { checks = new Checks(this.memory(key)); this.kept.set(key, checks); }
       checks.changed();
-      const per: Per = { project, checks, watchers: [], git: new GitWatch(), gitWatchers: [], gitWork: Promise.resolve(),
+      const per: Per = { project, checks, watchers: [], git: new GitWatch(), gitWatchers: [], graphWatchers: [], gitWork: Promise.resolve(),
         work: Promise.resolve(), running: new Set() };
       this.per.set(key, per);
       this.watch(per, project.sourceRoot, "**/*", true);
-      if (project.graph) { this.watch(per, path.dirname(project.graph), path.basename(project.graph)); }
+      void this.watchGraph(per);
       void this.watchGit(per);
       this.confirm(per);                 // on activation: for the files that have a stored result
     }
@@ -84,9 +87,32 @@ export class Check implements vscode.Disposable {
   private stop(per: Per): void {
     if (per.timer) { clearTimeout(per.timer); }
     if (per.gitTimer) { clearTimeout(per.gitTimer); }
-    for (const watcher of [...per.watchers, ...per.gitWatchers]) { watcher.dispose(); }
+    for (const watcher of [...per.watchers, ...per.gitWatchers, ...per.graphWatchers]) { watcher.dispose(); }
     per.watchers = [];
     per.gitWatchers = [];
+    per.graphWatchers = [];
+  }
+
+  /** Watches the graph file: its folder is watched and each event compared with the file's own path, since a
+   *  file name is no pattern. When the graph is a link, the file it leads to is watched the same way; an event
+   *  for the configured path may mean the link leads elsewhere now, so the watchers are set anew. */
+  private async watchGraph(per: Per): Promise<void> {
+    const graph = per.project.graph;
+    if (!graph) { return; }
+    const real = await fs.promises.realpath(graph).catch(() => undefined);
+    if (this.per.get(projectKey(per.project)) !== per) { return; }        // the settings changed meanwhile
+    for (const watcher of per.graphWatchers) { watcher.dispose(); }
+    per.graphWatchers = [];
+    const windows = process.platform === "win32";
+    for (const place of graphPlaces(graph, real, windows)) {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(place)), "*"));
+      const seen = (uri: vscode.Uri): void => {
+        if (!isPlace(uri.fsPath, place, windows)) { return; }
+        this.touch(per);
+        if (place === graph) { void this.watchGraph(per); }
+      };
+      per.graphWatchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
+    }
   }
 
   /** `source`: the watcher on the whole source root. What git keeps under it is followed by the git watchers,
