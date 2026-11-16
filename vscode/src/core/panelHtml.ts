@@ -207,6 +207,13 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
       + "</tbody></table></details>");
   }
   if (!assignment) { return out.join("\n"); }
+  if (assignment.trimmed) {
+    // A bound says what it left out: the blocks whose code is at more places than were looked at.
+    const shown = assignment.trimmed.slice(0, 5).map((t) => `block ${escape(t.id)}: ${t.places} identical places, the ${t.kept} nearest to its recorded line were looked at`);
+    const more = assignment.trimmed.length - shown.length;
+    out.push(`<p class="say">Very many identical places: ${shown.join("; ")}${more > 0 ? `; and ${more} more ${more === 1 ? "block" : "blocks"}` : ""}. `
+      + "A block of these that moved far from its recorded line may show as changed.</p>");
+  }
   const last = Number.MAX_SAFE_INTEGER;
   const under = view.whole || !view.selection ? underSelection(assignment, 1, last) : underSelection(assignment, view.selection.from, view.selection.to);
   const blocks = view.whole || !view.selection ? assignment.placed : under.blocks;

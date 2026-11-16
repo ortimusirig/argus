@@ -9,7 +9,30 @@ export { pyStrip } from "./notes";   // defined beside the note reader, which ne
 export type BlockState = "current" | "current-masked" | "changed" | "ambiguous";
 export interface Placed { block: Block; state: BlockState; at?: { from: number; to: number };  // lines in the text now
   spacesOnly?: boolean; candidates?: number[]; }
-export interface Assignment { placed: Placed[]; unexplained: [number, number][]; }   // ranges of non-blank lines
+export interface Assignment { placed: Placed[]; unexplained: [number, number][];   // ranges of non-blank lines
+  trimmed?: Trimmed[]; }           // the blocks whose places were not all looked at; absent when there is none
+/** A block whose code is at more places than one note may look at: `places` were found, the `kept` nearest to the
+ *  block's recorded line were looked at. */
+export interface Trimmed { id: string; places: number; kept: number; }
+
+/** How many places all blocks of one note together may keep. The assignment holds some thirty bytes for each
+ *  place of each block, so a note of many alike blocks for a text of many alike lines would take all memory
+ *  (200 blocks at 20,000 places each held 112 MB). Each block keeps at most this number divided by the number of
+ *  blocks: 20,000 places for each of 100 blocks, 2,000 for each of 1,000. A block with more keeps the places
+ *  nearest to its recorded line, and the assignment says so (owner's decision, 2026-11-16: trim, do not stop). */
+export const PLACES = 2_000_000;
+
+/** The `keep` starts nearest to `target`, out of starts in rising order; a new array, so the long one is let go. */
+export function nearest(starts: Int32Array, target: number, keep: number): Int32Array {
+  if (starts.length <= keep) { return starts; }
+  let low = 0, high = starts.length;                     // the first start that is not before the target
+  while (low < high) { const mid = (low + high) >> 1; if (starts[mid] < target) { low = mid + 1; } else { high = mid; } }
+  let from = Math.min(Math.max(low - (keep >> 1), 0), starts.length - keep);
+  // Move the window while the start just outside it is nearer than the start at its other end. At most `keep` moves.
+  while (from + keep < starts.length && Math.abs(starts[from + keep] - target) < Math.abs(starts[from] - target)) { from++; }
+  while (from > 0 && Math.abs(starts[from - 1] - target) < Math.abs(starts[from + keep - 1] - target)) { from--; }
+  return starts.slice(from, from + keep);
+}
 
 const STEP = 10000;     // characters of one line compared between two yields
 const SLICE_MS = 2;     // work between two yields of `assign`
@@ -655,7 +678,7 @@ class NumberedText {
 }
 
 /** What a run prepares once: the masked lines, the numbered text, and for each block its starts. */
-interface Found { masked: MaskedLines; noteLines: number; found: Int32Array[]; }
+interface Found { masked: MaskedLines; noteLines: number; found: Int32Array[]; trimmed: Trimmed[]; }
 
 function* allStarts(note: FileNote, textLines: string[], slicer: Slicer): Generator<number, Found, void> {
   const masked = yield* MaskedLines.of(note.props, slicer);
@@ -666,12 +689,16 @@ function* allStarts(note: FileNote, textLines: string[], slicer: Slicer): Genera
   }
   const numbered = yield* NumberedText.of(masked, textLines, noteLines, false, slicer);
   const found: Int32Array[] = new Array(note.blocks.length);
+  const keep = Math.max(1, Math.floor(PLACES / Math.max(1, note.blocks.length)));
+  const trimmed: Trimmed[] = [];
   for (let b = 0; b < note.blocks.length; b++) {
-    found[b] = yield* numbered.starts(note.blocks[b], slicer);
+    const all = yield* numbered.starts(note.blocks[b], slicer);
+    if (all.length > keep) { trimmed.push({ id: note.blocks[b].id, places: all.length, kept: keep }); }
+    found[b] = nearest(all, note.blocks[b].from - 1, keep);
     slicer.done++;
     if (slicer.due(4)) { yield slicer.done; slicer.resume(); }       // a block is a step, though its search may end at once
   }
-  return { masked, noteLines, found };
+  return { masked, noteLines, found, trimmed };
 }
 
 /** For each block of the note, in the note's order: every start line (1-based) where its whole code matches. */
@@ -729,7 +756,7 @@ class Best {
 export function* assign(note: FileNote, textLines: string[]): Generator<number, Assignment, void> {
   const slicer = new Slicer();
   const total = textLines.length;
-  const { masked, noteLines, found } = yield* allStarts(note, textLines, slicer);
+  const { masked, noteLines, found, trimmed } = yield* allStarts(note, textLines, slicer);
 
   // Blocks in the order of their recorded `from`. Forward: the best way to place blocks up to this one with this
   // block at this candidate. A block may sit at a candidate that starts after the end of the block placed before.
@@ -885,7 +912,7 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
     if (!bare && open > 0) { unexplained[n++] = [open, i]; open = 0; }
     if (slicer.due()) { yield slicer.done; slicer.resume(); }
   }
-  return { placed, unexplained };
+  return trimmed.length > 0 ? { placed, unexplained, trimmed } : { placed, unexplained };
 }
 
 // ---------------------------------------------------------------- runs
