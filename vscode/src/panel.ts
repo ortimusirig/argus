@@ -73,8 +73,9 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private current(): vscode.TextEditor | undefined {
     // Lines asked for by a CodeLens name their document: the panel speaks of that one, also when another editor
     // is the active one, so that Create and Check act on the file that is shown.
+    // Not a pin that is older than the last move of the selection: the person went on to another place.
     const pinned = this.pinned;
-    if (pinned) {
+    if (pinned && !this.latest.stale("pinned")) {
       const asked = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === pinned.uri);
       if (asked) { this.editor = asked; return asked; }
     }
