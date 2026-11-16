@@ -35,7 +35,7 @@ Write down for each step: passed, or what was seen instead.
 
 ## Results of the first run (2026-11-16, agent, clicks only, VS Code on Windows, package of `db6fb4b`)
 
-Setup used: user settings `argus.projects` with source root `C:\devpplexus-chat`, notes folder the vault folder `01.01 Helper Build`, vault folder the vault `Obsidian-ai`; file `aura-helper/src/errors.js`.
+Setup used: user settings `argus.projects` with source root `C:\devapplexus-chat`, notes folder the vault folder `01.01 Helper Build`, vault folder the vault `Obsidian-ai`; file `aura-helper/src/errors.js`.
 
 Passed: step 1 (installed with `code --install-extension`, activates); step 3 and 7 in the CodeLens form (CodeLens above each block, a click opens the panel on that block, the selected rows are marked, "6 blocks current"); the marker bars; step 8 (Check notes ran the real checker: "check failed" with the checker's own sentences about links of another note, because no vault folder was set then; details block shown); step 21 (a concept link opens the Concept note with Back and Open note in Obsidian); step 22 in part (Back returns to the file); step 24 in part (Open note in Obsidian brought Obsidian to the front; which note it showed was not seen).
 
