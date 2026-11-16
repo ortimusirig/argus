@@ -71,6 +71,13 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
 
   /** The editor the panel speaks of: the active one, else the last one that was, while it is still open. */
   private current(): vscode.TextEditor | undefined {
+    // Lines asked for by a CodeLens name their document: the panel speaks of that one, also when another editor
+    // is the active one, so that Create and Check act on the file that is shown.
+    const pinned = this.pinned;
+    if (pinned) {
+      const asked = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === pinned.uri);
+      if (asked) { this.editor = asked; return asked; }
+    }
     const active = vscode.window.activeTextEditor;
     if (active) { this.editor = active; }
     return this.editor && vscode.window.visibleTextEditors.includes(this.editor) ? this.editor : active;
@@ -84,11 +91,13 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   /** The selection or the text changed: the panel follows after 200 ms of quiet, and shows the file again.
    *  What the person asked for in that time (a CodeLens, a linked note, a notice) is newer than the change and stays. */
   follow(): void {
+    // Not while a command opens the panel: a move that the opening itself causes is not the person's, and must
+    // not take away the lines the command asked for.
+    if (this.opening) { return; }
     if (!this.visible) {
       // Hidden: nothing is drawn, but the move is remembered, so what was kept before it goes when the panel
-      // is shown again. Not while a command opens the panel: a move that the opening itself causes is not the
-      // person's, and must not take away the lines the command asked for.
-      if (!this.opening) { this.latest.moved(); }
+      // is shown again.
+      this.latest.moved();
       return;
     }
     this.latest.moved();
@@ -120,7 +129,16 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     this.trail.clear(); this.notice = undefined;
     this.latest.asked("pinned", "shown", "notice");
     this.opening = true;
-    try { await vscode.commands.executeCommand(`${Panel.viewId}.focus`); } finally { this.opening = false; }
+    try {
+      // The document of the asked lines is shown when no editor shows it (the focus stays where it is).
+      if (pinned && !vscode.window.visibleTextEditors.some((editor) => editor.document.uri.toString() === pinned.uri)) {
+        try { await vscode.window.showTextDocument(vscode.Uri.parse(pinned.uri, true), { preserveFocus: true, preview: true }); }
+        catch { this.pinned = undefined; this.tell("the file of these lines could not be opened"); }
+      }
+      await vscode.commands.executeCommand(`${Panel.viewId}.focus`);
+    } finally { this.opening = false; }
+    // What the opening itself moved is no move of the person: the asked things are the newest again.
+    this.latest.asked("pinned", "shown", "notice");
     this.render();
   }
 
@@ -270,6 +288,27 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     }
   }
 
+  /** Opens an address of a note outside VS Code; answers a sentence when it could not. The address is handed over
+   *  as text, so it arrives as the note wrote it. Given as a Uri, VS Code would write it again by its own rules,
+   *  and an encoded & or # (as in ?q=R%26D) would become a sign of the address. */
+  private async openAddress(href: string): Promise<string | undefined> {
+    const failed = `this address could not be opened: ${href}`;
+    try {
+      return await vscode.env.openExternal(href as unknown as vscode.Uri) ? undefined : failed;
+    } catch {
+      // This VS Code takes a Uri only. The address is opened that way only when it stays the same when written again.
+      try {
+        const uri = vscode.Uri.parse(href, true);
+        if (uri.toString() !== href && uri.toString(true) !== href) {
+          return `this address was not opened, because this VS Code does not pass it on unchanged: ${href}`;
+        }
+        return await vscode.env.openExternal(uri) ? undefined : failed;
+      } catch {
+        return failed;
+      }
+    }
+  }
+
   /** "Argus: Open note in Obsidian": the note that is shown, or the note of the file that is shown. */
   async openInObsidian(): Promise<void> {
     const now = this.trail.now;
@@ -319,11 +358,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
         this.sayWithheld();
         break;
       case "open":
-        try {
-          await vscode.env.openExternal(vscode.Uri.parse(action.href, true));
-        } catch {
-          this.tell(`this address could not be opened: ${action.href}`);
-        }
+        this.tell(await this.openAddress(action.href));
         break;
       case "ask": {
         let target: vscode.Uri;
