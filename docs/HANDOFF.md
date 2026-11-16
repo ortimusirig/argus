@@ -198,7 +198,7 @@ Round 1 findings, in short:
 
 | # | Item | Source |
 |---|---|---|
-| 1 | Run the skill on the whole helper build at depth `map`: 7 of 42 files are done (2 at `full`, 5 at `map`). Estimate from the measured run: about 500,000 words of File notes and about 40 times the keystore run (roughly 10 hours of agent time). Large: the owner decides whether and when | Measured 2026-11-15 |
+| 1 | CLOSED by the owner on 2026-11-15: the helper build notes were an example only; do not explain the remaining 35 of 42 helper files unless the owner asks. (For the record: 7 files are done, 2 at `full`, 5 at `map`; the measured estimate for the rest was about 500,000 words and about 10 hours of agent time) |
 | 2 | Open the example notes in Obsidian: tables, Mermaid diagrams, links | Never viewed rendered |
 | 3 | `SKILL.md` is about 2,400 words; the skill-writing guidance aims for far less. Move detail into `note-templates.md` or a rules file | Size |
 | 4 | Bases view and canvas map through obsidian-skills | Not tried |
