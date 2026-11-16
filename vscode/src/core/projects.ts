@@ -12,10 +12,33 @@ export interface PathRules {
   isFile(file: string): boolean;
 }
 
+/** The real path on a POSIX system, the components kept as written until the file system has read them: a `..`
+ *  after a symbolic link goes up from where the link leads, as in Python's (base / rel).resolve(). */
+function posixReal(full: string): string {
+  try {
+    return fs.realpathSync.native(full);
+  } catch {
+    // Not on disk (a file not saved yet): the real path of what comes before the last component, then that
+    // component: `..` goes up from the real folder, a name is added as written.
+    let end = full.length;
+    while (end > 1 && full[end - 1] === "/") { end--; }
+    const cut = full.lastIndexOf("/", end - 1);
+    if (end <= 1 || cut < 0) { return full.slice(0, end); }
+    const parent = posixReal(cut === 0 ? "/" : full.slice(0, cut)), name = full.slice(cut + 1, end);
+    if (name === "" || name === ".") { return parent; }
+    return name === ".." ? path.posix.dirname(parent) : path.posix.join(parent, name);
+  }
+}
+
 /** The rules of the system the extension runs on. */
 export const systemRules: PathRules = {
   windows: process.platform === "win32",
   real(file: string): string {
+    if (process.platform !== "win32") {
+      return posixReal(file.startsWith("/") ? file : process.cwd() + "/" + file);
+    }
+    // Windows takes `name\..` out of a path before it reads any link, and so does Python there (ntpath.realpath
+    // begins with normpath): collapsing in the text first is the system's own rule on Windows.
     const full = path.resolve(file);
     try {
       return fs.realpathSync.native(full);
@@ -65,7 +88,13 @@ export function sourceInRoot(root: string, source: string, rules: PathRules = sy
   const p = rules.windows ? path.win32 : path.posix;
   try {
     const base = rules.real(root);
-    const file = rules.real(p.resolve(base, source.replace(/\\/g, "/")));
+    const written = source.replace(/\\/g, "/");
+    // POSIX: the source is joined to the root as written, and `rules.real` reads each `..` after the links before
+    // it. Windows collapses `..` in the text before any link is read (see systemRules.real), so there the text is
+    // resolved first.
+    const joined = rules.windows ? p.resolve(base, written)
+      : written.startsWith("/") ? written : base + (base.endsWith("/") ? "" : "/") + written;
+    const file = rules.real(joined);
     return rules.isFile(file) ? inside(base, file, rules) : undefined;
   } catch {
     return undefined;

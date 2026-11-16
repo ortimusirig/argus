@@ -129,3 +129,76 @@ test("sourceInRoot gives what on_disk in _common.py gives", { skip: noPython }, 
     assert.ok(answers.filter((a) => a !== null).length >= 6);
   });
 });
+
+/** POSIX rules without a disk where the folders in `links` are symbolic links: `real` follows each link when it
+ *  reaches it and only then reads the next component, as the file system does. */
+function linked(links: Record<string, string>, files: string[]): PathRules {
+  const real = (file: string): string => {
+    let at = "";
+    for (const name of file.split("/")) {
+      if (name === "" || name === ".") { continue; }
+      if (name === "..") { at = at.slice(0, at.lastIndexOf("/")); continue; }
+      at = links[at + "/" + name] ?? at + "/" + name;
+    }
+    return at || "/";
+  };
+  return { windows: false, real, isFile: (file) => files.includes(file) };
+}
+
+test("sourceInRoot: a .. after a symbolic link is resolved by the file system, not in the text (POSIX rules)", () => {
+  const links = { "/repo/alias": "/repo/sub/deep", "/repo/out": "/elsewhere/deep" };
+  const only = linked(links, ["/repo/sub/target.py", "/elsewhere/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", only), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "alias\\..\\target.py", only), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "/repo/alias/../target.py", only), "sub/target.py");   // an absolute source too
+  assert.equal(sourceInRoot("/repo", "sub/deep/../target.py", only), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "out/../target.py", only), undefined);                 // the link leads out of the root
+  // A file of that name beside the link is not the one the source names.
+  const both = linked(links, ["/repo/sub/target.py", "/repo/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", both), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "target.py", both), "target.py");
+  const beside = linked(links, ["/repo/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", beside), undefined);
+  // The root itself reached through a link.
+  assert.equal(sourceInRoot("/repo/alias/..", "target.py", only), "target.py");
+});
+
+test("on the disk of this system: a .. after a link to a folder resolves as the system and the checker resolve it", (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argus-link-"));
+  try {
+    const root = path.join(tmp, "Root");
+    fs.mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(root, "sub", "target.py"), "x = 1\n");
+    fs.writeFileSync(path.join(root, "sub", "deep", "inner.py"), "y = 2\n");
+    const windows = process.platform === "win32";
+    try {
+      fs.symlinkSync(path.join(root, "sub", "deep"), path.join(root, "alias"), windows ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`this system did not let the test create a link to a folder (${(error as Error).message}); the test on disk did not run`);
+      return;
+    }
+    const sources = ["alias/../target.py", "alias/../sub/target.py", "alias/inner.py", "alias/../deep/inner.py", "alias/../missing.py",
+      "alias/../../sub/target.py", "alias/./../target.py", "sub/deep/../target.py", "alias/../new/../target.py"];
+    // POSIX follows the link and then goes up from where it leads. Windows, and Python on Windows, take `alias\..`
+    // out of the path before any link is read.
+    const expected = windows
+      ? [undefined, "sub/target.py", "sub/deep/inner.py", undefined, undefined, undefined, undefined, "sub/target.py", undefined]
+      : ["sub/target.py", undefined, "sub/deep/inner.py", "sub/deep/inner.py", undefined, undefined, "sub/target.py", "sub/target.py", "sub/target.py"];
+    sources.forEach((source, i) => assert.equal(sourceInRoot(root, source), expected[i], `source '${source}'`));
+    // A file that is not saved yet, named through the link: the folder it will be in is the real one.
+    const unsaved = path.join(root, "alias", "..", "unsaved.py");
+    assert.equal(relativeIn(root, unsaved), windows ? "unsaved.py" : "sub/unsaved.py");
+    assert.equal(projectFor(unsaved, [project(path.join(root, "sub"))])?.sourceRoot, windows ? undefined : path.join(root, "sub"));
+    if (noPython) { t.diagnostic(noPython); return; }
+    const list = path.join(tmp, "sources.json");
+    fs.writeFileSync(list, JSON.stringify(sources), "utf8");
+    const program = ["import json, sys", "sys.path.insert(0, sys.argv[1])", "from _common import on_disk",
+      "print(json.dumps([on_disk(sys.argv[2], rel) for rel in json.load(open(sys.argv[3], encoding='utf-8'))]))"].join("\n");
+    const out = spawnSync("python", ["-B", "-c", program, path.resolve(__dirname, "../../../skills/argus/scripts"), root, list], { encoding: "utf8" });
+    assert.equal(out.status, 0, out.stderr);
+    const answers = JSON.parse(out.stdout) as (string | null)[];
+    sources.forEach((source, i) => assert.equal(sourceInRoot(root, source) ?? null, answers[i], `source '${source}' against on_disk`));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
