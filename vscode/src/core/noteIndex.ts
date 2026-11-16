@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { FileNote, OtherNote, isArgus, parseFileNote, parseOtherNote, parseProps } from "./notes";
 import { PathRules, Project, relativeIn, sourceInRoot, systemRules } from "./projects";
+import { readText } from "./readText";
 import { projectKey } from "./settings";
 
 export type Place = "notes" | "vault";
@@ -217,7 +218,7 @@ export class NoteIndex {
       return drop();
     }
     let text: string;
-    try { text = await fs.promises.readFile(file, "utf8"); } catch { return drop(); }
+    try { text = (await readText(file)).text; } catch { return drop(); }      // as the checker reads it
     if (had && had.text === text && had.place === place) {
       if (!had.file) { return false; }
       // The same note; whether its source is a file inside the root is asked again, as the disk may have changed.

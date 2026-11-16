@@ -73,10 +73,11 @@ function pyInt(digits: string): number {
   return value;
 }
 
-/** The text as the checker reads it: no byte-order mark, every line ending a "\n". */
+/** The text as the checker reads it: every line ending a "\n". The file's byte-order mark is dropped where the
+ *  bytes are read (readText.ts, as read_text does); a mark still here is a character of the text, as it is to
+ *  the checker. */
 function normalize(text: string): string {
-  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;   // the checker's reader drops the mark (read_text)
-  return body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
 // ---------------------------------------------------------------- properties
