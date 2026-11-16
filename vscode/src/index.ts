@@ -3,6 +3,7 @@
 
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { Choices } from "./core/choices";
 import { Entry, NoteIndex } from "./core/noteIndex";
 import { Project, projectFor, relativeIn } from "./core/projects";
 import { projectKey, projectsFrom } from "./core/settings";
@@ -21,13 +22,17 @@ export class Index implements vscode.Disposable {
   private watchers: vscode.Disposable[] = [];
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly where = new Map<string, { project?: Project; sourceRel?: string }>();
-  private readonly choices = new Map<string, number>();
   private readonly changed = new vscode.EventEmitter<Project>();
   private readonly touched = new vscode.EventEmitter<Project>();
+  private readonly chosen = new vscode.EventEmitter<void>();
+  private readonly choices = new Choices(() => { this.chosen.fire(); });
   /** The notes of a project changed in the index. */
   readonly onDidChange = this.changed.event;
   /** A file under a project's notes folder or vault folder was created, changed or deleted. */
   readonly onDidTouch = this.touched.event;
+  /** The person picked one of several notes for a source file: the note to show for that file changed, though no
+   *  note and no document did. */
+  readonly onDidChoose = this.chosen.event;
 
   constructor() {
     this.notes.onChange = (project) => { this.changed.fire(project); };
@@ -127,19 +132,19 @@ export class Index implements vscode.Disposable {
     const { project, sourceRel } = this.place(document);
     if (!project || sourceRel === undefined) { return { notes: [] }; }
     const notes = this.notes.fileNotesFor(project, sourceRel);
-    const picked = this.choices.get(projectKey(project) + "\n" + sourceRel);
-    const note = notes.length === 1 ? notes[0] : notes.find((entry) => entry.id === picked);
+    const note = this.choices.of(projectKey(project) + "\n" + sourceRel, notes);
     return { project, sourceRel, notes, note };
   }
 
   /** The person picked this one of several notes for its source; kept for this session only. */
   choose(entry: Entry): void {
-    if (entry.sourceRel !== undefined) { this.choices.set(projectKey(entry.project) + "\n" + entry.sourceRel, entry.id); }
+    if (entry.sourceRel !== undefined) { this.choices.choose(projectKey(entry.project) + "\n" + entry.sourceRel, entry.id); }
   }
 
   dispose(): void {
     this.unwatch();
     this.changed.dispose();
     this.touched.dispose();
+    this.chosen.dispose();
   }
 }

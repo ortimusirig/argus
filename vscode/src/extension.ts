@@ -55,6 +55,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidGrantWorkspaceTrust(configure),
     // A note that left the index takes what was matched against it with it.
     index.onDidChange(() => { forget(); redraw(); }),
+    // A picked note may be matched already: then no match is published, and the pick alone draws the markers.
+    index.onDidChoose(() => { markers.refresh(); }),
     matched.event((uri) => {
       markers.matched(uri);
       if (uri === active()?.uri.toString()) { panel.render(); }
