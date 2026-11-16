@@ -13,7 +13,7 @@ export function csp(cspSource: string, nonce: string): string {
   return `default-src 'none'; style-src ${cspSource}; img-src ${cspSource}; script-src 'nonce-${nonce}'`;
 }
 
-export function page(o: { cspSource: string; nonce: string; cssUri: string; jsUri: string; body: string }): string {
+export function page(o: { cspSource: string; nonce: string; cssUri: string; jsUri: string; body: string; pageId?: number }): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -23,7 +23,7 @@ export function page(o: { cspSource: string; nonce: string; cssUri: string; jsUr
 <link rel="stylesheet" href="${escape(o.cssUri)}">
 <title>Argus</title>
 </head>
-<body>
+<body${o.pageId === undefined ? "" : ` data-page="${o.pageId}"`}>
 ${o.body}
 <script nonce="${escape(o.nonce)}" src="${escape(o.jsUri)}"></script>
 </body>

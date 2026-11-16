@@ -64,7 +64,7 @@ export class Markers implements vscode.CodeLensProvider, vscode.Disposable {
     const marks = this.marksFor(document, ask);
     const last = document.lineCount;
     const ranges = (list: Mark[] | undefined): vscode.DecorationOptions[] => (list ?? []).filter((mark) => mark.from <= last)
-      .map((mark) => ({ range: new vscode.Range(mark.from - 1, 0, Math.min(mark.to, last) - 1, 0), hoverMessage: mark.say }));
+      .map((mark) => ({ range: new vscode.Range(mark.from - 1, 0, Math.min(mark.to, last) - 1, 0), hoverMessage: new vscode.MarkdownString().appendText(mark.say) }));
     editor.setDecorations(this.current, ranges(marks?.current));
     editor.setDecorations(this.warning, ranges(marks?.warning));
     editor.setDecorations(this.unexplained, ranges(marks?.unexplained));

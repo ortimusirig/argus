@@ -8,8 +8,8 @@
     if (target.dataset.href !== undefined) { vscode.postMessage({ type: "external", href: target.dataset.href }); return true; }
     if (target.dataset.pick !== undefined) { vscode.postMessage({ type: "pick", id: Number(target.dataset.pick) }); return true; }
     if (target.dataset.obsidian !== undefined) { vscode.postMessage({ type: "obsidian", id: Number(target.dataset.obsidian) }); return true; }
-    if (target.dataset.msg === "create") { vscode.postMessage({ type: "create" }); return true; }
-    if (target.dataset.msg === "check") { vscode.postMessage({ type: "check" }); return true; }
+    if (target.dataset.msg === "create") { vscode.postMessage({ type: "create", page: Number(document.body.dataset.page) }); return true; }
+    if (target.dataset.msg === "check") { vscode.postMessage({ type: "check", page: Number(document.body.dataset.page) }); return true; }
     if (target.dataset.msg === "setup") { vscode.postMessage({ type: "setup" }); return true; }
     if (target.dataset.msg === "back") { vscode.postMessage({ type: "back" }); return true; }
     return false;

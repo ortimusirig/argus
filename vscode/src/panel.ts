@@ -37,6 +37,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private again?: NodeJS.Timeout;
   private drawn?: vscode.TextDocument;                        // the document whose explanation the page shows: its buttons act on it
   private viewed?: vscode.TextDocument;                       // the document fileView() last looked at; it becomes `drawn` when its page is shown
+  private pageNo = 0;                                         // the number of the page that is shown; a click names its page
   private opening = false;                                    // a command is opening the panel right now
   private editor?: vscode.TextEditor;
   private asked?: { key: string; at: number };                // the match the panel waits for, and since when
@@ -175,7 +176,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     const web = view.webview;
     view.webview.html = page({ cspSource: web.cspSource, nonce: crypto.randomBytes(16).toString("hex"),
       cssUri: web.asWebviewUri(vscode.Uri.joinPath(this.media, "panel.css")).toString(),
-      jsUri: web.asWebviewUri(vscode.Uri.joinPath(this.media, "panel.js")).toString(), body: inner });
+      jsUri: web.asWebviewUri(vscode.Uri.joinPath(this.media, "panel.js")).toString(), body: inner, pageId: ++this.pageNo });
   }
 
   private listed(entries: Entry[]): Listed[] {
@@ -389,6 +390,12 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       // the page has not followed yet.
       case "create":
       case "check": {
+        // The click must come from the page that is shown now: a click of a page that was replaced meanwhile
+        // was meant for another file, and starts nothing.
+        if ((message as { page?: unknown } | null)?.page !== this.pageNo) {
+          this.tell("the panel changed before the click arrived; nothing was started. Click again.");
+          break;
+        }
         const drawn = this.drawn;
         if (!drawn || drawn.isClosed) { this.tell("the file this page showed is closed; nothing was started"); break; }
         await vscode.commands.executeCommand(action.do === "create" ? "argus.create" : "argus.check", drawn);

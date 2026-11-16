@@ -463,6 +463,12 @@ class MaskedLines {
  *  be as large, in `dense`, two bits for each distinct text line (0 not tested yet, 1 no, 2 yes). */
 interface Compiled { pattern: Pattern; sparse?: Uint32Array; dense?: Uint8Array; used: number; }
 
+/** How many bytes all patterns of one run together may keep of their answers. A masked line remembers, for each
+ *  different text line it was tested against, whether it matched; many masked lines against many different text
+ *  lines would keep patterns times lines. Beyond this the other patterns forget their answers and ask again when
+ *  they are needed: no comparison is dropped, some are made twice. */
+const MEMORY = 32 * 1024 * 1024;
+
 const NONE = new Int32Array(0);
 
 /** A text with every distinct line numbered once, so that comparing exact lines is comparing numbers. */
@@ -474,6 +480,8 @@ class NumberedText {
   private readonly points = new Pieces<Uint32Array>();
   private kept = 0;
   private readonly patterns: Table<Compiled>;
+  private remembered = 0;                                      // bytes of answers the patterns keep (MEMORY)
+  private remembering: Compiled[] = [];                        // the patterns that keep answers
   private readonly seed = (Math.random() * 0x100000000) | 0;   // of the places in the `sparse` tables, drawn as a Table's is
   private looked = 0;                                          // the places `known` and `put` passed over: work the caller counts
 
@@ -565,6 +573,18 @@ class NumberedText {
     }
     c.sparse = sparse;
     c.dense = dense;
+    const now = dense ? dense.length : 4 * (sparse as Uint32Array).length;
+    this.remembered += now - (old ? 4 * old.length : 0);
+    if (!old) { this.remembering.push(c); }
+    if (this.remembered > MEMORY) {
+      // Too much is kept: every other pattern forgets, and asks again when it is needed.
+      for (const other of this.remembering) {
+        if (other !== c) { other.sparse = undefined; other.dense = undefined; other.used = 0; }
+        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+      }
+      this.remembering = [c];
+      this.remembered = now;
+    }
   }
 
   /** Every start (0-based) where all lines of the block match in order. None is dropped; there is no cap. */
