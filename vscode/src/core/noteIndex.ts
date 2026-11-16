@@ -226,8 +226,24 @@ export class NoteIndex {
         return false;
       }
       if (folder) { return held.refreshed > asked ? false : this.refreshWork(held); }
-      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, file) : this.throughLink(held, file);
+      return file.toLowerCase().endsWith(".md") ? this.rereadWork(held, this.wayOf(held, file)) : this.throughLink(held, file);
     });
+  }
+
+  /** The path a note is read through. A note that two paths reach (its own, and a link to it) has the name of
+   *  the path a reading of the folders found first. An event for the other path reads the note again through
+   *  that first path, while it still leads there: so the note keeps its name. */
+  private wayOf(held: Held, file: string): string {
+    let key: string;
+    try { key = this.keyOf(file); } catch { return file; }
+    const entry = held.entries.get(key);
+    if (!entry) { return file; }
+    const named = (way: string): boolean => path.basename(way).slice(0, -3) === entry.name;   // without ".md"
+    if (named(file)) { return file; }
+    for (const way of held.from.values()) {
+      if (way.key === key && way.file !== file && named(way.file)) { return way.file; }
+    }
+    return file;
   }
 
   /** An event for a file that is no .md by its name: it may be what a link `Name.md` leads to, changed, made or

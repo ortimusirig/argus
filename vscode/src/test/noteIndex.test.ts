@@ -580,3 +580,20 @@ test("the file a link leads to is changed or deleted: the note read through the 
     assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
   } finally { s.done(); }
 });
+
+test("a note read through a link keeps the link's name when the file the link leads to changes", async () => {
+  const s = scratch();
+  try {
+    const real = s.write("vault/P/Real.md", fileNote("sub/b.py"));
+    const alias = s.write("vault/P/Alias.md", fileNote("sub/b.py"));
+    const index = new NoteIndex(linked(alias, () => real));
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.name), ["Alias"], "the first path in order names the note");
+
+    // The file itself is written anew; the event names the file, not the link.
+    fs.writeFileSync(real, fileNote("sub/b.py") + "\nmore\n");
+    await index.changed(s.project, real);
+    assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py").map((e) => e.name), ["Alias"], "as a reading of the folders gives it");
+  } finally { s.done(); }
+});
