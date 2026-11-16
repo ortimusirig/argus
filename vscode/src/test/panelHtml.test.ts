@@ -2,7 +2,7 @@ import { test } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { View, body, csp, page } from "../core/panelHtml";
+import { View, body, csp, page, withoutNote } from "../core/panelHtml";
 import { assign, runToEnd } from "../core/match";
 import { parseFileNote, parseOtherNote } from "../core/notes";
 
@@ -151,4 +151,36 @@ test("the Code column of the line table is the code, letter for letter: Markdown
   assert.ok(html.includes('<a data-note="Concept - x">'));
   assert.ok(html.includes("<em>none</em>"));
   assert.ok(html.includes('<pre><code>label = &quot;**bold**&quot;\n'));
+});
+
+test("no note and duplicate notes: the Problems fold says why a note of the project is not used, escaped", () => {
+  const why = `Link: its real path is outside the notes folder and the vault folder: 'C:/else/${EVIL}.md'`;
+  const fold = '<details data-fold="problems"><summary>Problems: 1 note of this project not used</summary>';
+  const none = body({ kind: "message", text: "No note: no Argus note explains a.py.", button: "create", problems: [why] });
+  assert.ok(none.includes("No note") && none.includes('data-msg="create"'));
+  const twice = body({ kind: "duplicates", file: "a.py", notes: [{ id: 1, name: "A", folder: "C:/v/P" }, { id: 2, name: "B", folder: "C:/v/Q" }],
+    problems: [why, "Other: its source names no file under the source root: '../x.py'"] });
+  assert.ok(twice.includes('data-pick="1"') && twice.includes('data-pick="2"'));
+  assert.ok(twice.includes("Problems: 2 notes of this project not used") && twice.includes("../x.py"));
+  for (const html of [none, twice]) {
+    assert.ok(html.includes("is outside the notes folder and the vault folder"), "the reason is shown");
+    assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;") && !html.includes("<img"), "escaped");
+  }
+  assert.ok(none.includes(fold));
+  // The same fold as in the view of a file's note.
+  assert.ok(body(fileView({ problems: [why] })).includes(fold));
+  // No problems: no fold.
+  assert.ok(!body({ kind: "message", text: "x", button: "create", problems: [] }).includes("<details"));
+  assert.ok(!body({ kind: "duplicates", file: "a.py", notes: [] }).includes("<details"));
+});
+
+test("a file without one note to show: no note with Create, or the duplicates to pick from, each with the project's problems", () => {
+  const problems = ["Link: its real path is outside the notes folder and the vault folder"];
+  const none = withoutNote("src/a.py", [], problems);
+  assert.deepEqual(none, { kind: "message", text: "No note: no Argus note explains src/a.py.", button: "create", problems });
+  assert.ok(body(none).includes("outside the notes folder"));
+  const notes = [{ id: 1, name: "A", folder: "C:/v/P" }, { id: 2, name: "B", folder: "C:/v/Q" }];
+  const twice = withoutNote("src/a.py", notes, problems);
+  assert.deepEqual(twice, { kind: "duplicates", file: "src/a.py", notes, problems });
+  assert.ok(body(twice).includes("outside the notes folder") && body(twice).includes("Duplicate notes: 2 notes"));
 });

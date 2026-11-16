@@ -10,7 +10,7 @@ import { Matcher } from "./core/matching";
 import { Latest } from "./core/latest";
 import { Context, handle, hrefsIn } from "./core/messages";
 import { Entry } from "./core/noteIndex";
-import { Badge, Listed, View, body, page } from "./core/panelHtml";
+import { Badge, Listed, View, body, page, withoutNote } from "./core/panelHtml";
 import { Project } from "./core/projects";
 import { projectKey } from "./core/settings";
 import { Shown, shownNote, shownView } from "./core/shown";
@@ -156,12 +156,11 @@ export class Panel implements vscode.WebviewViewProvider {
           + "the first workspace folder is taken as the source root.", button: "setup" }
         : { kind: "message", text: `${path.basename(document.uri.fsPath)} is not in an Argus project.` };
     }
-    if (at.notes.length === 0) {
-      return { kind: "message", text: `No note: no Argus note explains ${at.sourceRel}.`, button: "create" };
-    }
     if (!at.note || !at.note.file) {
-      this.duplicates = true;
-      return { kind: "duplicates", file: at.sourceRel, notes: this.listed(at.notes) };
+      // No note, or several: the project's problems are shown too, so a refused note is not hidden (core/panelHtml.ts).
+      const view = withoutNote(at.sourceRel, this.listed(at.notes), this.index.notes.problemsOf(at.project));
+      this.duplicates = view.kind === "duplicates";
+      return view;
     }
     const entry = at.note, note = at.note.file, uri = document.uri.toString();
     let assignment, matching: number | undefined;

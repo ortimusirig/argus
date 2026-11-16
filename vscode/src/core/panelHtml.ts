@@ -35,8 +35,9 @@ export interface Badge { label: string; why?: string; details?: Details; }
 export interface Listed { id: number; name: string; folder: string; }
 
 export type View =
-  | { kind: "message"; text: string; button?: "setup" | "create" }
-  | { kind: "duplicates"; file: string; notes: Listed[] }
+  // `problems`, here and below: the notes of the project that the index could not use, each as one sentence.
+  | { kind: "message"; text: string; button?: "setup" | "create"; problems?: string[] }
+  | { kind: "duplicates"; file: string; notes: Listed[]; problems?: string[] }
   | { kind: "places"; name: string; places: Listed[] }
   | { kind: "note"; id: number; folder: string; note: { name: string; body: string }; linkTo: LinkTo }
   | { kind: "file"; file: string; note: FileNote; noteId: number;
@@ -64,6 +65,22 @@ function listed(items: Listed[]): string {
 
 function items(list: string[]): string {
   return "<ul>" + list.map((text) => `<li>${escape(text)}</li>`).join("\n") + "</ul>";
+}
+
+/** The Problems fold: why notes of the project are not used. Nothing when there are none. The same in every view
+ *  of a file: with its note, with no note, with several notes. */
+function problemsHtml(problems: string[] | undefined): string[] {
+  if (!problems || problems.length === 0) { return []; }
+  return [`<details data-fold="problems"><summary>Problems: ${many(problems.length, "note", "notes")} of this project not used</summary><ul>`
+    + problems.map((p) => `<li>${escape(p)}</li>`).join("\n") + "</ul></details>"];
+}
+
+/** The view of a source file that has no one note to show: no note explains it, or several do. The project's
+ *  problems go with it: a note that was refused (its link leads out of the folders) is the likely reason. */
+export function withoutNote(file: string, notes: Listed[], problems: string[]): View {
+  return notes.length === 0
+    ? { kind: "message", text: `No note: no Argus note explains ${file}.`, button: "create", problems }
+    : { kind: "duplicates", file, notes, problems };
 }
 
 /** The "Check details" block: under the badge whenever a check result is stored, whatever the badge. */
@@ -160,10 +177,7 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
   out.push(`<p class="badge"><span class="badge-label">${escape(view.badge.label)}</span>${view.badge.why ? ` <span class="why">${escape(view.badge.why)}</span>` : ""}</p>`);
   if (view.badge.details) { out.push(checkHtml(view.badge.details)); }
   out.push(`<p class="actions">${button("check")} <button data-obsidian="${view.noteId}">Open note in Obsidian</button></p>`);
-  if (view.problems.length > 0) {
-    out.push(`<details data-fold="problems"><summary>Problems: ${many(view.problems.length, "note", "notes")} of this project not used</summary><ul>`
-      + view.problems.map((p) => `<li>${escape(p)}</li>`).join("\n") + "</ul></details>");
-  }
+  out.push(...problemsHtml(view.problems));
   if (unreadable) {
     out.push("<ul class=\"problems\">" + note.problems.map((p) => `<li>${escape(p)}</li>`).join("\n") + "</ul>");
     return out.join("\n");
@@ -198,10 +212,11 @@ export function body(view: View, notice?: string): string {
     case "message":
       out.push(`<p class="say">${escape(view.text)}</p>`);
       if (view.button) { out.push(`<p class="actions">${button(view.button)}</p>`); }
+      out.push(...problemsHtml(view.problems));
       break;
     case "duplicates":
       out.push(`<h1>${escape(view.file)}</h1>`, `<p class="say">Duplicate notes: ${view.notes.length} notes explain this file. `
-        + "Pick one for this session; nothing is chosen for you.</p>", listed(view.notes));
+        + "Pick one for this session; nothing is chosen for you.</p>", listed(view.notes), ...problemsHtml(view.problems));
       break;
     case "places":
       out.push(`<p class="say">${many(view.places.length, "note is", "notes are")} named '${escape(view.name)}'. Pick one:</p>`, listed(view.places));
