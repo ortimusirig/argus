@@ -95,7 +95,15 @@ function createHtml(create: Creating | undefined): string[] {
 }
 
 /** The "Check details" block: under the badge whenever a check result is stored, whatever the badge. */
+const CHECK_HTML = new WeakMap<Details, string>();
 function checkHtml(d: Details): string {
+  // Drawn once for each result: the lists can be very long, and the panel is drawn often.
+  let html = CHECK_HTML.get(d);
+  if (html === undefined) { html = checkHtmlOf(d); CHECK_HTML.set(d, html); }
+  return html;
+}
+
+function checkHtmlOf(d: Details): string {
   const out: string[] = ['<div class="check">'];
   const groups: [string, string[]][] = [["About this note", d.fails.mine], ["About the graph", d.fails.graph],
     ["About other notes", d.fails.others], ["Files without a note", d.fails.missing]];

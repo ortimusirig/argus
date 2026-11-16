@@ -36,6 +36,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private readonly latest = new Latest();                     // what was asked for after the selection moved stays (core/latest.ts)
   private again?: NodeJS.Timeout;
   private drawn?: vscode.TextDocument;                        // the document whose explanation the page shows: its buttons act on it
+  private viewed?: vscode.TextDocument;                       // the document fileView() last looked at; it becomes `drawn` when its page is shown
   private opening = false;                                    // a command is opening the panel right now
   private editor?: vscode.TextEditor;
   private asked?: { key: string; at: number };                // the match the panel waits for, and since when
@@ -158,10 +159,14 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
     // A shown note is asked of the index at each drawing: its text now, or the sentence that it is gone.
     const notes = this.index.notes;
     const now = this.trail.now;
+    // What the page stands for (document, project, a list of duplicates) belongs to the page that is shown. While
+    // a match is on its way the old page stays, and so does what it stands for: a click on it acts on its file.
+    const before = { project: this.project, duplicates: this.duplicates };
     const shown = now
       ? shownView(now, { byId: (id) => notes.noteById(id), holds: (entry) => notes.holds(entry), linkTo: (project) => this.linkTo(project) })
       : this.fileView();
-    if (!shown) { return; }                          // a match is on its way: what is shown stays for a moment
+    if (!shown) { this.project = before.project; this.duplicates = before.duplicates; return; }
+    if (!now) { this.drawn = this.viewed; }
     const inner = body(shown, this.notice);
     if (inner === this.inner) { return; }            // the same page is not loaded again: scrolling and focus stay
     this.inner = inner;
@@ -186,7 +191,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private fileView(): View | undefined {
     this.duplicates = false;
     const editor = this.current();
-    this.drawn = editor?.document;
+    this.viewed = editor?.document;
     if (!editor) { this.project = undefined; return { kind: "message", text: "Open a file to see its Argus explanation." }; }
     const document = editor.document;
     if (document.isUntitled || document.uri.scheme !== "file") {

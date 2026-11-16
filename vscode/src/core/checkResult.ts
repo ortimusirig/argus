@@ -83,7 +83,22 @@ export interface Details {
   fails: { mine: string[]; graph: string[]; others: string[]; missing: string[] };
 }
 
+/** The details of a result for a note, made once: a result can hold very many lines, and the panel asks at
+ *  every drawing. */
+const DETAILS = new WeakMap<CheckResult, Map<string, Details>>();
 export function detailsOf(result: CheckResult, noteName: string): Details {
+  let made = DETAILS.get(result);
+  if (!made) { made = new Map(); DETAILS.set(result, made); }
+  let details = made.get(noteName);
+  if (!details) {
+    if (made.size > 8) { made.clear(); }
+    details = groupDetails(result, noteName);
+    made.set(noteName, details);
+  }
+  return details;
+}
+
+function groupDetails(result: CheckResult, noteName: string): Details {
   const split = (list: About[]): { mine: string[]; graph: string[]; others: string[] } => ({
     mine: list.filter((item) => item.note === noteName).map((item) => item.text),
     graph: list.filter((item) => item.note !== noteName && item.graph === true).map((item) => item.text),

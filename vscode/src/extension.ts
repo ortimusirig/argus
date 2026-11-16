@@ -68,6 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
     index.onDidChange(() => { forget(); redraw(); }),
     // A picked note may be matched already: then no match is published, and the pick alone draws the markers.
     index.onDidChoose(() => { markers.refresh(); }),
+    index.onDidPlace(() => { redraw(); }),
     matched.event((uri) => {
       markers.matched(uri);
       if (uri === active()?.uri.toString()) { panel.render(); }
