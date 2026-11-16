@@ -404,3 +404,180 @@ test("sourceInRoot: a link in a circle is kept as written and the path is read o
   assert.equal(sourceInRoot("/repo", "out/target.py", more), undefined);                           // a file, but outside the root
   assert.equal(more.real("/repo/out/target.py"), "/elsewhere/target.py");
 });
+
+// ---------------------------------------------------------------- Windows namespaces, as Python's resolve() keeps them
+
+const notWindows = process.platform === "win32" ? false : "this system is not Windows; the test on a Windows disk did not run";
+const NS = "\\\\?\\";     // the prefix \\?\ of a path in the Win32 file namespace
+
+test("sourceInRoot: a root and a source of which one has the prefix \\\\?\\ do not meet, as on_disk's do not", { skip: notWindows }, () => {
+  onDisk((root) => {
+    // The reviewer's two cases. Python's resolve() keeps the prefix of a path that has it, and gives none to a path
+    // that has none; a path with the prefix is on another drive (`\\?\C:`) than the same path without it (`C:`).
+    assert.equal(sourceInRoot(root, NS + path.join(root, "a.py")), undefined);
+    assert.equal(sourceInRoot(NS + root, path.join(root, "a.py")), undefined);
+    assert.equal(sourceInRoot(root, NS + path.join(root, "sub", "b.py")), undefined);
+    assert.equal(sourceInRoot(NS + root, path.join(root, "sub", "b.py").toUpperCase()), undefined);
+    // Both with the prefix, or a source relative to a root that has it: the same namespace.
+    assert.equal(sourceInRoot(NS + root, NS + path.join(root, "a.py")), "a.py");
+    assert.equal(sourceInRoot(NS + root, "a.py"), "a.py");
+    assert.equal(sourceInRoot(NS + root.toUpperCase(), "SUB/B.PY"), "sub/b.py");
+    assert.equal(sourceInRoot(root, "a.py"), "a.py");
+    // relativeIn and projectFor have no counterpart in the checker; they keep the rule of sourceInRoot.
+    assert.equal(relativeIn(root, NS + path.join(root, "a.py")), undefined);
+    assert.equal(relativeIn(NS + root, path.join(root, "a.py")), undefined);
+    assert.equal(relativeIn(NS + root, NS + path.join(root, "sub", "b.py")), "sub/b.py");
+    assert.equal(projectFor(NS + path.join(root, "a.py"), [project(root)]), undefined);
+    assert.equal(projectFor(path.join(root, "a.py"), [project(NS + root)]), undefined);
+    assert.equal(projectFor(NS + path.join(root, "a.py"), [project(root), project(NS + root)])?.sourceRoot, NS + root);
+  });
+});
+
+test("sourceInRoot: a root that is itself the file named is '.', as on_disk gives it; to the editor a root holds no such file", () => {
+  // Path(root).resolve() and (base / ".").resolve() are one path, it is a file, and relative_to gives ".".
+  const win = rules(true, ["C:\\Work\\App\\a.py"]), posix = rules(false, ["/work/app/a.py"]);
+  assert.equal(sourceInRoot("C:\\Work\\App\\a.py", ".", win), ".");
+  assert.equal(sourceInRoot("C:\\Work\\App\\a.py", "c:/work/app/A.PY", win), ".");
+  assert.equal(sourceInRoot("C:\\Work\\App\\a.py", "../a.py", win), ".");
+  assert.equal(sourceInRoot("C:\\Work\\App", ".", win), undefined);                 // a folder is no file
+  assert.equal(sourceInRoot("/work/app/a.py", ".", posix), ".");
+  assert.equal(sourceInRoot("/work/app/a.py", "/work/app/a.py", posix), ".");
+  assert.equal(sourceInRoot("/work/app", ".", posix), undefined);
+  assert.equal(relativeIn("C:\\Work\\App\\a.py", "C:\\Work\\App\\a.py", win), undefined);
+  assert.equal(relativeIn("/work/app/a.py", "/work/app/a.py", posix), undefined);
+  assert.equal(projectFor("/work/app/a.py", [project("/work/app/a.py")], posix), undefined);
+});
+
+test("Windows paths in text: drives, joins and containment as ntpath and pathlib have them", () => {
+  // No disk: `real` gives each path back, so only the text rules are asked. Expected values are Python 3.13's.
+  const text: PathRules = { windows: true, real: (file) => file, isFile: () => true };
+  const table: [root: string, source: string, expected: string | undefined][] = [
+    ["C:\\Work\\App", "\\\\?\\C:\\Work\\App\\a.py", undefined],                       // \\?\C: is another drive than C:
+    ["\\\\?\\C:\\Work\\App", "C:\\Work\\App\\a.py", undefined],
+    ["\\\\?\\C:\\Work\\App", "C:a.py", undefined],                                    // a source with a drive of its own
+    ["C:\\Work\\App", "c:a.py", "a.py"],                                              // the same drive, no root: under the base
+    ["C:\\Work\\App", "D:a.py", undefined],
+    ["C:\\Work\\App", "/Work/App/a.py", "a.py"],                                      // a root and no drive: the base's drive
+    ["C:\\Work\\App", "/a.py", undefined],
+    ["\\\\?\\C:\\Work\\App", "\\\\?\\c:\\WORK\\app\\Sub\\a.py", "Sub/a.py"],
+    ["\\\\?\\C:\\", "\\\\?\\C:\\Work\\a.py", "Work/a.py"],
+    ["\\\\?\\C:\\", "/Work/a.py", "Work/a.py"],
+    ["\\\\server\\share\\App", "\\\\?\\UNC\\server\\share\\App\\a.py", undefined],
+    ["\\\\?\\UNC\\server\\share\\App", "\\\\server\\share\\App\\a.py", undefined],
+    ["\\\\?\\UNC\\server\\share\\App", "\\\\?\\unc\\SERVER\\share\\app\\a.py", "a.py"],
+    ["\\\\server\\share", "a.py", "a.py"],
+    ["\\\\server\\share\\App", "\\\\server\\other\\App\\a.py", undefined],
+    ["\\\\.\\C:\\Work\\App", "C:\\Work\\App\\a.py", undefined],                       // in text; on disk both resolve to C:\…
+    ["C:\\Work\\App", "C:\\Work\\App\\x:s", "./x:s"],                                 // a first name that reads as a drive
+    ["C:\\Work\\App", "sub/x:s", "sub/x:s"],
+    ["C:\\Work\\App", "x:s", undefined],                                              // drive x:
+    ["C:\\Work\\App\\", "./sub//b.py/", "sub/b.py"],
+    ["C:/Work/App", "sub/./b.py/.", "sub/b.py"],
+  ];
+  for (const [root, source, expected] of table) {
+    assert.equal(sourceInRoot(root, source, text), expected, `root '${root}' source '${source}'`);
+  }
+  assert.equal(relativeIn("C:\\Work\\App", "\\\\?\\C:\\Work\\App\\a.py", text), undefined);
+  assert.equal(relativeIn("\\\\?\\C:\\Work\\App", "\\\\?\\C:\\Work\\App\\a.py", text), "a.py");
+  assert.equal(projectFor("C:\\Work\\App\\a.py", [project("\\\\?\\C:\\Work\\App"), project("c:/work")], text)?.sourceRoot, "c:/work");
+});
+
+test("on a Windows disk: every form of root and source that the core once read otherwise than on_disk, with on_disk's answers", { skip: notWindows }, (t) => {
+  const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "argus-forms-")));
+  try {
+    const root = path.join(tmp, "Root"), drive = root.slice(0, 2), below = root.slice(3).replace(/\\/g, "/");
+    fs.mkdirSync(path.join(root, "sub", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(root, "a.py"), "x = 1\n");
+    fs.writeFileSync(path.join(root, "sub", "b.py"), "y = 2\n");
+    fs.writeFileSync(path.join(root, "sub", "deep", "inner.py"), "z = 3\n");
+    fs.writeFileSync(path.join(root, "x"), "w = 4\n");
+    let long = "";                                           // a path longer than the 260 characters of a plain Windows path
+    while ((root + long).length < 300) { long += (long ? "/" : "") + "d".repeat(40); }
+    fs.mkdirSync(path.join(root, long), { recursive: true });
+    fs.writeFileSync(path.join(root, long, "f.py"), "v = 5\n");
+    const a = path.join(root, "a.py"), device = "\\\\.\\";
+    const table: [root: string, source: string, expected: string | null][] = [
+      // One has the prefix \\?\, the other has not.
+      [root, NS + a, null],
+      [NS + root, a, null],
+      [root, "//?/" + a.replace(/\\/g, "/"), null],
+      [NS + root, a.toUpperCase(), null],
+      [root, NS + path.join(root, "sub", "..", "a.py"), null],
+      [NS + root, drive + "a.py", null],                     // C:a.py: a drive of its own
+      [root, drive.toLowerCase() + "a.py", "a.py"],
+      [tmp, NS + a, null],
+      [path.join(root, "sub"), NS + path.join(root, "sub", "b.py"), null],
+      // The same namespace on both sides.
+      [NS + root, "a.py", "a.py"],
+      [NS + root, NS + a, "a.py"],
+      [NS + root.toUpperCase(), "SUB\\B.PY", "sub/b.py"],
+      [NS + root, "sub/../a.py", "a.py"],
+      [NS + drive + "\\", NS + a, below + "/a.py"],
+      [NS + drive + "\\", root.slice(2) + "\\a.py", below + "/a.py"],
+      // \\.\ is no namespace of its own to Python: the real path has no prefix.
+      [device + root, "a.py", "a.py"],
+      [device + root, a, "a.py"],
+      [root, device + a, "a.py"],
+      [device + root, NS + a, null],
+      // Dots and spaces at the end of a name: the system drops them from a path without \\?\ and keeps them in one with it.
+      [root, "a.py.", "a.py"],
+      [root, "a.py ", "a.py"],
+      [root, "a.py. .", "a.py"],
+      [root, "sub./b.py", "sub/b.py"],
+      [root, "sub /b.py", "sub/b.py"],
+      [root, a + ".", "a.py"],
+      [root + ".", "a.py", "a.py"],
+      [root + " ", "sub/b.py", "sub/b.py"],
+      [root + ".", a, "a.py"],
+      [NS + root, "a.py.", null],
+      [NS + root + ".", "a.py", null],
+      // The root is the file.
+      [a, ".", "."],
+      [a, a, "."],
+      [NS + a, ".", "."],
+      [NS + a, a, null],
+      [a, "../a.py", "."],
+      // A longer path than a plain Windows path may be; the answer depends on the system's setting, so it is
+      // asked of the checker below and not written here.
+    ];
+    const depends: [root: string, source: string][] = [[root, long + "/f.py"], [root, path.join(root, long, "f.py")], [NS + root, long + "/f.py"],
+      [NS + root, NS + path.join(root, long, "f.py")], [path.join(root, long), "f.py"], [root, NS + path.join(root, long, "f.py")]];
+    try {
+      fs.writeFileSync(path.join(root, "x:s"), "a stream\n");
+      table.push([root, path.join(root, "x:s"), "./x:s"], [NS + root, NS + path.join(root, "x:s"), "./x:s"], [root, "x:s", null],
+        [root, "a.py::$DATA", "a.py"], [NS + root, a + "::$DATA", null]);
+    } catch { t.diagnostic("this disk has no named streams; those forms did not run"); }
+    try {
+      fs.symlinkSync(path.join(root, "sub", "deep"), path.join(root, "alias"), "junction");
+      table.push([root, NS + path.join(root, "alias", "inner.py"), null], [NS + root, "alias/inner.py", "sub/deep/inner.py"],
+        [NS + path.join(root, "alias"), "inner.py", "inner.py"], [path.join(root, "alias"), NS + path.join(root, "sub", "deep", "inner.py"), null]);
+    } catch { t.diagnostic("this system did not let the test create a junction; those forms did not run"); }
+    const share = `localhost\\${drive[0]}$${root.slice(2)}`;
+    if (fs.existsSync("\\\\" + share)) {
+      table.push(["\\\\" + share, NS + "UNC\\" + share + "\\a.py", null], [NS + "UNC\\" + share, "\\\\" + share + "\\a.py", null],
+        [NS + "UNC\\" + share, "a.py", "a.py"], [NS + "unc\\" + share.toUpperCase(), NS + "UNC\\" + share + "\\sub\\b.py", "sub/b.py"],
+        ["\\\\" + share, "a.py.", "a.py"], ["\\\\" + share, a, null], [root, "\\\\" + share + "\\a.py", null]);
+    } else { t.diagnostic(`the share \\\\${share} was not reached; the UNC forms did not run`); }
+    for (const [from, source, expected] of table) {
+      assert.equal(sourceInRoot(from, source) ?? null, expected, `root '${from}' source '${source}'`);
+    }
+    // relativeIn and projectFor keep the same rule for a file that is there.
+    for (const [from, source, expected] of table) {
+      if (!/^([A-Za-z]:[\\/]|\\\\|\/\/)/.test(source) || expected === ".") { continue; }
+      assert.equal(relativeIn(from, source) ?? null, expected, `relativeIn: root '${from}' file '${source}'`);
+      assert.equal(projectFor(source, [project(from)]) !== undefined, expected !== null, `projectFor: root '${from}' file '${source}'`);
+    }
+    if (noPython) { t.diagnostic(noPython); return; }
+    const all = [...table.map(([from, source]) => [from, source]), ...depends];
+    const list = path.join(tmp, "forms.json");
+    fs.writeFileSync(list, JSON.stringify(all), "utf8");
+    const program = ["import json, sys", "sys.path.insert(0, sys.argv[1])", "from _common import on_disk",
+      "print(json.dumps([on_disk(root, rel) for root, rel in json.load(open(sys.argv[2], encoding='utf-8'))]))"].join("\n");
+    const out = spawnSync("python", ["-B", "-c", program, path.resolve(__dirname, "../../../skills/argus/scripts"), list], { encoding: "utf8" });
+    assert.equal(out.status, 0, out.stderr);
+    const answers = JSON.parse(out.stdout) as (string | null)[];
+    all.forEach(([from, source], i) => assert.equal(sourceInRoot(from, source) ?? null, answers[i], `root '${from}' source '${source}' against on_disk`));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
