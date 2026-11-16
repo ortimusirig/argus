@@ -529,3 +529,42 @@ test("a declared line of 250,000 [masked] side by side: preparing the pattern yi
   assert.deepEqual(states(run(masks, [only, "y"])), [["1", "current", 1, 1]]);
   assert.equal(run(masks, ["x".repeat(250002), "y"]).placed[0].state, "changed");
 });
+
+test("64 declared [masked] lines, each after 1,000,000 spaces: telling what a line is yields every few milliseconds; right answer", () => {
+  const SPACES = " ".repeat(1000000), short = numbered(256);
+  const all = (count: number, line: string): string[] => new Array<string>(count).fill(line);
+  const shapes: { name: string; code: string[]; text: string[]; state: string; at: [number, number];
+    spacesOnly?: boolean; unexplained: [number, number][]; line: string; same: string; other?: string; }[] = [
+    // The reviewer's case: every line of the block is a whole-line mask (the checker's step 4), so it fits anywhere;
+    // the place nearest to its recorded lines is the best one.
+    { name: "64 lines of 1,000,000 spaces and [masked]", code: all(64, SPACES + MASK), text: short, state: "current-masked", at: [1, 64],
+      unexplained: [[65, 256]], line: SPACES + MASK, same: "anything" },
+    // Masks and white space only (step 5): such a line matches only a line equal to it.
+    { name: "64 lines of [masked], 1,000,000 spaces, [masked]", code: all(64, MASK + SPACES + MASK), text: [...all(64, MASK + SPACES + MASK), "x"],
+      state: "current", at: [1, 64], unexplained: [[65, 65]], line: MASK + SPACES + MASK, same: MASK + SPACES + MASK, other: "a" + SPACES + "b" },
+    // A pattern (step 6) that begins with the spaces.
+    { name: "64 lines of 1,000,000 spaces and [masked]x", code: all(64, SPACES + MASK + "x"), text: short, state: "changed", at: [1, 64],
+      unexplained: [[1, 256]], line: SPACES + MASK + "x", same: SPACES + "yx", other: SPACES + "x" },
+    // No mask at all: white space at the ends of the lines of the note and of the text, and text lines of nothing else.
+    { name: "lines that end in 1,000,000 spaces, on both sides", code: [...all(32, "x"), ...all(32, "y" + SPACES)],
+      text: [...all(32, "x" + SPACES), ...all(32, "y"), ...all(64, SPACES), "z"], state: "changed", at: [1, 64], spacesOnly: true,
+      unexplained: [[1, 64], [129, 129]], line: "y" + SPACES, same: "y" + SPACES, other: "y" },
+  ];
+  for (const { name, code, text, state, at, spacesOnly, unexplained, line, same, other } of shapes) {
+    const n = note([block("1", 1, code)], "1-64");
+    const { result, gaps, took } = gapsOf(n, text);
+    const first = gaps[0], sorted = [...gaps].sort((x, y) => x - y);
+    const median = sorted[sorted.length >> 1], longest = sorted[sorted.length - 1];
+    console.log(`timing: ${name}: first yield after ${first.toFixed(2)} ms; ran ${took.toFixed(0)} ms in ${gaps.length} slices; `
+      + `work between yields: median ${median.toFixed(2)} ms, longest ${longest.toFixed(2)} ms`);
+    assert.deepEqual(states(result), [["1", state, at[0], at[1]]], name);
+    assert.equal(result.placed[0].spacesOnly, spacesOnly, name);
+    assert.deepEqual(result.unexplained, unexplained, name);
+    assert.ok(gaps.length > 1, `${name}: it never yielded`);
+    assert.ok(median <= 4, `${name}: median work between yields ${median} ms`);
+    assert.ok(longest <= 25, `${name}: longest work between yields ${longest} ms`);
+    // The same answers from the call that does not yield.
+    assert.equal(sameLine(line, same, 1, n.props), true, name);
+    if (other !== undefined) { assert.equal(sameLine(line, other, 1, n.props), false, name); }   // a whole-line mask fits every line
+  }
+});

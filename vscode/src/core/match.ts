@@ -2,7 +2,7 @@
 // The mask rules are those of skills/argus/scripts/check_notes.py (the code-fence comparison in check_file_note).
 // No trim() anywhere in this file: every "white space" below is pyStrip's set, Python's.
 
-import { Block, FileNote, MASK, NoteProps, isMasked, pyRStrip, pyStrip } from "./notes";
+import { Block, FileNote, MASK, NoteProps, isMasked, isSpace, pyRStrip, pyStrip } from "./notes";
 
 export { pyStrip } from "./notes";   // defined beside the note reader, which needs it too; this is the plan's `pyStrip`
 
@@ -151,30 +151,84 @@ export function maskedMatch(noteLine: string, textLine: string): boolean {
 
 type Kind = "exact" | "any" | "pattern";
 
-/** Whether the line holds nothing but masks and white space: pyStrip(line with every [masked] taken out) === "",
- *  read from the left without cutting the line up. It stops at the first character that is neither. */
-function onlyMasks(line: string): boolean {
-  for (let i = 0; i < line.length;) {
-    if (line.startsWith(MASK, i)) { i += MASK.length; continue; }
-    if (pyStrip(line[i]) !== "") { return false; }
-    i++;
+// White space is read as the patterns are prepared: STEP characters, then a yield. A line may be a million spaces.
+
+/** One piece of white space read without a yield, upwards from `i` and not past `stop`: where it ends. */
+function spacesUp(line: string, i: number, stop: number): number {
+  while (i < stop && isSpace(line.charCodeAt(i))) { i++; }
+  return i;
+}
+
+/** The same downwards: where the white space that ends at `i` begins, not before `stop`. */
+function spacesDown(line: string, i: number, stop: number): number {
+  while (i > stop && isSpace(line.charCodeAt(i - 1))) { i--; }
+  return i;
+}
+
+/** Where the white space that begins at `from` ends: the place of the first character that is none, or the line's
+ *  length. Yields every STEP characters. */
+function* spaceEnd(line: string, from: number): Generator<void, number, void> {
+  for (let i = from; ;) {
+    const stop = Math.min(i + STEP, line.length);
+    i = spacesUp(line, i, stop);
+    if (i < stop || stop === line.length) { return i; }
+    yield;
+  }
+}
+
+/** Where the white space at the end of the line begins, not before `from`: pyRStrip(line) is the line up to there.
+ *  Yields every STEP characters. */
+function* spaceStart(line: string, from: number): Generator<void, number, void> {
+  for (let i = line.length; ;) {
+    const stop = Math.max(i - STEP, from);
+    i = spacesDown(line, i, stop);
+    if (i > stop || stop === from) { return i; }
+    yield;
+  }
+}
+
+/** Whether the line holds nothing but masks and white space from `from` on: pyStrip(line with every [masked] taken
+ *  out) === "", read from the left without cutting the line up. It stops at the first character that is neither.
+ *  Yields every STEP characters. */
+function* onlyMasks(line: string, from: number): Generator<void, boolean, void> {
+  for (let i = from, work = 0; i < line.length;) {
+    const stop = Math.min(i + STEP - work, line.length), next = spacesUp(line, i, stop);
+    work += next - i;
+    i = next;
+    if (i < stop) {                                          // a character that is no white space: a mask, or something else
+      if (!line.startsWith(MASK, i)) { return false; }
+      i += MASK.length;
+      work += MASK.length;
+    }
+    if (work >= STEP) { work = 0; yield; }
   }
   return true;
 }
 
-/** What a note line may match, from the checker's steps 2 to 5. A line that holds a mask it may not use ("never")
- *  can match only a text line equal to it, so it is an exact line. */
-function kindOf(noteLine: string, lineNo: number, props: NoteProps): Kind {
-  if (!noteLine.includes(MASK)) { return "exact"; }
-  if (!isMasked(props, lineNo)) { return "exact"; }
-  if (pyStrip(noteLine) === MASK) { return "any"; }
-  return onlyMasks(noteLine) ? "exact" : "pattern";
+/** Whether the line may use its masks at all (the checker's steps 2 and 3). A line that holds no mask, or a mask it
+ *  may not use ("never"), can match only a text line equal to it, so it is an exact line. Nothing of the line is
+ *  read here but in one search for the mask. */
+function mayMask(noteLine: string, lineNo: number, props: NoteProps): boolean {
+  return noteLine.includes(MASK) && isMasked(props, lineNo);
+}
+
+/** What a line that may use its masks matches, from the checker's steps 4 and 5: "any" when pyStrip(line) is one
+ *  [masked], "exact" when it holds only masks and white space, else "pattern". The line is not trimmed at once: its
+ *  white space is read with a yield every STEP characters. */
+function* maskKind(noteLine: string): Generator<void, Kind, void> {
+  const start = yield* spaceEnd(noteLine, 0);
+  if (noteLine.startsWith(MASK, start)) {
+    const after = start + MASK.length;
+    if ((yield* spaceStart(noteLine, after)) === after) { return "any"; }
+  }
+  return (yield* onlyMasks(noteLine, start)) ? "exact" : "pattern";
 }
 
 function* sameLineSteps(noteLine: string, textLine: string, lineNo: number, props: NoteProps): Generator<void, boolean, void> {
   const text = withoutEnding(textLine);
   if (noteLine === text) { return true; }                    // (1) equal, whatever the line holds
-  const kind = kindOf(noteLine, lineNo, props);              // (2) no mask, (3) not declared, (5) only masks: no match
+  // (2) no mask, (3) not declared, (5) only masks: no match
+  const kind = mayMask(noteLine, lineNo, props) ? yield* maskKind(noteLine) : "exact";
   if (kind === "exact") { return false; }
   if (kind === "any") { return true; }                       // (4) [masked] alone, with or without white space around
   return yield* maskedSteps(noteLine, text);                 // (6)
@@ -212,6 +266,31 @@ function* drive<T>(steps: Generator<void, T, void>, slicer: Slicer): Generator<n
   }
 }
 
+/** Runs the steps of one line: at once when the line is short, inside the slice when it is long. */
+function* stepped<T>(steps: Generator<void, T, void>, size: number, slicer: Slicer): Generator<number, T, void> {
+  return size < STEP ? runToEnd(steps) : yield* drive(steps, slicer);
+}
+
+// The two below are for a line of STEP characters or more. A shorter line is trimmed at once by the caller, with
+// pyRStrip or pyStrip and without a generator: there is one such call for every line of the text.
+
+/** pyRStrip(line) of a long line: the white space at its end is read inside the slice. */
+function* rstripped(line: string, slicer: Slicer): Generator<number, string, void> {
+  const end = yield* drive(spaceStart(line, 0), slicer);
+  return end === line.length ? line : line.slice(0, end);
+}
+
+/** Whether pyStrip(line) is not "" for a long line: it holds a character that is no white space. */
+function* notBlank(line: string, slicer: Slicer): Generator<number, boolean, void> {
+  return (yield* drive(spaceEnd(line, 0), slicer)) < line.length;
+}
+
+/** The work of one native step over a whole line (a comparison, a look in a Map), in units: such a step cannot be
+ *  cut up, but a long line counts for more than a short one, so that the clock is looked at after it. */
+function whole(line: string): number {
+  return line.length >> 10;
+}
+
 // ---------------------------------------------------------------- candidates
 
 interface Compiled { pattern: Pattern; memo?: Uint8Array; }   // memo: two bits for each distinct text line
@@ -225,12 +304,13 @@ class NumberedText {
   private kept = 0;
   private readonly patterns = new Map<string, Compiled>();
 
-  private constructor(readonly props: NoteProps, readonly text: string[], private readonly norm: (line: string) => string) {
+  /** `loose`: the text's lines are without the white space at their ends, and the note's lines are read so too. */
+  private constructor(readonly props: NoteProps, readonly text: string[], private readonly loose: boolean) {
     this.seq = new Int32Array(text.length);
   }
 
-  static *of(props: NoteProps, text: string[], norm: (line: string) => string, slicer: Slicer): Generator<number, NumberedText, void> {
-    const numbered = new NumberedText(props, text, norm);
+  static *of(props: NoteProps, text: string[], loose: boolean, slicer: Slicer): Generator<number, NumberedText, void> {
+    const numbered = new NumberedText(props, text, loose);
     for (let i = 0; i < text.length; i++) {
       let id = numbered.ids.get(text[i]);
       if (id === undefined) {
@@ -239,7 +319,7 @@ class NumberedText {
         numbered.distinct.push(text[i]);
       }
       numbered.seq[i] = id;
-      if (slicer.due(4)) { yield slicer.done; slicer.resume(); }
+      if (slicer.due(4 + whole(text[i]))) { yield slicer.done; slicer.resume(); }
     }
     return numbered;
   }
@@ -272,8 +352,13 @@ class NumberedText {
     const exact = new Int32Array(length).fill(-1);    // the number of each exact line; -1 for the other kinds
     const patterns: { at: number; c: Compiled }[] = [];
     for (let k = 0; k < length; k++) {
-      const line = this.norm(block.code[k]);
-      const kind = kindOf(line, block.from + k, this.props);   // the mask permission of a line is that of its recorded number
+      const code = block.code[k];
+      const line = !this.loose ? code : code.length < STEP ? pyRStrip(code) : yield* rstripped(code, slicer);
+      let kind: Kind = "exact", units = 4 + whole(line);
+      if (mayMask(line, block.from + k, this.props)) {         // the mask permission of a line is that of its recorded number
+        kind = yield* stepped(maskKind(line), line.length, slicer);
+        units += line.length >> 2;
+      }
       if (kind === "exact") {
         const id = this.ids.get(line);
         if (id === undefined) { return []; }           // a line the text does not hold at all
@@ -281,7 +366,7 @@ class NumberedText {
       } else if (kind === "pattern") {
         patterns.push({ at: k, c: yield* this.compiled(line, slicer) });
       }
-      if (slicer.due(4)) { yield slicer.done; slicer.resume(); }
+      if (slicer.due(units)) { yield slicer.done; slicer.resume(); }
     }
     // (1) The longest run of exact lines, searched in the text's numbers with Knuth-Morris-Pratt.
     let runAt = 0, runLength = 0;
@@ -373,7 +458,7 @@ function* allStarts(numbered: NumberedText, blocks: Block[], slicer: Slicer): Ge
 export function* candidates(note: FileNote, textLines: string[]): Generator<number, number[][], void> {
   const slicer = new Slicer();
   const text = yield* withoutEndings(textLines, slicer);
-  const numbered = yield* NumberedText.of(note.props, text, (line) => line, slicer);
+  const numbered = yield* NumberedText.of(note.props, text, false, slicer);
   const found = yield* allStarts(numbered, note.blocks, slicer);
   return found.map((starts) => starts.map((start) => start + 1));
 }
@@ -417,7 +502,7 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
   const slicer = new Slicer();
   const text = yield* withoutEndings(textLines, slicer);
   const total = text.length;
-  const numbered = yield* NumberedText.of(note.props, text, (line) => line, slicer);
+  const numbered = yield* NumberedText.of(note.props, text, false, slicer);
   const found = yield* allStarts(numbered, note.blocks, slicer);
 
   // Blocks in the order of their recorded `from`. Forward: the best way to place blocks up to this one with this
@@ -511,7 +596,7 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
       for (let k = 0; k < length; k++) {
         if (block.code[k] !== text[start + k]) { masked = true; }
         covered[start + k] = 1;
-        if (slicer.due()) { yield slicer.done; slicer.resume(); }
+        if (slicer.due(1 + whole(block.code[k]))) { yield slicer.done; slicer.resume(); }
       }
       placed[order[o]] = { block, state: masked ? "current-masked" : "current", at: { from: start + 1, to: start + length } };
     } else if (best.length > 0) {
@@ -530,10 +615,10 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
         if (!loose) {
           const stripped: string[] = new Array(total);
           for (let i = 0; i < total; i++) {
-            stripped[i] = pyRStrip(text[i]);
-            if (slicer.due(4)) { yield slicer.done; slicer.resume(); }
+            stripped[i] = text[i].length < STEP ? pyRStrip(text[i]) : yield* rstripped(text[i], slicer);
+            if (slicer.due(4 + (text[i].length >> 6))) { yield slicer.done; slicer.resume(); }
           }
-          loose = yield* NumberedText.of(note.props, stripped, pyRStrip, slicer);
+          loose = yield* NumberedText.of(note.props, stripped, true, slicer);
         }
         const nearly = yield* loose.starts(block, slicer);
         if (nearly.length > 0) {
@@ -549,10 +634,10 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
   const unexplained: [number, number][] = [];
   let open = 0;                                           // the first line of the range being collected, or 0
   for (let i = 0; i < total; i++) {
-    const bare = covered[i] === 0 && pyStrip(text[i]) !== "";
+    const bare = covered[i] === 0 && (text[i].length < STEP ? pyStrip(text[i]) !== "" : yield* notBlank(text[i], slicer));
     if (bare && open === 0) { open = i + 1; }
     if (!bare && open > 0) { unexplained.push([open, i]); open = 0; }
-    if (slicer.due(2)) { yield slicer.done; slicer.resume(); }
+    if (slicer.due(2 + (text[i].length >> 6))) { yield slicer.done; slicer.resume(); }
   }
   if (open > 0) { unexplained.push([open, total]); }
   return { placed, unexplained };
