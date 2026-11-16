@@ -255,19 +255,23 @@ test("sourceInRoot: a chain of two links, and links that lead back inside the ro
   assert.equal(projectFor("/repo/near/inner.py", [project("/repo/sub"), project("/repo/alias")], inner)?.sourceRoot, "/repo/alias");
 });
 
-test("sourceInRoot: links that lead round in a circle are refused, and at once (POSIX rules)", () => {
+test("sourceInRoot: a path that ends in a circle of links names no file; one that leaves the circle by .. is read on (POSIX rules)", () => {
   const files = ["/repo/target.py", "/repo/sub/target.py"];
   const loop = disk({ "/repo/a": "b", "/repo/b": "/repo/a", "/repo/self": "self", "/repo/deep": "deep/x" }, files);
-  for (const source of ["a/../target.py", "b/../target.py", "a", "self/../target.py", "deep/../target.py", "sub/../a/target.py"]) {
+  // The link in the circle stays as written (see the test of the reviewer's case below): no file is at or below it.
+  for (const source of ["a", "a/target.py", "self", "self/target.py", "deep/../target.py", "sub/../a/target.py"]) {
     assert.equal(sourceInRoot("/repo", source, loop), undefined, `source '${source}'`);
   }
-  assert.equal(sourceInRoot("/repo", "target.py", loop), "target.py");
+  for (const source of ["a/../target.py", "b/../target.py", "self/../target.py", "target.py"]) {
+    assert.equal(sourceInRoot("/repo", source, loop), "target.py", `source '${source}'`);
+  }
   assert.equal(sourceInRoot("/repo/a", "target.py", loop), undefined);
-  assert.equal(relativeIn("/repo", "/repo/a/x.py", loop), undefined);
+  // A path that need not be a file: the real path Python gives, the link kept as a name.
+  assert.equal(relativeIn("/repo", "/repo/a/x.py", loop), "a/x.py");
   assert.equal(relativeIn("/repo/self", "/repo/target.py", loop), undefined);
-  const here = project("/repo"), nowhere = project("/repo/a");
-  assert.equal(projectFor("/repo/self/x.py", [here], loop), undefined);
-  assert.equal(projectFor("/repo/target.py", [nowhere, here], loop), here);              // a root that is nowhere is passed over
+  const here = project("/repo"), circle = project("/repo/a");
+  assert.equal(projectFor("/repo/self/x.py", [here], loop), here);
+  assert.equal(projectFor("/repo/target.py", [circle, here], loop), here);               // a root in a circle holds only what is written below it
 });
 
 /** A chain of `n` links in /repo: l0 names l1, l1 names l2, and so on; the last one names the folder `sub`. */
@@ -298,19 +302,20 @@ test("sourceInRoot: a link met twice in one path, but not while it is being reso
   assert.equal(sourceInRoot("/repo", "left/../right/../a/../target.py", rules), "target.py");
 });
 
-test("sourceInRoot: a circle of two links and a link to itself are refused at once, however they are reached (POSIX rules)", () => {
+test("sourceInRoot: a circle of two links and a link to itself are read at once, however they are reached (POSIX rules)", () => {
   const files = ["/repo/target.py", "/repo/sub/target.py"];
   const reads = { count: 0 };
   const links = new Map(Object.entries({ "/repo/a": "b", "/repo/b": "a", "/repo/self": "self", "/repo/self2": "./self2",
     "/repo/in": "sub/../in/x", "/repo/to-circle": "a", ...Object.fromEntries(Object.entries(chain(1000)).map(([k, v]) => [k, v === "sub" ? "a" : v])) }));
   const rules = posixRules({ link: (file) => { reads.count++; return links.get(file); }, isFile: (file) => files.includes(file) });
-  for (const source of ["a", "b", "a/target.py", "a/../target.py", "self", "self/../target.py", "self2/target.py", "in/../target.py",
-    "to-circle/../target.py", "sub/../b/../target.py", "l0/../target.py"]) {
+  const out = ["a", "b", "a/target.py", "self", "self2/target.py", "in/../target.py"];          // at or below a link of a circle: no file
+  const back = ["a/../target.py", "self/../target.py", "to-circle/../target.py", "sub/../b/../target.py", "l0/../target.py"];
+  for (const source of [...out, ...back]) {
     reads.count = 0;
     const started = performance.now();
-    assert.equal(sourceInRoot("/repo", source, rules), undefined, `source '${source}'`);
+    assert.equal(sourceInRoot("/repo", source, rules), back.includes(source) ? "target.py" : undefined, `source '${source}'`);
     const took = performance.now() - started;
-    assert.ok(took < 100, `source '${source}': refused after ${took} ms`);
+    assert.ok(took < 100, `source '${source}': answered after ${took} ms`);
     assert.ok(reads.count < 1100, `source '${source}': the disk was asked ${reads.count} times`);   // l0: 1,000 links, each read once
   }
   assert.equal(sourceInRoot("/repo", "target.py", rules), "target.py");
@@ -366,4 +371,36 @@ test("on the disk of this system: a link whose target does not exist, as the sys
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test("sourceInRoot: a link in a circle is kept as written and the path is read on, as Python's resolve() reads it (POSIX rules)", () => {
+  // The reviewer's case: /repo/self names itself. Python 3.13's Path.resolve() (posixpath.realpath, not strict)
+  // does not fail there: it keeps /repo/self and reads on, so the .. takes it out again.
+  const files = ["/repo/target.py", "/repo/sub/target.py", "/elsewhere/target.py"];
+  const self = disk({ "/repo/self": "self" }, files);
+  assert.equal(sourceInRoot("/repo", "self/../target.py", self), "target.py");
+  assert.equal(sourceInRoot("/repo", "self\\..\\target.py", self), "target.py");
+  assert.equal(sourceInRoot("/repo", "/repo/self/../target.py", self), "target.py");
+  assert.equal(sourceInRoot("/repo", "self/missing/../../sub/target.py", self), "sub/target.py");   // a name that is not there, after the circle
+  assert.equal(sourceInRoot("/repo", "self/target.py", self), undefined);                          // read to the end, but no file
+  assert.equal(sourceInRoot("/repo", "self", self), undefined);
+  assert.equal(self.real("/repo/self/x.py"), "/repo/self/x.py");
+  // A circle of two: the link met while it is being resolved is the one that is kept.
+  const two = disk({ "/repo/a": "b", "/repo/b": "/repo/a" }, files);
+  assert.equal(sourceInRoot("/repo", "a/../target.py", two), "target.py");
+  assert.equal(sourceInRoot("/repo", "b/../target.py", two), "target.py");
+  assert.equal(two.real("/repo/a"), "/repo/a");
+  assert.equal(two.real("/repo/b"), "/repo/b");
+  assert.equal(sourceInRoot("/repo", "sub/../a/target.py", two), undefined);
+  // What the link names after the circle is still read: components, and each .. from where they have led.
+  const more = disk({ "/repo/deep": "deep/x", "/repo/in": "sub/../in/x", "/repo/up": "up/..", "/repo/out": "out/../../elsewhere" }, files);
+  assert.equal(more.real("/repo/deep"), "/repo/deep/x");
+  assert.equal(sourceInRoot("/repo", "deep/../target.py", more), undefined);                       // /repo/deep/target.py
+  assert.equal(sourceInRoot("/repo", "deep/../../target.py", more), "target.py");
+  assert.equal(sourceInRoot("/repo", "in/../target.py", more), undefined);                         // /repo/in/target.py
+  assert.equal(sourceInRoot("/repo", "in/../../target.py", more), "target.py");
+  assert.equal(sourceInRoot("/repo", "up/target.py", more), "target.py");                          // /repo/up/.. is /repo
+  assert.equal(sourceInRoot("/repo", "up/../target.py", more), undefined);                         // /target.py: outside
+  assert.equal(sourceInRoot("/repo", "out/target.py", more), undefined);                           // a file, but outside the root
+  assert.equal(more.real("/repo/out/target.py"), "/elsewhere/target.py");
 });

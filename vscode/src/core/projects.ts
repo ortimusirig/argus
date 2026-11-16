@@ -25,7 +25,11 @@ export interface PosixDisk {
  *  link's folder) whether or not that exists; a `..` goes up from where the components before it have led; a name
  *  that is not on disk is kept as written (a file not saved yet).
  *  No count of links is a limit. A link is read once: where it leads is kept, and a path that meets it again goes
- *  there at once. Throws when the links lead round in a circle: a link is met while it is itself being resolved. */
+ *  there at once.
+ *  Links that lead round in a circle are no error, as they are none to resolve() without `strict` (Python 3.13,
+ *  posixpath.realpath): a link met while it is itself being resolved is kept as written, as a name that is no link
+ *  is, and the components after it are read on, each `..` from there. Whether the path reached is a file, and
+ *  inside the root, is asked afterwards by the callers. */
 function posixReal(full: string, link: (file: string) => string | undefined): string {
   // The components still to read, the next one last. Where a link's own components end, the link is written down
   // instead of a component: all before it are read, so the path reached is where the link leads.
@@ -39,9 +43,7 @@ function posixReal(full: string, link: (file: string) => string | undefined): st
     if (name === "..") { at = at.slice(0, at.lastIndexOf("/")); continue; }
     const here = at + "/" + name;
     if (leads.has(here)) {
-      const known = leads.get(here);
-      if (known === undefined) { throw new Error(`symbolic links lead round in a circle at '${here}', in '${full}'`); }
-      at = known;
+      at = leads.get(here) ?? here;                        // being resolved now: a circle, and the link stays as written
       continue;
     }
     const target = link(here);
@@ -115,7 +117,7 @@ export function relativeIn(root: string, filePath: string, rules: PathRules = sy
   try {
     return inside(rules.real(root), rules.real(filePath), rules);
   } catch {
-    return undefined;      // links that do not end: the path is nowhere
+    return undefined;      // a path the system could not read is nowhere
   }
 }
 
@@ -126,11 +128,11 @@ export function projectFor<P extends Project>(filePath: string, projects: readon
     const file = rules.real(filePath);
     for (const project of projects) {
       let root: string;
-      try { root = rules.real(project.sourceRoot); } catch { continue; }      // a root that is nowhere holds no file
+      try { root = rules.real(project.sourceRoot); } catch { continue; }      // a root that could not be read holds no file
       if (root.length > longest && inside(root, file, rules) !== undefined) { best = project; longest = root.length; }
     }
   } catch {
-    return undefined;      // links that do not end: the file is nowhere
+    return undefined;      // a path the system could not read is nowhere
   }
   return best;
 }
