@@ -437,3 +437,14 @@ test("blank lines between a block's code and its explanation cost time in propor
   assert.ok(took < 1000, `took ${took} ms`);
   assert.equal(note.blocks[0].prose, "The explanation.\n\nIts second paragraph.");
 });
+
+test("a table of 150,000 rows kept in a block's prose is read whole, not passed as arguments", () => {
+  const small = fileNote("a.py", ["x = 1"], [{ id: "1", purpose: "sets x", from: 1, to: 1,
+    after: ["| Part | Meaning |", "| --- | --- |", "| `x` | the name |"] }]);
+  const many = Array.from({ length: 150000 }, (_, k) => `| \`p${k}\` | meaning ${k} |`).join("\n");
+  const text = small.replace("| `x` | the name |", many);
+  assert.notEqual(text, small);
+  const note = parseFileNote("P file - a.py", "P file - a.py.md", text);
+  assert.deepEqual(note.problems, []);
+  assert.equal(note.blocks[0].prose, "| Part | Meaning |\n| --- | --- |\n" + many);
+});

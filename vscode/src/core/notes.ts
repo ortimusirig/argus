@@ -335,7 +335,11 @@ function afterCode(lines: string[], mask: boolean[], from: number, to: number, f
           value: unescapePipes(c.slice(3).join(" | ")) });
       }
       // The header of a table whose rows are all line rows is the line table's own header: the panel draws it.
-      if (others.length > 0 || numbered === 0) { kept.push(...table.slice(start, start + head), ...others); }
+      // One row at a time: a spread hands every row over as an argument, and a call takes only so many.
+      if (others.length > 0 || numbered === 0) {
+        for (let r = start; r < start + head; r++) { kept.push(table[r]); }
+        for (const other of others) { kept.push(other); }
+      }
     });
     i = end;
   }
