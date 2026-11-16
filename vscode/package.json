@@ -12,5 +12,147 @@
     "@types/node": "^26.6.6",
     "@types/vscode": "1.90.0",
     "typescript": "^7.0.2"
+  },
+  "displayName": "Argus",
+  "publisher": "argus",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "argus.createCommand",
+        "argus.python",
+        "argus.projects"
+      ],
+      "description": "In Restricted Mode Argus shows notes with your own settings only; Create and Check stay off until the workspace is trusted."
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Argus",
+      "properties": {
+        "argus.projects": {
+          "type": "array",
+          "default": [],
+          "description": "One entry for each source root: where the code is and where its Argus notes are.",
+          "items": {
+            "type": "object",
+            "required": [
+              "sourceRoot",
+              "notesFolder"
+            ],
+            "properties": {
+              "sourceRoot": {
+                "type": "string",
+                "description": "Folder the notes' source paths are relative to."
+              },
+              "notesFolder": {
+                "type": "string",
+                "description": "Folder with the Argus notes."
+              },
+              "vaultFolder": {
+                "type": "string",
+                "description": "Optional: root of the Obsidian vault, for shared Concept and Library notes."
+              },
+              "graph": {
+                "type": "string",
+                "description": "Optional: path of a graphify graph.json for the check."
+              }
+            }
+          }
+        },
+        "argus.createCommand": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "application",
+          "default": [
+            "claude",
+            "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."
+          ],
+          "description": "The agent program and its arguments. Placeholders: ${file}, ${notesFolder}, ${sourceRoot}, ${depth}. Read from your user settings only."
+        },
+        "argus.createDepth": {
+          "type": "string",
+          "enum": [
+            "map",
+            "full"
+          ],
+          "default": "full",
+          "description": "Depth asked for on create."
+        },
+        "argus.python": {
+          "type": "string",
+          "scope": "application",
+          "default": "python",
+          "description": "The Python program for the check. Read from your user settings only."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "argus.explainSelection",
+        "title": "Argus: Explain selection"
+      },
+      {
+        "command": "argus.explainFile",
+        "title": "Argus: Explain this file"
+      },
+      {
+        "command": "argus.create",
+        "title": "Argus: Create explanation"
+      },
+      {
+        "command": "argus.check",
+        "title": "Argus: Check notes"
+      },
+      {
+        "command": "argus.refresh",
+        "title": "Argus: Refresh notes"
+      },
+      {
+        "command": "argus.openInObsidian",
+        "title": "Argus: Open note in Obsidian"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "argus.explainSelection",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "argus.explainFile",
+          "group": "argus"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "argus",
+          "title": "Argus",
+          "icon": "media/argus.svg"
+        }
+      ]
+    },
+    "views": {
+      "argus": [
+        {
+          "type": "webview",
+          "id": "argus.panel",
+          "name": "Explanation"
+        }
+      ]
+    }
   }
 }

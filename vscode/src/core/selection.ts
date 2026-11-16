@@ -1,0 +1,36 @@
+// Which blocks and which unexplained lines lie under a selection. No import of "vscode". Lines are 1-based.
+
+import { Assignment, Placed } from "./match";
+
+/** The places of a block in the text: every candidate place of an ambiguous block, else its one place. */
+export function placesOf(placed: Placed): { from: number; to: number }[] {
+  if (placed.state === "ambiguous" && placed.candidates && placed.candidates.length > 0) {
+    const length = placed.at ? placed.at.to - placed.at.from : Math.max(placed.block.code.length - 1, 0);
+    return placed.candidates.map((from) => ({ from, to: from + length }));
+  }
+  return placed.at ? [placed.at] : [];
+}
+
+export interface Under { blocks: Placed[]; unexplained: [number, number][]; }
+
+/** The blocks that overlap the lines `from` to `to`, in the note's order, and the unexplained ranges inside them. */
+export function underSelection(assignment: Assignment, from: number, to: number): Under {
+  const blocks = assignment.placed.filter((placed) => placesOf(placed).some((at) => at.from <= to && at.to >= from));
+  const unexplained: [number, number][] = [];
+  for (const [a, b] of assignment.unexplained) {
+    if (a <= to && b >= from) { unexplained.push([Math.max(a, from), Math.min(b, to)]); }
+  }
+  return { blocks, unexplained };
+}
+
+export interface Summary { current: number; changed: number; ambiguous: number; unexplained: number; }
+
+/** The freshness summary: blocks current (masked ones too), changed, ambiguous; lines unexplained. */
+export function summary(assignment: Assignment): Summary {
+  const s: Summary = { current: 0, changed: 0, ambiguous: 0, unexplained: 0 };
+  for (const placed of assignment.placed) {
+    if (placed.state === "changed") { s.changed++; } else if (placed.state === "ambiguous") { s.ambiguous++; } else { s.current++; }
+  }
+  for (const [a, b] of assignment.unexplained) { s.unexplained += b - a + 1; }
+  return s;
+}

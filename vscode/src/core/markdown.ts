@@ -5,7 +5,8 @@
 
 import { cells, isSpace, linkTarget, pyLStrip, pyStrip } from "./notes";
 
-function escape(text: string): string {
+/** The one HTML escaper: the panel's own texts (src/core/panelHtml.ts) go through it too. */
+export function escape(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
