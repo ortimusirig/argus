@@ -19,7 +19,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const active = (): vscode.TextDocument | undefined => vscode.window.activeTextEditor?.document;
   const redraw = (): void => { panel.render(); markers.refresh(); };
-  const configure = (): void => { index.configure(); check.configure(); redraw(); };
+  const forget = (): void => { matcher.keep((id) => index.notes.noteById(id) !== undefined); };
+  const configure = (): void => { index.configure(); forget(); check.configure(); redraw(); };
 
   context.subscriptions.push(index, matched, markers, check,
     vscode.window.registerWebviewViewProvider(Panel.viewId, panel),
@@ -52,7 +53,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     // Trusted now: VS Code gives the workspace's own argus.projects too. The check starts its pending calls itself.
     vscode.workspace.onDidGrantWorkspaceTrust(configure),
-    index.onDidChange(redraw),
+    // A note that left the index takes what was matched against it with it.
+    index.onDidChange(() => { forget(); redraw(); }),
     matched.event((uri) => {
       markers.matched(uri);
       if (uri === active()?.uri.toString()) { panel.render(); }

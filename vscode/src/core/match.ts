@@ -890,8 +890,8 @@ export function* assign(note: FileNote, textLines: string[]): Generator<number, 
 
 // ---------------------------------------------------------------- runs
 
-/** What a run is tied to: the document, the document's version, and the note's revision in the index. */
-export interface RunKey { uri: string; version: number; revision: number; }
+/** What a run is tied to: the document, the document's version, and the note: its id and its revision in the index. */
+export interface RunKey { uri: string; version: number; note: number; revision: number; }
 
 interface Run { key: RunKey; steps: Generator<number, Assignment, void>; }
 
@@ -912,7 +912,7 @@ export class MatchRuns {
   start(key: RunKey, note: FileNote, textLines: string[], publish: (result: Assignment, key: RunKey) => void,
     progress?: (blocksDone: number, key: RunKey) => void): boolean {
     const going = this.runs.get(key.uri);
-    if (going && going.key.version === key.version && going.key.revision === key.revision) { return false; }
+    if (going && going.key.version === key.version && going.key.note === key.note && going.key.revision === key.revision) { return false; }
     const run: Run = { key, steps: assign(note, textLines) };
     this.runs.set(key.uri, run);            // the run before, if any, sees this at its next slice and stops
     const slice = (): void => {

@@ -226,8 +226,8 @@ test("an edit during a long match: the first run stops at its next yield; only t
   const runs = new MatchRuns((step) => { queue.push(step); });
   const published: [RunKey, Assignment][] = [];
   const progress: RunKey[] = [];
-  const first: RunKey = { uri: "file:///a.py", version: 1, revision: 1 };
-  const second: RunKey = { uri: "file:///a.py", version: 2, revision: 1 };
+  const first: RunKey = { uri: "file:///a.py", version: 1, note: 1, revision: 1 };
+  const second: RunKey = { uri: "file:///a.py", version: 2, note: 1, revision: 1 };
   runs.start(first, n, text, (a, key) => published.push([key, a]), (_, key) => progress.push(key));
   queue.shift()?.();                       // one slice of the first run
   assert.deepEqual(progress, [first]);
@@ -251,8 +251,8 @@ test("the note is replaced during a long match, the document untouched: the old 
   const { note: old, text } = worstCase();
   const runs = new MatchRuns();            // the default: slices run with setImmediate between them
   const published: [RunKey, Assignment][] = [];
-  const first: RunKey = { uri: "file:///a.py", version: 7, revision: 1 };
-  const second: RunKey = { uri: "file:///a.py", version: 7, revision: 2 };
+  const first: RunKey = { uri: "file:///a.py", version: 7, note: 1, revision: 1 };
+  const second: RunKey = { uri: "file:///a.py", version: 7, note: 1, revision: 2 };
   const replaced = note([block("1", 1, [text[0]])]);
   await new Promise<void>((resolve) => {
     let sliced = false;

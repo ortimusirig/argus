@@ -50,7 +50,7 @@ test("the index reads the notes of the notes folder, and the Concept and Library
     assert.ok(pauses >= 5, "the index gives way between two notes");
     const [note] = index.fileNotesFor(s.project, "a.py");
     assert.equal(note.file?.blocks[0].purpose, "adds");
-    assert.equal(note.revision, 1);
+    assert.ok(note.revision >= 1);
     assert.deepEqual(index.fileNotesFor(s.project, "sub/b.py"), []);
     assert.equal(index.notesByName("Concept - x").length, 2);
     assert.equal(index.noteById(note.id), note);
@@ -77,7 +77,7 @@ test("ids stay, revisions rise only when a note's text is read anew, removed not
     await index.reread(s.project, file);
     const after = index.fileNotesFor(s.project, "a.py")[0];
     assert.equal(after.id, before.id);
-    assert.equal(after.revision, before.revision + 1);
+    assert.ok(after.revision > before.revision);
     assert.equal(after.file?.blocks[0].purpose, "counts");
     assert.equal(changes.length, 2);
 
@@ -161,5 +161,25 @@ test("a note whose real path lies outside the folders is not read, on a refresh 
     assert.deepEqual(again.problemsOf(s.project), []);
     await index.refreshNow(s.project);
     assert.deepEqual(index.problemsOf(s.project), []);
+  } finally { s.done(); }
+});
+
+test("a revision is never used twice: not by two notes, not by a note that went and came back", async () => {
+  const s = scratch();
+  try {
+    const index = new NoteIndex();
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    const all = [...index.notesOf(s.project, "notes"), ...index.notesOf(s.project, "vault")].map((e) => e.revision);
+    assert.equal(new Set(all).size, all.length);
+    const file = path.join(s.root, "vault", "P", "P file - a.py.md");
+    const before = index.fileNotesFor(s.project, "a.py")[0];
+    fs.rmSync(file);
+    await index.reread(s.project, file);
+    s.write("vault/P/P file - a.py.md", fileNote("a.py", "counts"));
+    await index.reread(s.project, file);
+    const after = index.fileNotesFor(s.project, "a.py")[0];
+    assert.equal(after.id, before.id);
+    assert.ok(after.revision > Math.max(...all), "the note that came back is not taken for the one that went");
   } finally { s.done(); }
 });

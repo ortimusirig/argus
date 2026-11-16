@@ -10,7 +10,8 @@ import { projectKey } from "./settings";
 export type Place = "notes" | "vault";
 
 /** One indexed note. `id` belongs to its real path in its project for as long as the extension runs; `revision`
- *  rises each time the index reads a new text for it. */
+ *  is new each time the index reads a new text for it: one counter for the whole index, which only rises, so no
+ *  revision is used twice, not by another note and not by a note that went and came back. */
 export interface Entry {
   id: number; revision: number; name: string; path: string; project: Project; place: Place;
   file?: FileNote;          // a File note
@@ -51,6 +52,7 @@ export class NoteIndex {
   private readonly ids = new Map<string, number>();
   private readonly byId = new Map<number, Entry>();
   private nextId = 1;
+  private nextRevision = 1;
   /** Called after the notes of a project were found to have changed. */
   onChange?: (project: Project) => void;
 
@@ -185,7 +187,7 @@ export class NoteIndex {
     const idKey = projectKey(project) + "\n" + key;
     let id = this.ids.get(idKey);
     if (id === undefined) { id = this.nextId++; this.ids.set(idKey, id); }
-    const entry: Entry = { id, revision: (had?.revision ?? 0) + 1, name, path: real, project, place, text };
+    const entry: Entry = { id, revision: this.nextRevision++, name, path: real, project, place, text };
     if (type === "file") {
       entry.file = parseFileNote(name, real, text);
       this.locate(entry, project);

@@ -54,9 +54,9 @@ export class Markers implements vscode.CodeLensProvider, vscode.Disposable {
     const entry = this.index.locate(document).note;
     if (!entry?.file || entry.file.problems.length > 0) { return undefined; }
     const uri = document.uri.toString();
-    if (ask) { this.matcher.want({ uri, version: document.version, text: () => document.getText() }, entry.file, entry.revision); }
+    if (ask) { this.matcher.want({ uri, version: document.version, text: () => document.getText() }, entry.file, entry); }
     const published = this.matcher.published(uri);
-    return published ? marksOf(published.assignment) : undefined;
+    return published && published.key.note === entry.id ? marksOf(published.assignment) : undefined;
   }
 
   private draw(editor: vscode.TextEditor, ask: boolean): void {

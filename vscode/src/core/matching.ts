@@ -24,11 +24,13 @@ export function* splitLines(text: string): Generator<void, string[], void> {
 
 /** What the matcher needs of a document. */
 export interface Doc { uri: string; version: number; text(): string; }
+/** Which note, and which reading of it: its id and its revision in the index. */
+export interface NoteKey { id: number; revision: number; }
 export interface Published { key: RunKey; assignment: Assignment; }
 interface Going { key: RunKey; done: number; }
 
 function same(a: RunKey, b: RunKey): boolean {
-  return a.uri === b.uri && a.version === b.version && a.revision === b.revision;
+  return a.uri === b.uri && a.version === b.version && a.note === b.note && a.revision === b.revision;
 }
 
 export class Matcher {
@@ -55,15 +57,16 @@ export class Matcher {
   }
 
   /** Asks for the assignment of this note to this document as it is now. Nothing happens when it is published
-   *  already or on its way. A run for an older version or revision stops at its next slice. */
-  want(doc: Doc, note: FileNote, revision: number): void {
-    const key: RunKey = { uri: doc.uri, version: doc.version, revision };
+   *  already or on its way. A run for an older version or revision, or for another note, stops at its next slice. */
+  want(doc: Doc, note: FileNote, of: NoteKey): void {
+    const key: RunKey = { uri: doc.uri, version: doc.version, note: of.id, revision: of.revision };
     const last = this.last.get(doc.uri), going = this.going.get(doc.uri);
     if (going && same(going.key, key)) { return; }
     if (last && same(last.key, key)) {
       if (going) { this.going.delete(doc.uri); this.runs.stop(doc.uri); }
       return;
     }
+    if (last && last.key.note !== key.note) { this.last.delete(doc.uri); }     // another note's result is not this note's
     const mine: Going = { key, done: 0 };
     this.going.set(doc.uri, mine);
     this.runs.stop(doc.uri);                      // a run for the text before is not needed any more
@@ -89,15 +92,25 @@ export class Matcher {
     return this.last.get(uri);
   }
 
-  /** The published assignment, when it is for this version of the document and this revision of the note. */
-  fresh(uri: string, version: number, revision: number): Assignment | undefined {
+  /** The published assignment, when it is for this version of the document, this note and this revision of it. */
+  fresh(uri: string, version: number, of: NoteKey): Assignment | undefined {
     const last = this.last.get(uri);
-    return last && last.key.version === version && last.key.revision === revision ? last.assignment : undefined;
+    return last && last.key.version === version && last.key.note === of.id && last.key.revision === of.revision ? last.assignment : undefined;
   }
 
   /** While the document is being matched: the number of blocks done. Undefined when no run is going. */
   progress(uri: string): number | undefined {
     return this.going.get(uri)?.done;
+  }
+
+  /** Drops everything that was matched, or is being matched, against a note that is not in the index any more. */
+  keep(alive: (note: number) => boolean): void {
+    for (const [uri, going] of [...this.going]) {
+      if (!alive(going.key.note)) { this.going.delete(uri); this.runs.stop(uri); }
+    }
+    for (const [uri, last] of [...this.last]) {
+      if (!alive(last.key.note)) { this.last.delete(uri); }
+    }
   }
 
   /** The document is closed, or has no note any more. */

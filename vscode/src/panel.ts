@@ -149,10 +149,10 @@ export class Panel implements vscode.WebviewViewProvider {
     const entry = at.note, note = at.note.file, uri = document.uri.toString();
     let assignment, matching: number | undefined;
     if (note.problems.length === 0) {
-      this.matcher.want({ uri, version: document.version, text: () => document.getText() }, note, entry.revision);
-      assignment = this.matcher.fresh(uri, document.version, entry.revision);
+      this.matcher.want({ uri, version: document.version, text: () => document.getText() }, note, entry);
+      assignment = this.matcher.fresh(uri, document.version, entry);
       if (!assignment) {
-        const key = `${uri} ${document.version} ${entry.revision}`;
+        const key = `${uri} ${document.version} ${entry.id} ${entry.revision}`;
         if (this.asked?.key !== key) { this.asked = { key, at: Date.now() }; }
         const patient = Date.now() - this.asked.at < PATIENCE_MS && this.inner !== "";
         this.again = setTimeout(() => { this.again = undefined; this.render(); }, patient ? PATIENCE_MS : MATCHING_MS);
