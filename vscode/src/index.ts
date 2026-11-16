@@ -108,6 +108,7 @@ export class Index implements vscode.Disposable {
   }
 
   async refreshAll(): Promise<void> {
+    this.where.clear();                  // "Refresh notes" asks the disk again for everything, also where each document lies
     for (const project of this.projects) {
       try { await this.notes.refreshNow(project); } catch { /* a folder that cannot be read holds no notes */ }
     }
