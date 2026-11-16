@@ -143,6 +143,7 @@ export class Index implements vscode.Disposable {
 
   dispose(): void {
     this.unwatch();
+    this.notes.setProjects([]);          // a reading of the folders that is going stops
     this.changed.dispose();
     this.touched.dispose();
     this.chosen.dispose();

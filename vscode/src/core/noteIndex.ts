@@ -39,11 +39,12 @@ interface Way { file: string; key: string; }
 
 const VAULT_TYPES = new Set(["concept", "library"]);
 
-/** Every .md file under the folder, folders whose name starts with a dot left out (as `note_files` in the checker). */
-async function mdFiles(folder: string, pause: () => Promise<void>): Promise<string[]> {
+/** Every .md file under the folder, folders whose name starts with a dot left out (as `note_files` in the checker).
+ *  The listing ends early when `wanted` says that nobody waits for it any more. */
+async function mdFiles(folder: string, pause: () => Promise<void>, wanted: () => boolean): Promise<string[]> {
   const found: string[] = [];
   const left = [folder];
-  while (left.length > 0) {
+  while (left.length > 0 && wanted()) {
     const at = left.pop() as string;
     let listed: fs.Dirent[];
     try { listed = await fs.promises.readdir(at, { withFileTypes: true }); } catch { continue; }
@@ -129,9 +130,15 @@ export class NoteIndex {
     return undefined;
   }
 
+  /** Whether these are still the notes of a project of the settings. When the project left (or left and came
+   *  back, with new notes), work that was going for it stops: it must not put a note back that left with it. */
+  private live(held: Held): boolean {
+    return this.held.get(projectKey(held.project)) === held;
+  }
+
   /** One thing at a time for each project: a refresh never runs into a re-read. */
   private queued(held: Held, work: () => Promise<boolean>): Promise<void> {
-    const next = held.queue.then(work).then((changed) => {
+    const next = held.queue.then(() => this.live(held) ? work() : false).then((changed) => {
       if (changed && this.held.get(projectKey(held.project)) === held) { this.onChange?.(held.project); }
     });
     held.queue = next.catch(() => undefined);
@@ -157,7 +164,8 @@ export class NoteIndex {
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
       for (const [, folder] of folders) {
-        for (const file of await mdFiles(folder, this.pause)) {
+        for (const file of await mdFiles(folder, this.pause, () => this.live(held))) {
+          if (!this.live(held)) { return false; }
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
           from.set(this.pathKey(file, real), { file, key });
@@ -167,6 +175,7 @@ export class NoteIndex {
           await this.pause();
         }
       }
+      if (!this.live(held)) { return false; }
       for (const [key, entry] of held.entries) {
         if (!seen.has(key)) { held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true; }
       }
@@ -291,6 +300,7 @@ export class NoteIndex {
     if (place === undefined) {
       let there = true;
       try { await fs.promises.lstat(file); } catch { there = false; }
+      if (!this.live(held)) { return false; }
       if (there) {
         let real = file;
         try { real = this.rules.real(file); } catch { /* said with the path as found */ }
@@ -300,7 +310,8 @@ export class NoteIndex {
       return drop();
     }
     let text: string;
-    try { text = (await readText(file)).text; } catch { return drop(); }      // as the checker reads it
+    try { text = (await readText(file)).text; } catch { return this.live(held) && drop(); }      // as the checker reads it
+    if (!this.live(held)) { return false; }
     // The name and the path are asked of the file as it is now: the key is the same for `Original.md` and
     // `original.md` on Windows, so a note renamed in letter case only is found under the key of the old one.
     let real: string;
@@ -356,6 +367,7 @@ export class NoteIndex {
         this.locate(entry, project);
         if (before !== entry.sourceRel) { changed = true; }
         await this.pause();
+        if (!this.live(held)) { return false; }
       }
       return changed;
     });

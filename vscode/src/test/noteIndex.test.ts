@@ -513,3 +513,36 @@ test("a gone folder that held no note and no link costs no reading of the folder
     assert.equal(pauses, 0, "nothing of the index lay there: nothing is read");
   } finally { s.done(); }
 });
+
+test("a project that leaves the settings while its notes are read: the reading stops and leaves no note behind", async () => {
+  const s = scratch();
+  try {
+    let left = false, after = 0;
+    const index: NoteIndex = new NoteIndex(undefined, () => {
+      if (left) { after++; }
+      if (!left && index.noteById(1)) { left = true; index.setProjects([]); }       // after the first note was read
+      return new Promise((go) => setImmediate(go));
+    });
+    let changes = 0;
+    index.onChange = () => { changes++; };
+    index.setProjects([s.project]);
+    await index.refreshNow(s.project);
+    assert.ok(left);
+    for (let id = 1; id <= 20; id++) { assert.equal(index.noteById(id), undefined, `note ${id} of a project that is gone`); }
+    assert.ok(after <= 1, `the reading went on for ${after} more steps`);
+    assert.equal(changes, 0);
+
+    // The project comes back while the old reading is still going: only the new reading fills the index.
+    let back = false;
+    const again: NoteIndex = new NoteIndex(undefined, () => {
+      if (!back && again.noteById(1)) { back = true; again.setProjects([]); again.setProjects([s.project]); void again.refreshNow(s.project); }
+      return new Promise((go) => setImmediate(go));
+    });
+    again.setProjects([s.project]);
+    await again.refreshNow(s.project);
+    await again.refreshNow(s.project);
+    const held = [...again.notesOf(s.project, "notes"), ...again.notesOf(s.project, "vault")];
+    assert.equal(held.length, 5);
+    for (const entry of held) { assert.equal(again.noteById(entry.id), entry, "the id leads to the note the index holds"); }
+  } finally { s.done(); }
+});
