@@ -12,31 +12,70 @@ export interface PathRules {
   isFile(file: string): boolean;
 }
 
-/** The real path on a POSIX system, the components kept as written until the file system has read them: a `..`
- *  after a symbolic link goes up from where the link leads, as in Python's (base / rel).resolve(). */
-function posixReal(full: string): string {
+/** What the POSIX rules read from a disk. Tests give a disk that is not there. */
+export interface PosixDisk {
+  /** What is written in the symbolic link at this path, whether or not it exists; undefined when the path is no
+   *  link, or is not there. The path given has no link before its last component. */
+  link(file: string): string | undefined;
+  isFile(file: string): boolean;
+}
+
+const MOST_LINKS = 40;     // as many links as the system itself follows in one path
+
+/** The real path on a POSIX system, read one component at a time as the file system reads it, and as Python's
+ *  (base / rel).resolve() does: a symbolic link is replaced by what is written in it (from the root, or from the
+ *  link's folder) whether or not that exists; a `..` goes up from where the components before it have led; a name
+ *  that is not on disk is kept as written (a file not saved yet). Throws when the links do not end. */
+function posixReal(full: string, link: (file: string) => string | undefined): string {
+  const left = full.split("/").reverse();      // the components still to read, the next one last
+  let at = "", followed = 0;                   // the real path so far; "" is the root
+  while (left.length > 0) {
+    const name = left.pop() as string;
+    if (name === "" || name === ".") { continue; }
+    if (name === "..") { at = at.slice(0, at.lastIndexOf("/")); continue; }
+    const target = link(at + "/" + name);
+    if (target === undefined) { at += "/" + name; continue; }
+    if (++followed > MOST_LINKS) { throw new Error(`too many symbolic links in '${full}'`); }
+    if (target.startsWith("/")) { at = ""; }
+    const parts = target.split("/");
+    for (let k = parts.length - 1; k >= 0; k--) { left.push(parts[k]); }
+  }
+  return at || "/";
+}
+
+/** The POSIX rules over the disk given. A path that does not begin at the root is read from `folder`. */
+export function posixRules(disk: PosixDisk, folder: () => string = () => "/"): PathRules {
+  return {
+    windows: false,
+    real: (file) => posixReal(file.startsWith("/") ? file : folder() + "/" + file, (at) => disk.link(at)),
+    isFile: (file) => disk.isFile(file),
+  };
+}
+
+function isFile(file: string): boolean {
   try {
-    return fs.realpathSync.native(full);
+    return fs.statSync(file).isFile();
   } catch {
-    // Not on disk (a file not saved yet): the real path of what comes before the last component, then that
-    // component: `..` goes up from the real folder, a name is added as written.
-    let end = full.length;
-    while (end > 1 && full[end - 1] === "/") { end--; }
-    const cut = full.lastIndexOf("/", end - 1);
-    if (end <= 1 || cut < 0) { return full.slice(0, end); }
-    const parent = posixReal(cut === 0 ? "/" : full.slice(0, cut)), name = full.slice(cut + 1, end);
-    if (name === "" || name === ".") { return parent; }
-    return name === ".." ? path.posix.dirname(parent) : path.posix.join(parent, name);
+    return false;
   }
 }
+
+const posixSystem = posixRules({
+  link(file: string): string | undefined {
+    try {
+      return fs.lstatSync(file).isSymbolicLink() ? fs.readlinkSync(file) : undefined;
+    } catch {
+      return undefined;      // not there, or not to be read: the name stays as written
+    }
+  },
+  isFile,
+}, () => process.cwd());
 
 /** The rules of the system the extension runs on. */
 export const systemRules: PathRules = {
   windows: process.platform === "win32",
   real(file: string): string {
-    if (process.platform !== "win32") {
-      return posixReal(file.startsWith("/") ? file : process.cwd() + "/" + file);
-    }
+    if (process.platform !== "win32") { return posixSystem.real(file); }
     // Windows takes `name\..` out of a path before it reads any link, and so does Python there (ntpath.realpath
     // begins with normpath): collapsing in the text first is the system's own rule on Windows.
     const full = path.resolve(file);
@@ -48,13 +87,7 @@ export const systemRules: PathRules = {
       return parent === full ? full : path.join(systemRules.real(parent), path.basename(full));
     }
   },
-  isFile(file: string): boolean {
-    try {
-      return fs.statSync(file).isFile();
-    } catch {
-      return false;
-    }
-  },
+  isFile,
 };
 
 /** The path of `file` relative to `root`, with /, when it lies inside the root; both are real paths already. */
@@ -67,16 +100,25 @@ function inside(root: string, file: string, rules: PathRules): string | undefine
 
 /** The file's path relative to the root, with /, when its real path lies inside the root's real path. */
 export function relativeIn(root: string, filePath: string, rules: PathRules = systemRules): string | undefined {
-  return inside(rules.real(root), rules.real(filePath), rules);
+  try {
+    return inside(rules.real(root), rules.real(filePath), rules);
+  } catch {
+    return undefined;      // links that do not end: the path is nowhere
+  }
 }
 
 /** The project whose `sourceRoot` contains the file, the longest root first; undefined when none does. */
 export function projectFor<P extends Project>(filePath: string, projects: readonly P[], rules: PathRules = systemRules): P | undefined {
-  const file = rules.real(filePath);
   let best: P | undefined, longest = -1;
-  for (const project of projects) {
-    const root = rules.real(project.sourceRoot);
-    if (root.length > longest && inside(root, file, rules) !== undefined) { best = project; longest = root.length; }
+  try {
+    const file = rules.real(filePath);
+    for (const project of projects) {
+      let root: string;
+      try { root = rules.real(project.sourceRoot); } catch { continue; }      // a root that is nowhere holds no file
+      if (root.length > longest && inside(root, file, rules) !== undefined) { best = project; longest = root.length; }
+    }
+  } catch {
+    return undefined;      // links that do not end: the file is nowhere
   }
   return best;
 }

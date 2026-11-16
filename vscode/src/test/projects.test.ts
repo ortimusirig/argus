@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { PathRules, Project, projectFor, relativeIn, sourceInRoot, systemRules } from "../core/projects";
+import { PathRules, Project, posixRules, projectFor, relativeIn, sourceInRoot, systemRules } from "../core/projects";
 
 function project(sourceRoot: string): Project {
   return { sourceRoot, notesFolder: sourceRoot + "-notes" };
@@ -189,6 +189,115 @@ test("on the disk of this system: a .. after a link to a folder resolves as the 
     const unsaved = path.join(root, "alias", "..", "unsaved.py");
     assert.equal(relativeIn(root, unsaved), windows ? "unsaved.py" : "sub/unsaved.py");
     assert.equal(projectFor(unsaved, [project(path.join(root, "sub"))])?.sourceRoot, windows ? undefined : path.join(root, "sub"));
+    if (noPython) { t.diagnostic(noPython); return; }
+    const list = path.join(tmp, "sources.json");
+    fs.writeFileSync(list, JSON.stringify(sources), "utf8");
+    const program = ["import json, sys", "sys.path.insert(0, sys.argv[1])", "from _common import on_disk",
+      "print(json.dumps([on_disk(sys.argv[2], rel) for rel in json.load(open(sys.argv[3], encoding='utf-8'))]))"].join("\n");
+    const out = spawnSync("python", ["-B", "-c", program, path.resolve(__dirname, "../../../skills/argus/scripts"), root, list], { encoding: "utf8" });
+    assert.equal(out.status, 0, out.stderr);
+    const answers = JSON.parse(out.stdout) as (string | null)[];
+    sources.forEach((source, i) => assert.equal(sourceInRoot(root, source) ?? null, answers[i], `source '${source}' against on_disk`));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- links read one component at a time
+
+/** The POSIX rules over a disk that is not there: `links` are its symbolic links (the path of each and what is
+ *  written in it, whether or not that exists), `files` its files, by their real paths. */
+function disk(links: Record<string, string>, files: string[]): PathRules {
+  const written = new Map(Object.entries(links));
+  return posixRules({ link: (file) => written.get(file), isFile: (file) => files.includes(file) });
+}
+
+test("sourceInRoot: a link whose target does not exist is followed all the same (POSIX rules)", () => {
+  // The reviewer's case: Python follows the link, lands outside the root, and the checker refuses the source.
+  const dangling = disk({ "/repo/alias": "/outside/missing" }, ["/repo/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", dangling), undefined);
+  assert.equal(sourceInRoot("/repo", "alias\\..\\target.py", dangling), undefined);
+  assert.equal(sourceInRoot("/repo", "/repo/alias/../target.py", dangling), undefined);
+  assert.equal(sourceInRoot("/repo", "alias/../repo/target.py", dangling), undefined);        // /outside/repo is not /repo
+  assert.equal(sourceInRoot("/repo", "alias/../../repo/target.py", dangling), "target.py");   // back in through the top
+  assert.equal(sourceInRoot("/repo", "target.py", dangling), "target.py");
+  assert.equal(relativeIn("/repo", "/repo/alias/../unsaved.py", dangling), undefined);
+  assert.equal(relativeIn("/outside", "/repo/alias/../unsaved.py", dangling), "unsaved.py");
+  // The same link written relative to its folder.
+  const relative = disk({ "/repo/alias": "../outside/missing" }, ["/repo/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", relative), undefined);
+  // A target that does not exist inside the root: the .. goes up from where the link points.
+  const within = disk({ "/repo/alias": "sub/missing" }, ["/repo/target.py", "/repo/sub/target.py"]);
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", within), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "alias/target.py", within), undefined);
+  // A folder that does not exist and is no link: the .. takes its name out again.
+  assert.equal(sourceInRoot("/repo", "new/../target.py", within), "target.py");
+});
+
+test("sourceInRoot: a chain of two links, and links that lead back inside the root (POSIX rules)", () => {
+  const files = ["/repo/sub/target.py", "/repo/sub/deep/inner.py", "/elsewhere/target.py"];
+  const chain = disk({ "/repo/first": "second", "/repo/second": "/repo/sub/deep", "/repo/away": "far", "/repo/far": "/elsewhere/deep" }, files);
+  assert.equal(sourceInRoot("/repo", "first/../target.py", chain), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "first/inner.py", chain), "sub/deep/inner.py");
+  assert.equal(sourceInRoot("/repo", "away/../target.py", chain), undefined);            // the second link leads out
+  // A link whose target is inside the root: accepted, by the real path.
+  const inner = disk({ "/repo/alias": "/repo/sub/deep", "/repo/near": "sub/deep", "/repo/sub/up": "..", "/repo/short.py": "sub/target.py",
+    "/repo/sub/deep/back": "../../sub" }, files);
+  assert.equal(sourceInRoot("/repo", "alias/inner.py", inner), "sub/deep/inner.py");
+  assert.equal(sourceInRoot("/repo", "alias/../target.py", inner), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "near/inner.py", inner), "sub/deep/inner.py");      // written relative to the link's folder
+  assert.equal(sourceInRoot("/repo", "near/../target.py", inner), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "sub/up/sub/target.py", inner), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "short.py", inner), "sub/target.py");               // a link to a file
+  assert.equal(sourceInRoot("/repo", "alias/back/target.py", inner), "sub/target.py");   // a link reached through a link
+  assert.equal(sourceInRoot("/repo/alias/..", "target.py", inner), "target.py");         // the root itself through a link
+  assert.equal(relativeIn("/repo", "/repo/alias/new.py", inner), "sub/deep/new.py");
+  assert.equal(projectFor("/repo/near/inner.py", [project("/repo/sub"), project("/repo/alias")], inner)?.sourceRoot, "/repo/alias");
+});
+
+test("sourceInRoot: links that lead round in a circle are refused, and at once (POSIX rules)", () => {
+  const files = ["/repo/target.py", "/repo/sub/target.py"];
+  const loop = disk({ "/repo/a": "b", "/repo/b": "/repo/a", "/repo/self": "self", "/repo/deep": "deep/x" }, files);
+  for (const source of ["a/../target.py", "b/../target.py", "a", "self/../target.py", "deep/../target.py", "sub/../a/target.py"]) {
+    assert.equal(sourceInRoot("/repo", source, loop), undefined, `source '${source}'`);
+  }
+  assert.equal(sourceInRoot("/repo", "target.py", loop), "target.py");
+  assert.equal(sourceInRoot("/repo/a", "target.py", loop), undefined);
+  assert.equal(relativeIn("/repo", "/repo/a/x.py", loop), undefined);
+  assert.equal(relativeIn("/repo/self", "/repo/target.py", loop), undefined);
+  const here = project("/repo"), nowhere = project("/repo/a");
+  assert.equal(projectFor("/repo/self/x.py", [here], loop), undefined);
+  assert.equal(projectFor("/repo/target.py", [nowhere, here], loop), here);              // a root that is nowhere is passed over
+  // As many links as the system follows in one path, 40, and one more.
+  const row = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, k) => [`/repo/l${k}`, k + 1 < n ? `l${k + 1}` : "sub"]));
+  assert.equal(sourceInRoot("/repo", "l0/target.py", disk(row(40), files)), "sub/target.py");
+  assert.equal(sourceInRoot("/repo", "l0/target.py", disk(row(41), files)), undefined);
+});
+
+test("on the disk of this system: a link whose target does not exist, as the system and the checker read it", (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argus-dangling-"));
+  try {
+    const root = path.join(tmp, "Root");
+    fs.mkdirSync(path.join(root, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(root, "target.py"), "x = 1\n");
+    fs.writeFileSync(path.join(root, "sub", "target.py"), "y = 2\n");
+    const windows = process.platform === "win32";
+    try {
+      fs.symlinkSync(path.join(tmp, "Outside", "missing"), path.join(root, "alias"), windows ? "junction" : "dir");
+      fs.symlinkSync(path.join(root, "sub", "missing"), path.join(root, "within"), windows ? "junction" : "dir");
+      if (!windows) { fs.symlinkSync("../Outside/missing", path.join(root, "relative"), "dir"); }
+    } catch (error) {
+      t.skip(`this system did not let the test create a link to a folder that does not exist (${(error as Error).message}); the test on disk did not run`);
+      return;
+    }
+    const sources = ["alias/../target.py", "alias/target.py", "alias", "within/../target.py", "within/target.py", "target.py",
+      "new/../target.py", ...(windows ? [] : ["relative/../target.py", "alias/../../Root/target.py"])];
+    // POSIX follows the link, though it leads nowhere, and goes up from there. Windows, and Python on Windows, take
+    // `alias\..` out of the path before any link is read.
+    const expected = windows
+      ? ["target.py", undefined, undefined, "target.py", undefined, "target.py", "target.py"]
+      : [undefined, undefined, undefined, "sub/target.py", undefined, "target.py", "target.py", undefined, "target.py"];
+    sources.forEach((source, i) => assert.equal(sourceInRoot(root, source), expected[i], `source '${source}'`));
     if (noPython) { t.diagnostic(noPython); return; }
     const list = path.join(tmp, "sources.json");
     fs.writeFileSync(list, JSON.stringify(sources), "utf8");
