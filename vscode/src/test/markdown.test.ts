@@ -147,6 +147,19 @@ test("a long line of openers that never close is rendered at once", () => {
   assert.doesNotMatch(html, /<a |<strong>/);
 });
 
+test("a line of many backticks inside a fence is checked for the closing fence in one scan", () => {
+  const line = "```x" + "`".repeat(50000) + "y";
+  const started = performance.now();
+  const html = render("```\n" + line + "\n```\nafter");
+  const took = performance.now() - started;
+  console.log(`timing: a fence holding \`\`\`x, 50,000 backticks and y rendered in ${took.toFixed(1)} ms`);
+  assert.ok(took < 50, `took ${took} ms`);
+  assert.equal(html, `<pre><code>${line}</code></pre>\n<p>after</p>`);
+  // What closes a fence is unchanged: a fence at least as long, then nothing but spaces and then backticks.
+  assert.equal(render("````\n```\n```` x\n```` `` x\n```` \t``\nafter"), "<pre><code>```\n```` x\n```` `` x</code></pre>\n<p>after</p>");
+  assert.equal(render("```\na\n```  ```\nafter"), "<pre><code>a</code></pre>\n<p>after</p>");
+});
+
 // ---------------------------------------------------------------- lists
 
 test("a simple list: - and * at the start of a line give <ul><li>", () => {

@@ -253,6 +253,15 @@ function inline(text: string, linkTo: LinkTo): string {
 const FENCE = /^(`{3,})(.*)$/s;
 const HEADING = /^(#{1,6})[ \t]+(.*)$/s;
 
+/** True when the text is white space, then backticks, and nothing else: what may follow a closing fence. Read once,
+ *  from its end. */
+function onlySpaceThenBackticks(text: string): boolean {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "`") { end--; }
+  while (end > 0 && isSpace(text.charCodeAt(end - 1))) { end--; }
+  return end === 0;
+}
+
 function isRow(line: string): boolean {
   return pyLStrip(line).startsWith("|");
 }
@@ -352,7 +361,7 @@ export function render(text: string, linkTo: LinkTo = (name) => name): string {
       const code: string[] = [];
       for (i++; i < lines.length; i++) {
         const m = FENCE.exec(lines[i]);
-        if (m && m[1].length >= fence[1].length && pyStrip(m[2].replace(/`+$/, "")) === "") { i++; break; }
+        if (m && m[1].length >= fence[1].length && onlySpaceThenBackticks(m[2])) { i++; break; }
         code.push(lines[i]);
       }
       const language = pyStrip(fence[2]);
