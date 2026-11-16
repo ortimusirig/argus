@@ -326,14 +326,26 @@ export function relativeIn(root: string, filePath: string, rules: PathRules = sy
   }
 }
 
+/** The real path of a source root; undefined when the system cannot read it. `known` keeps the answers, so that
+ *  many projects are asked of the disk once and not at every lookup; the caller empties it when the disk may
+ *  have changed. */
+export function realRoot(sourceRoot: string, rules: PathRules = systemRules, known?: Map<string, string | undefined>): string | undefined {
+  if (known?.has(sourceRoot)) { return known.get(sourceRoot); }
+  let root: string | undefined;
+  try { root = rules.real(sourceRoot); } catch { root = undefined; }
+  known?.set(sourceRoot, root);
+  return root;
+}
+
 /** The project whose `sourceRoot` contains the file, the longest root first; undefined when none does. */
-export function projectFor<P extends Project>(filePath: string, projects: readonly P[], rules: PathRules = systemRules): P | undefined {
+export function projectFor<P extends Project>(filePath: string, projects: readonly P[], rules: PathRules = systemRules,
+  known?: Map<string, string | undefined>): P | undefined {
   let best: P | undefined, longest = -1;
   try {
     const file = rules.real(filePath);
     for (const project of projects) {
-      let root: string;
-      try { root = rules.real(project.sourceRoot); } catch { continue; }      // a root that could not be read holds no file
+      const root = realRoot(project.sourceRoot, rules, known);
+      if (root === undefined) { continue; }                                   // a root that could not be read holds no file
       if (root.length > longest && inside(root, file, rules) !== undefined) { best = project; longest = root.length; }
     }
   } catch {

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { Choices } from "./core/choices";
 import { Entry, NoteIndex } from "./core/noteIndex";
-import { Project, projectFor, relativeIn } from "./core/projects";
+import { Project, projectFor, realRoot, relativeIn } from "./core/projects";
 import { projectKey, projectsFrom } from "./core/settings";
 
 const QUIET_MS = 300;
@@ -22,6 +22,7 @@ export class Index implements vscode.Disposable {
   private watchers: vscode.Disposable[] = [];
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly where = new Map<string, { project?: Project; sourceRel?: string }>();
+  private roots = new Map<string, string | undefined>();   // the real path of each source root, asked once (warm)
   private readonly changed = new vscode.EventEmitter<Project>();
   private readonly touched = new vscode.EventEmitter<Project>();
   private readonly chosen = new vscode.EventEmitter<void>();
@@ -45,6 +46,7 @@ export class Index implements vscode.Disposable {
     this.written = Array.isArray(value) ? value.length : 0;
     this.projects = projectsFrom(value);
     this.where.clear();
+    this.warm();
     this.notes.setProjects(this.projects);
     this.unwatch();
     for (const project of this.projects) {
@@ -109,9 +111,26 @@ export class Index implements vscode.Disposable {
 
   async refreshAll(): Promise<void> {
     this.where.clear();                  // "Refresh notes" asks the disk again for everything, also where each document lies
+    this.warm();
     for (const project of this.projects) {
       try { await this.notes.refreshNow(project); } catch { /* a folder that cannot be read holds no notes */ }
     }
+  }
+
+  /** Asks the disk for the real path of every source root, a few at a time, so that the first lookup of a
+   *  document does not ask for all of them in one step (many projects). A lookup that comes first asks for what
+   *  is still missing. */
+  private warm(): void {
+    const roots = new Map<string, string | undefined>();
+    this.roots = roots;
+    const left = this.projects.map((project) => project.sourceRoot);
+    const some = (): void => {
+      if (this.roots !== roots) { return; }                       // asked anew meanwhile
+      const until = Date.now() + 2;
+      while (left.length > 0 && Date.now() < until) { realRoot(left.pop() as string, undefined, roots); }
+      if (left.length > 0) { setImmediate(some); }
+    };
+    setImmediate(some);
   }
 
   /** The document's project and its path inside the source root. Asked of the disk once for each document. */
@@ -120,7 +139,7 @@ export class Index implements vscode.Disposable {
     const key = document.uri.toString();
     let at = this.where.get(key);
     if (!at) {
-      const project = projectFor(document.uri.fsPath, this.projects);
+      const project = projectFor(document.uri.fsPath, this.projects, undefined, this.roots);
       at = { project, sourceRel: project ? relativeIn(project.sourceRoot, document.uri.fsPath) : undefined };
       if (at.sourceRel === undefined) { at = {}; }
       if (this.where.size > 500) { this.where.clear(); }

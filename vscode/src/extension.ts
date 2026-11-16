@@ -9,6 +9,12 @@ import { Markers } from "./markers";
 import { Panel } from "./panel";
 import { Matcher } from "./core/matching";
 
+/** The document a command was given (a button of the panel names the file it stands under). Only an open document
+ *  of this window counts; anything else is as if nothing was given. */
+function asked(given: unknown): vscode.TextDocument | undefined {
+  return vscode.workspace.textDocuments.find((document) => document === given);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const index = new Index();
   const matched = new vscode.EventEmitter<string>();          // a document (its URI) has a new assignment
@@ -36,11 +42,11 @@ export function activate(context: vscode.ExtensionContext): void {
       panel.explain(false, typeof uri === "string" && typeof from === "number" && typeof to === "number" ? { uri, from, to } : undefined)),
     vscode.commands.registerCommand("argus.explainFile", () => panel.explain(true)),
     vscode.commands.registerCommand("argus.refresh", async () => { await index.refreshAll(); redraw(); }),
-    vscode.commands.registerCommand("argus.check", async () => {
-      const say = await check.check(panel.document());
+    vscode.commands.registerCommand("argus.check", async (given?: unknown) => {
+      const say = await check.check(asked(given) ?? panel.document());
       if (say) { panel.say(say); } else { panel.render(); }
     }),
-    vscode.commands.registerCommand("argus.create", () => create.create(panel.document())),
+    vscode.commands.registerCommand("argus.create", (given?: unknown) => create.create(asked(given) ?? panel.document())),
     vscode.commands.registerCommand("argus.openInObsidian", () => panel.openInObsidian()),
 
     vscode.window.onDidChangeTextEditorSelection((event) => {

@@ -37,6 +37,9 @@ interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<st
 
 interface Way { file: string; key: string; }
 
+/** The longest note the index reads, in characters. */
+export const NOTE_MAX = 400_000;
+
 const VAULT_TYPES = new Set(["concept", "library"]);
 
 /** Whether a file name is a note's, as the checker's `rglob("*.md")` takes it: on Windows in any letter case, on
@@ -347,6 +350,13 @@ export class NoteIndex {
     let text: string;
     try { text = (await readText(file)).text; } catch { return this.live(held) && drop(); }      // as the checker reads it
     if (!this.live(held)) { return false; }
+    // A note is parsed and drawn in one step each. A very large one would hold the editor for that step, so it is
+    // not read, and the Problems list says so. (A real Argus note has some ten thousand characters.)
+    if (text.length > NOTE_MAX) {
+      held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the note has ${text.length} characters, more than `
+        + `${NOTE_MAX}; Argus does not show a note that large (the checker still reads it)`);
+      return drop();
+    }
     // The name and the path are asked of the file as it is now: the key is the same for `Original.md` and
     // `original.md` on Windows, so a note renamed in letter case only is found under the key of the old one.
     let real: string;

@@ -35,6 +35,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private quiet?: NodeJS.Timeout;
   private readonly latest = new Latest();                     // what was asked for after the selection moved stays (core/latest.ts)
   private again?: NodeJS.Timeout;
+  private drawn?: vscode.TextDocument;                        // the document whose explanation the page shows: its buttons act on it
   private opening = false;                                    // a command is opening the panel right now
   private editor?: vscode.TextEditor;
   private asked?: { key: string; at: number };                // the match the panel waits for, and since when
@@ -185,6 +186,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private fileView(): View | undefined {
     this.duplicates = false;
     const editor = this.current();
+    this.drawn = editor?.document;
     if (!editor) { this.project = undefined; return { kind: "message", text: "Open a file to see its Argus explanation." }; }
     const document = editor.document;
     if (document.isUntitled || document.uri.scheme !== "file") {
@@ -227,9 +229,14 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       const end = chosen.end.line > chosen.start.line && chosen.end.character === 0 ? chosen.end.line : chosen.end.line + 1;
       selection = { from: chosen.start.line + 1, to: end };
     }
+    // While the agent writes the explanation of this file, a success of a check says nothing yet: no success badge.
+    const create = this.creating(at.project, at.sourceRel, at.notes);
+    const badge: Badge = create?.running
+      ? { label: "not checked", why: "the agent is still writing this explanation; the result of the check is shown when it has ended" }
+      : this.validation(at.project, at.sourceRel, entry);
     return { kind: "file", file: at.sourceRel, note, noteId: entry.id, assignment, matching, selection, whole: this.whole,
-      badge: this.validation(at.project, at.sourceRel, entry), linkTo: this.linkTo(at.project),
-      create: this.creating(at.project, at.sourceRel, at.notes),
+      badge, linkTo: this.linkTo(at.project),
+      create,
       problems: this.index.notes.problemsOf(at.project) };
   }
 
@@ -369,8 +376,15 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
         if (answer === "Open") { await vscode.env.openExternal(target); }
         break;
       }
-      case "create": await vscode.commands.executeCommand("argus.create"); return;
-      case "check": await vscode.commands.executeCommand("argus.check"); return;
+      // A button of the page acts on the file the page shows, also when the person went on to another file and
+      // the page has not followed yet.
+      case "create":
+      case "check": {
+        const drawn = this.drawn;
+        if (!drawn || drawn.isClosed) { this.tell("the file this page showed is closed; nothing was started"); break; }
+        await vscode.commands.executeCommand(action.do === "create" ? "argus.create" : "argus.check", drawn);
+        return;
+      }
       case "setup": await this.setup(); return;
     }
     this.render();
