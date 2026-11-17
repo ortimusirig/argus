@@ -154,6 +154,13 @@ def check_file_note(name, text, props, root):
             after = [note[i] for i in range(start + 1, end)]
         else:
             last = block["last"]
+            # Two fences directly under each other are read as one code by this check (and by the VS Code
+            # extension). The rule stays; the note's writer is told, because the block's code then holds two fence
+            # lines and changed_blocks.py will not compare or write such a block.
+            ticks = len(note[block["first"]]) - len(note[block["first"]].lstrip("`"))
+            if any(len(line) - len(line.lstrip("`")) >= ticks and not line.strip("`").strip() for line in block["code"]):
+                warns.append(f"{name}: block {block_id}: two code fences stand directly under each other and are "
+                             f"read as one; put a line of text between them")
             code, want = block["code"], lines[a - 1:b]
             if len(code) != len(want):
                 fails.append(f"{name}: block {block_id} code has {len(code)} lines, source lines {a}-{b} are {len(want)}")
