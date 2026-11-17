@@ -11,7 +11,6 @@ alone: no git is needed, and uncommitted changes count. A note without it is jud
 """
 import argparse
 import hashlib
-from bisect import bisect_left
 import json
 import re
 import subprocess
@@ -23,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
                      files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, mask_pattern,
                      normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, section,
-                     SOURCE_HASH, source_lines, utf8_output, witness)
+                     SOURCE_HASH, source_lines, utf8_output, without_inline_code, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 LENS_BY_TYPE = {"file": LENS, "mechanism": LENS, "start": LENS, "library": LENS[1:]}
@@ -36,47 +35,6 @@ fails, missing, stale, warns, infos = [], [], [], [], []
 
 
 # ---------------------------------------------------------------- reading notes
-
-BACKTICKS = re.compile(r"`+")
-TICK_OR_ESCAPE = re.compile(r"[`\\]")
-
-
-def without_inline_code(line):
-    """The line with every `code span` removed, so that [[ or %% inside code is not read as a link or a comment.
-    Code spans are read as Markdown reads them: a run of backticks opens a span that the next run of the same
-    length closes; a backtick with a backslash in front of it (outside a span) is a plain character and opens
-    nothing; a run that is never closed is plain text.
-
-    The work grows with the length of the line only: the runs of backticks are listed once, by their length, and
-    the run that closes a span is looked up in that list, never searched for in the rest of the line."""
-    if "`" not in line:
-        return line
-    by_length = {}                                   # length of a run -> where the runs of that length start
-    for m in BACKTICKS.finditer(line):
-        by_length.setdefault(m.end() - m.start(), []).append(m.start())
-    out, i, n = [], 0, len(line)
-    while i < n:
-        m = TICK_OR_ESCAPE.search(line, i)
-        if m is None:
-            out.append(line[i:])
-            break
-        at = m.start()
-        out.append(line[i:at])
-        if line[at] == "\\":
-            out.append(line[at:at + 2])              # an escaped character, a backtick too: kept as text
-            i = at + 2
-            continue
-        end = BACKTICKS.match(line, at).end()        # the run that may open a span: line[at:end]
-        starts = by_length.get(end - at, ())
-        k = bisect_left(starts, end)                 # the next run of the same length after it
-        if k < len(starts):
-            out.append(" ")
-            i = starts[k] + (end - at)
-        else:
-            out.append(line[at:end])                 # never closed: the backticks are text
-            i = end
-    return "".join(out)
-
 
 def excerpt(cell):
     """(code quoted by a Code cell, whether it was cut short with …). (None, False) when the cell quotes no code."""

@@ -1,6 +1,7 @@
 """Shared by the scripts: reading files and notes, which files count as source, scopes, graph paths, hashes."""
 import hashlib
 import json
+from bisect import bisect_left
 import os
 import re
 import sys
@@ -306,6 +307,47 @@ def cells(row):
     """The cells of one table row, stripped. A | written as \\| stays inside its cell."""
     parts = re.split(r"(?<!\\)\|", row.strip())
     return [c.strip() for c in parts[1:-1]]
+
+
+BACKTICKS = re.compile(r"`+")
+TICK_OR_ESCAPE = re.compile(r"[`\\]")
+
+
+def without_inline_code(line):
+    """The line with every `code span` removed, so that [[ or %% inside code is not read as a link or a comment.
+    Code spans are read as Markdown reads them: a run of backticks opens a span that the next run of the same
+    length closes; a backtick with a backslash in front of it (outside a span) is a plain character and opens
+    nothing; a run that is never closed is plain text.
+
+    The work grows with the length of the line only: the runs of backticks are listed once, by their length, and
+    the run that closes a span is looked up in that list, never searched for in the rest of the line."""
+    if "`" not in line:
+        return line
+    by_length = {}                                   # length of a run -> where the runs of that length start
+    for m in BACKTICKS.finditer(line):
+        by_length.setdefault(m.end() - m.start(), []).append(m.start())
+    out, i, n = [], 0, len(line)
+    while i < n:
+        m = TICK_OR_ESCAPE.search(line, i)
+        if m is None:
+            out.append(line[i:])
+            break
+        at = m.start()
+        out.append(line[i:at])
+        if line[at] == "\\":
+            out.append(line[at:at + 2])              # an escaped character, a backtick too: kept as text
+            i = at + 2
+            continue
+        end = BACKTICKS.match(line, at).end()        # the run that may open a span: line[at:end]
+        starts = by_length.get(end - at, ())
+        k = bisect_left(starts, end)                 # the next run of the same length after it
+        if k < len(starts):
+            out.append(" ")
+            i = starts[k] + (end - at)
+        else:
+            out.append(line[at:end])                 # never closed: the backticks are text
+            i = end
+    return "".join(out)
 
 
 def mask_pattern(text, groups=False):
