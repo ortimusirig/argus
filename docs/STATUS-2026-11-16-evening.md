@@ -86,3 +86,17 @@ Also on the P2 backlog since round 22 (told to Codex): the source lines of a "no
 
 P1 per round, all 23 rounds: 5, 4, 2, 3, 2, 3, 1, 1, 1, 2, 2, 2, 2, 1, 0, 1, 3, 1, 1, 1, 1, 1, 2.
 The idea "after the text is built, run the comparison again on the result and require the moved blocks to be `same`" (fix direction 1) is a general last check that the writer still lacks; it would have caught several earlier findings. Build it first.
+
+## 2026-11-17, afternoon: owner's rule and state after round 25 (usage 94% of the 99% stop line)
+
+OWNER'S RULE (2026-11-17, his words: "then continue till 2 consecutive review shows no P1"): go on with fix and review rounds until two consecutive Codex reviews show no P1, for the skill and for the extension; then release (merge to `main`, rebuild the extension, install the skill). All three branches were pushed by the owner at `87272b2` (main), `54565d0` (vscode-extension), `d0bf101` (skill-2.10); later commits are local only.
+
+SKILL 2.10: branch `skill-2.10`, head `66fcc97`, 72 existing tests pass. Rounds 23 and 24 are fixed (`46560a2`, `44216f6`, `a6bc285`, `66fcc97`). New in the writer: a general last check (`move_check`): after the new text is built, the comparison runs again on it and every moved block must be `same`, else nothing is written. Also: a properties key written twice stops the comparison; a note that resolves outside the notes folder is not read; a Flow may name blocks of a File note elsewhere in the vault.
+Round 25 (review file `code-66fcc9764546-20261117-133636-7afb5c-focus.md`, context for the next round from `context-skill-210-25.md`) is OPEN, one finding:
+- P1 `changed_blocks.py:1494`: a resumed update (the line table of a block was already corrected, its heading not) shifts the rows again; the writer adds the heading's shift to every row without looking at the row's quoted code; `own_check` and `move_check` both accept. Fix direction: at depth full, a line row is written only when, after the shift, the row's Code cell is the start of the source line it then names (the checker's own rule for line rows); a row that is already right stays; rows that fit neither way become a TODO; `move_check` runs the checker's line-row test on the result.
+P1 per round, 25 rounds: 5, 4, 2, 3, 2, 3, 1, 1, 1, 2, 2, 2, 2, 1, 0, 1, 3, 1, 1, 1, 1, 1, 2, 1, 1. Consecutive rounds without P1 so far: 0.
+
+EXTENSION: branch `vscode-extension`, head `3e0932c`, 239 tests pass, package rebuilt. The confirming round on `54565d0` (review file `code-54565d04bd30-20261117-130004-b0ba60-focus.md`) found 1 P1 and 3 P2. The 3 P2 are fixed (`67e71f7`, `ba43be4`, `3b0dea4`, `3e0932c`). The P1 WAITS FOR THE OWNER: Update is refused for a file with two or more notes; Codex calls that a narrowing without approval. The owner was asked: A = approve the refusal (then write it into the plan's "Owner decisions" section and tell Codex), B = build Update for the picked note (pass the note's path to the agent, track that note to the end). No answer yet. The next extension round is to be run after the answer, with a context made from `context-ext-update-7.md` in `C:/dev/argus/.git/cross-review/vscode-extension/`.
+
+The owner declined for now: dead-code hints (Vulture, graph "no caller"). Do not build.
+This session's context is nearly full; a fresh session should take over from this file. Cost rule: one fresh small agent per fix round (about 110,000 to 200,000 tokens each), never a long-lived builder.
