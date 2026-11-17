@@ -122,6 +122,8 @@ Back to [[<Project> - Start Here]]. <Links to the Mechanism notes this file take
 | --- | --- |
 ````
 
+The heading rows of three tables above are read by `changed_blocks.py --fix-moved` and must stay as written, cell for cell: `| # | Lines | Purpose | Why this way | Concepts |` under `## Level 2: blocks`, `| Line | Code | What happens | Real value |` as the first table after a block's code, and `| Step | Line | Variable | Value |` in the Trace section. The script writes line numbers only in these tables (the last two at depth `full`), in a block heading and in `masked_lines`. A table with other headings is never written.
+
 Rules the check enforces on a File note:
 
 | Rule | Detail |
