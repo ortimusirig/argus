@@ -497,6 +497,45 @@ def same_line(got, real, may_mask):
     return bool(got.replace(MASK, "").strip()) and mask_fits(got, real)
 
 
+def excerpt(cell):
+    """(code quoted by a Code cell, whether it was cut short with …). (None, False) when the cell quotes no code."""
+    m = re.match(r"``\s?(.*?)\s?``", cell) or re.match(r"`([^`]*)`", cell)
+    if not m:
+        return None, False
+    text = m.group(1).replace("\\|", "|")
+    cut = "…" in text or "..." in text[-3:] or "…" in cell[m.end():]
+    return re.split(r"…", text)[0].strip(), cut
+
+
+def row_quote(code_cell, r1, r2, lines, is_masked):
+    """The rule for the Code cell of a line row (depth full), in one place: check_notes.py judges a note by it,
+    and changed_blocks.py decides by it at which line a row belongs. A row for the source lines r1..r2 quotes the
+    first of them that is not blank: all of it, or its start followed by …. A row that quotes [masked] alone
+    fits when every non-blank line of it is a declared masked line (`is_masked`: line number -> bool); with
+    [masked] in the quote, the text around each mask must be the line's. `lines` are the source lines.
+    Returns (what is wrong, the line that is quoted, the quoted code). What is wrong: None when the row fits;
+    'no line' when r1..r2 holds no non-blank line of the file (nothing can be quoted there); 'no code';
+    'not the line' (a quote with [masked] that does not fit); 'not whole' (a plain quote that is not the line,
+    or is its start without …)."""
+    named = [k for k in range(max(r1, 1), min(r2, len(lines)) + 1) if lines[k - 1].strip()]
+    quoted, cut = excerpt(code_cell)
+    if not named:
+        return "no line", None, quoted
+    target = named[0]
+    real = lines[target - 1].strip()
+    if quoted == MASK and all(is_masked(k) for k in named):
+        return None, target, quoted                  # a row for lines the note declares as masked
+    if not quoted or not quoted.replace(MASK, "").strip():
+        return "no code", target, quoted
+    if MASK in quoted:
+        found = re.match(mask_pattern(quoted), real)
+        if not found or (not cut and found.end() != len(real)):
+            return "not the line", target, quoted
+    elif not (quoted == real or (cut and real.startswith(quoted))):
+        return "not whole", target, quoted
+    return None, target, quoted
+
+
 # ---------------------------------------------------------------- source hashes
 
 SOURCE_HASH = re.compile(r"sha256:([0-9a-f]{64})")

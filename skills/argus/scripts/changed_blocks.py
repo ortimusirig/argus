@@ -63,12 +63,16 @@ Without --fix-moved nothing is written. With it, for each block that only moved 
 whole code is at one free place no other block could take), the script writes that block's new line numbers in
 exactly four places and nowhere else:
   (a) the block heading;
-  (b) the property masked_lines: a number moves only when exactly one block's recorded lines hold it;
+  (b) the property masked_lines: the lines of the block's code that hold [masked] get their new numbers; a
+      number moves only when exactly one block's recorded lines hold it;
   (c) the Lines cell of the block's row in the Level 2 table: the table directly under the heading
       '## Level 2: blocks' (only blank lines between), with the template's exact heading row;
   (d) at depth full, the Line cell of the rows of the block's own line table: the table directly after the code
       fence of that block (only blank lines between), inside that block's section, with the template's exact
-      heading row. Only rows that name lines of that block.
+      heading row. Each row is placed by the code it quotes, with the rule check_notes.py has for line rows:
+      a row that quotes the source line it names already is left (an earlier, unfinished update set it), one
+      that quotes the line it names after the block's move gets the new number, and one that fits neither way,
+      or both ways with nothing in the table to decide it, is not written and is named in a TODO line.
 The heading rows are those of note-templates.md. A block's section ends at the next #, ## or ### heading. No other
 table is written, whatever its headings: not the Trace table, and at depth map no table inside a block. Line
 numbers that a move touches anywhere else (Trace rows, "Check your understanding", "Part of line N", a sentence)
@@ -81,7 +85,8 @@ CURRENT until they are. The writer's result is checked twice before it reaches t
 reading of the note: only line numbers in the four places may differ. Then, last of all, by the comparison itself:
 the new text is compared once more with the same source lines, in memory, and it is written only when every block
 that was moved is 'same' at its new lines, every block that was 'same' still is, no other block has a worse
-state, and the note has no more PROBLEM lines than before. Else nothing is written for the note, one PROBLEM line
+state, the note has no more PROBLEM lines than before, and every line row of a moved block quotes the line it
+names (but for the rows a TODO names). Else nothing is written for the note, one PROBLEM line
 says so ("the result of the move did not compare as expected (block N: was moved, would be changed)"), the blocks
 stay reported as they were, and the line numbers are set by hand. This check knows no shapes of note: whatever
 the writer and the reader take differently shows in it.
@@ -134,7 +139,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
                      frontmatter, in_ranges, in_scope, is_row, lies_under, line_ranges, link_names, mask_fits, merge_ranges,
                      missing_under_root,
-                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, source_lines, source_set, utf8_output,
+                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, row_quote, source_lines, source_set,
+                     utf8_output,
                      without_inline_code)
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
@@ -1334,7 +1340,9 @@ def move_check(before, note_lines, props, lines):
       every block that this run moved is 'same', at the lines that were written;
       every block that was 'same' is 'same', at the same lines;
       no other block has a worse state than before (the order of STATES);
-      the note has no more PROBLEM lines than before.
+      the note has no more PROBLEM lines than before;
+      at depth full, every row of a line table the writer went through quotes the code of the line it names
+      (the check's rule for line rows, row_quote), but for the rows a TODO leaves to a person.
     Returns None, or what did not hold. The guards before this one name shapes of note that are known to go
     wrong; this one asks nothing about shapes. Whatever the writer and the reader take differently, in a way
     that matters, shows here as a block that would not be 'same' after the write."""
@@ -1359,6 +1367,26 @@ def move_check(before, note_lines, props, lines):
     if len(after["problems"]) > before["_own_problems"]:
         return (f"the note had {before['_own_problems']} PROBLEM lines of its own and would have "
                 f"{len(after['problems'])}")
+    # The line rows, by the code they quote: in every block whose line table the writer went through, each row
+    # must fit the source at the line it names now, by the check's own rule. Only the rows that the writer left
+    # for a person (they fit neither at their lines nor after the move, and a TODO names them) are passed over.
+    for block in after["_blocks"]:
+        unfit = before.get("_rows", {}).get(block["id"])
+        if unfit is None or block["first"] is None:
+            continue
+        section_end = min(block["end"], next_heading(note_lines, after["_mask"], block["start"], 3))
+        table = table_at(note_lines, after["_mask"], block["last"], section_end)
+        for i in table[1:] if table and header_is(note_lines[table[0]], LINE_HEADER) else ():
+            found = pipe_cells(note_lines[i])
+            m = LINE_CELL_TEXT.fullmatch(note_lines[i][found[0][0]:found[0][1]]) if found else None
+            if not m or i in unfit:
+                continue
+            first, last = numbers_of(m)[0], numbers_of(m)[-1]
+            if (not block["a"] <= first <= last <= block["b"]
+                    or row_quote((cells(note_lines[i]) + ["", ""])[1], first, last, lines,
+                                 lambda n: in_ranges(after["_declared"], n))[0] is not None):
+                return (f"block {block['id']}: the line row {span(first, last)} at note line {i + 1} would not "
+                        f"quote the code of the line it names")
     return None
 
 
@@ -1469,10 +1497,55 @@ def moved_text(data, report):
     firsts, reach = [first for first, _, _ in by_first], []
     for _, last, _ in by_first:
         reach.append(max(last, reach[-1]) if reach else last)
-    for at, (block, entry) in enumerate(zip(blocks, report["blocks"])):
-        if entry["state"] != "moved" and "moved_to" not in entry:
+    source = report["_source"]                       # the source lines the comparison was made with
+    moves = [(at, block, entry["at"] if entry["state"] == "moved" else entry["moved_to"], entry)
+             for at, (block, entry) in enumerate(zip(blocks, report["blocks"]))
+             if entry["state"] == "moved" or "moved_to" in entry]
+    # (b) masked_lines, for all moved blocks first: the line rows below are judged with the masked lines as they
+    # will be. Never a shift of what stands there: after a partial update a number may be right already, and a
+    # second shift would make it wrong. What is right is known. The comparison placed the block, so each line of
+    # its code that holds [masked] and is not the source line itself is a masked line, at its new number. Those
+    # numbers are written, and their old ones (which the comparison used) are taken out. Any other number in the
+    # block's recorded lines fits neither as it stands nor after the move: it is left, and named for a person.
+    # A number moves with this block only when no other block's recorded lines hold it too. After a partial
+    # update the recorded lines of two blocks can overlap; then nothing is moved.
+    masked_left = {}                                 # place of the block -> what was left for a person
+    for at, block, (new_a, _), _ in moves if declared else ():
+        low, high = block["a"], block["a"] + len(block["code"]) - 1
+        delta = new_a - low
+        old, rest = cut_ranges(declared, low, high)
+        if not old or not delta:
             continue
-        new_a, new_b = entry["at"] if entry["state"] == "moved" else entry["moved_to"]
+        shared = []
+        k = bisect_right(firsts, high) - 1           # the last block that starts at or before the range's end
+        while k >= 0 and reach[k] >= low:            # before k no block reaches the range once reach[k] < low
+            first, last, n = by_first[k]
+            if n != at and last >= low and any(first <= b and a <= last for a, b in old):
+                shared.append(n)
+            k -= 1
+        if shared:
+            shared = [blocks[n]["id"] for n in sorted(shared)]
+            masked_left[at] = (f"masked_lines {', '.join(span(a, b) for a, b in old)}: these lines are in the "
+                               f"recorded lines of block {block['id']} and of block {', '.join(shared)}, so they "
+                               f"were not moved. Set them by hand (block {block['id']} moved by {delta:+d})")
+            continue
+        stale = {low + k for k, line in enumerate(block["code"])
+                 if MASK in line and in_ranges(report["_declared"], low + k) and line != source[new_a - 1 + k]}
+        right = {n + delta for n in stale}
+        here = {n for a, b in old for n in range(a, b + 1)}
+        keep = (here - stale) | right
+        if keep != here:
+            declared = rest
+            masked_new += ranges_of(sorted(keep))
+            masked_changed = True
+        other = ranges_of(sorted(here - stale - right))
+        if other:
+            masked_left[at] = (f"masked_lines {', '.join(span(a, b) for a, b in other)}: in the recorded lines of "
+                               f"block {block['id']}, but no [masked] line of its code is there, as the number "
+                               f"stands or after the move ({delta:+d}), so it was not moved. Set it by hand")
+    masked_now = merge_ranges(declared + masked_new)
+    by_hand = report["_rows"] = {}                   # for move_check(): block id -> its line rows left for a person
+    for at, block, (new_a, new_b), entry in moves:
         delta, new_range = new_a - block["a"], span(new_a, new_b)
         heading = lines[block["start"]]
         word = "line" if new_a == new_b else "lines"
@@ -1483,24 +1556,86 @@ def moved_text(data, report):
         # (d) The block's line table: at depth full only, the table directly after the block's code fence (only
         # blank lines between), inside the block's own section, and only when its heading row is the template's.
         # The section ends at the next #, ## or ### heading. No other table in a block is written, at any depth.
-        rows = 0
-        low, high = block["a"], block["a"] + len(block["code"]) - 1
+        # Each row is decided by the code it quotes, with the check's own rule (row_quote), not by where it
+        # stands: after a partial update the rows can be right already while the heading is not, and a shift
+        # would make them wrong. A row that fits the source at the line it names is left. One that fits after
+        # the block's shift gets the shifted number. One that fits neither way is not written. One that fits
+        # both ways (the same code at both lines) is decided only by the rows around it, since a line has one
+        # row: it takes the one of its two places where no decided row of the table is, when the other place
+        # is taken. Else it is not decided and not written.
+        rows, kept, neither, both = 0, 0, [], []
         section_end = min(block["end"], next_heading(lines, mask, block["start"], 3))
         table = table_at(lines, mask, block["last"], section_end) if full and delta and block["first"] is not None else None
         if table and header_is(lines[table[0]], LINE_HEADER):
+            unfit = by_hand[block["id"]] = set()
+            taken, open_rows = set(), []             # non-blank lines that a decided row names; rows fitting both ways
+
+            def fits(first, last):
+                return (new_a <= first <= last <= new_b
+                        and row_quote(code_cell, first, last, source, lambda n: in_ranges(masked_now, n))[0] is None)
+
+            def named(first, last):
+                return {n for n in range(first, last + 1) if source[n - 1].strip()}
+
+            def shift(i, a, b, m):
+                lines[i] = lines[i][:a] + new_numbers(m, [n + delta for n in numbers_of(m)]) + lines[i][b:]
+
             for i in table[1:]:
                 a, b = line_cell(lines, i, 0, "line table")
                 m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
-                if m and all(low <= n <= high for n in numbers_of(m)):       # a line of this block
-                    lines[i] = lines[i][:a] + new_numbers(m, [n + delta for n in numbers_of(m)]) + lines[i][b:]
+                if not m:
+                    continue
+                first, last = numbers_of(m)[0], numbers_of(m)[-1]
+                code_cell = (cells(lines[i]) + ["", ""])[1]
+                stays, shifts = fits(first, last), fits(first + delta, last + delta)
+                if stays and shifts:
+                    open_rows.append((i, a, b, m, first, last))
+                elif stays:
+                    kept += 1
+                    taken |= named(first, last)
+                elif shifts:
+                    shift(i, a, b, m)
                     rows += 1
+                    taken |= named(first + delta, last + delta)
+                else:
+                    neither.append([first, last])
+                    unfit.add(i)
+            while open_rows:
+                still = []
+                for i, a, b, m, first, last in open_rows:
+                    here, there = named(first, last) & taken, named(first + delta, last + delta) & taken
+                    if here and not there:
+                        shift(i, a, b, m)
+                        rows += 1
+                        taken |= named(first + delta, last + delta)
+                    elif there and not here:
+                        kept += 1
+                        taken |= named(first, last)
+                    else:
+                        still.append((i, a, b, m, first, last))
+                if len(still) == len(open_rows):
+                    break
+                open_rows = still
+            both = [[first, last] for _, _, _, _, first, last in open_rows]
         elif full and delta:
             left.append(f"block {block['id']}: no line table at the template's place (directly after the block's "
                         f"code, with the heading row Line, Code, What happens, Real value), so no line row was "
                         f"written. Where the block has line rows, add {delta:+d}")
         if rows:
             done.append(f"{rows} line-table rows moved by {delta:+d}")
-        # (c) The block's row of the Level 2 table: the row that starts with its id, in the Lines cell.
+        if kept:
+            done.append(f"{kept} line-table rows left as they are (their code is at the lines they name)")
+        if neither:
+            left.append(f"line rows of block {block['id']} fit the source neither at their lines nor after the move "
+                        f"({delta:+d}): set them by hand: rows {spans(neither)}"
+                        + (f". Not decided, and left as they are (the same code is at both lines): rows {spans(both)}"
+                           if both else ""))
+        elif both:
+            left.append(f"line rows of block {block['id']} are not decided: the code they quote is at their lines "
+                        f"and at their lines after the move ({delta:+d}) as well. They were left as they are; look "
+                        f"at them: rows {spans(both)}")
+        # (c) The block's row of the Level 2 table: the row that starts with its id, in the Lines cell. The
+        # block's new lines are written as they are, never a shift of what stands there.
         for i in rows_of.get(block["id"], ()):
             a, b = line_cell(lines, i, 1, "Level 2 table")
             m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
@@ -1508,26 +1643,8 @@ def moved_text(data, report):
                 lines[i] = lines[i][:a] + new_numbers(m, [new_a, new_b]) + lines[i][b:]
                 done.append("Level 2 row")
         level2_missing = level2_missing or level2 is None
-        # (b) masked_lines: a number moves with this block only when no other block's recorded lines hold it
-        # too. After a partial update the recorded lines of two blocks can overlap; then nothing is moved.
-        old, rest = cut_ranges(declared, low, high) if declared else ([], declared)
-        shared = []
-        if old:
-            k = bisect_right(firsts, high) - 1       # the last block that starts at or before the range's end
-            while k >= 0 and reach[k] >= low:        # before k no block reaches the range once reach[k] < low
-                first, last, n = by_first[k]
-                if n != at and last >= low and any(first <= b and a <= last for a, b in old):
-                    shared.append(n)
-                k -= 1
-            shared = [blocks[n]["id"] for n in sorted(shared)]
-        if old and delta and shared:
-            left.append(f"masked_lines {', '.join(span(a, b) for a, b in old)}: these lines are in the recorded lines "
-                        f"of block {block['id']} and of block {', '.join(shared)}, so they were not moved. Set them by "
-                        f"hand (block {block['id']} moved by {delta:+d})")
-        elif old and delta:
-            declared = rest
-            masked_new += [[a + delta, b + delta] for a, b in old]
-            masked_changed = True
+        if at in masked_left:
+            left.append(masked_left[at])
         wrote.append(f"block {block['id']}: " + ", ".join(done))
     if level2_missing:
         left.append("the note has no Level 2 table at the template's place (directly under '## Level 2: blocks', "

@@ -22,7 +22,7 @@ sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the sc
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
                      files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, link_names, mask_pattern,
-                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, section,
+                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, row_quote, section,
                      SOURCE_HASH, source_lines, utf8_output, without_inline_code, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
@@ -35,16 +35,6 @@ fails, missing, stale, warns, infos = [], [], [], [], []
 
 
 # ---------------------------------------------------------------- reading notes
-
-def excerpt(cell):
-    """(code quoted by a Code cell, whether it was cut short with …). (None, False) when the cell quotes no code."""
-    m = re.match(r"``\s?(.*?)\s?``", cell) or re.match(r"`([^`]*)`", cell)
-    if not m:
-        return None, False
-    text = m.group(1).replace("\\|", "|")
-    cut = "…" in text or "..." in text[-3:] or "…" in cell[m.end():]
-    return re.split(r"…", text)[0].strip(), cut
-
 
 # <word> or </word> outside code, which Obsidian takes for HTML. Not \<word>, not <br>, not a link <https://...>.
 HTML_TAG = re.compile(r"(?<!\\)</?(?!br\b)[A-Za-z][\w-]*(?:\s[^<>]*)?/?>")
@@ -220,20 +210,13 @@ def check_file_note(name, text, props, root):
             if not c[3]:
                 fails.append(f"{name}: row {label} has an empty 'Real value' cell (write a value, none, or not run)")
             # The Code cell quotes the row's first non-blank line: all of it, or its start followed by …
-            target = next((k for k in range(max(r1, 1), min(r2, len(lines)) + 1) if k in nonblank), None)
-            quoted, cut = excerpt(c[1])
-            if target is None:
-                continue
-            real = lines[target - 1].strip()
-            if quoted == MASK and all(k in declared for k in range(r1, min(r2, len(lines)) + 1) if k in nonblank):
-                continue  # a row for lines the note declares as masked
-            if not quoted or not quoted.replace(MASK, "").strip():
+            # The rule itself is row_quote() in _common.py: changed_blocks.py places rows by the same one.
+            wrong, target, quoted = row_quote(c[1], r1, r2, lines, declared.__contains__)
+            if wrong == "no code":
                 fails.append(f"{name}: row {label} quotes no code in its Code cell")
-            elif MASK in quoted:
-                found = re.match(mask_pattern(quoted), real)
-                if not found or (not cut and found.end() != len(real)):
-                    fails.append(f"{name}: row {label} quotes code that is not line {target}: {quoted[:50]}")
-            elif not (quoted == real or (cut and real.startswith(quoted))):
+            elif wrong == "not the line":
+                fails.append(f"{name}: row {label} quotes code that is not line {target}: {quoted[:50]}")
+            elif wrong == "not whole":
                 fails.append(f"{name}: row {label} must quote line {target} whole, or its start followed by …: "
                              f"{quoted[:50]}")
 
