@@ -60,7 +60,10 @@ source is found there: the property or --source is wrong, and nothing is to be r
 
 --hash prints nothing and ends with exit code 1 when a file cannot be read.
 
-Exit code 0: CURRENT, no note has anything to do. 1: no File note of this skill is in scope (NO FILE NOTE IN
+CURRENT means: the code copied into every block equals the source, and every source_hash equals its file. The
+script cannot know whether an explanation is right; it compares code and hashes only.
+
+Exit code 0: CURRENT, the script found nothing to do for any note. 1: no File note of this skill is in scope (NO FILE NOTE IN
 SCOPE: check --notes and --scope), or at least one note has a TODO line (a block is moved,
 changed, ambiguous or undecided, a line is unexplained, a source_hash differs or is missing, something was just
 written, a source file is gone, or there is a PROBLEM). 2: wrong arguments, or a folder that does not exist.
@@ -82,7 +85,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
                      frontmatter, in_ranges, in_scope, is_row, line_ranges, link_names, mask_fits, merge_ranges,
-                     normalize_scopes, note_blocks, on_disk, read_text, retired_ids, source_lines, utf8_output,
+                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, source_lines, utf8_output,
                      without_inline_code)
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
@@ -496,9 +499,24 @@ def compare(note_lines, props, lines):
     for block_id in sorted({block["id"] for block in blocks} & set(retired)):
         problems.append(f"block {block_id} uses an id that retired_blocks lists")
     counts = {state: sum(1 for e in result if e["state"] == state) for state in STATES}
+    cites = cited_lines(note_lines, mask, blocks, result)
+    # For each changed block: the places of the same note that name it or its lines. What they say rests on the
+    # old code, and no check can see whether it still holds, so they are named for the one who rewrites the block.
+    level2 = next((i for i, line in enumerate(note_lines) if not mask[i] and line.startswith("## Level 2")), None)
+    level2_end = len(note_lines) if level2 is None else next(
+        (i for i in range(level2 + 1, len(note_lines)) if not mask[i] and note_lines[i].startswith("## ")), len(note_lines))
+    level2_rows = {(cells(note_lines[i]) or [""])[0]: i + 1
+                   for table in (tables(note_lines, mask, level2 + 1, level2_end)[:1] if level2 is not None else ())
+                   for i in table[1:]}
+    for entry in result:
+        if entry["state"] == "changed":
+            mine = [c for c in cites if entry["id"] in c["blocks"]]
+            entry["in_note"] = {"level2_row": level2_rows.get(entry["id"]),
+                                "trace_rows": sorted({c["at"] + 1 for c in mine if c["trace"]}),
+                                "cites": sorted({c["at"] + 1 for c in mine if not c["trace"]})}
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
             "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared,
-            "_cites": cited_lines(note_lines, mask, blocks, result)}
+            "_cites": cites}
 
 
 CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
@@ -540,6 +558,7 @@ def cited_lines(note, mask, blocks, entries):
         sure = known and len(set(owners)) == 1 and in_trace
         text = None if new is None else joins[0].join(map(str, new)) if len(new) > 1 else str(new[0])
         found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": sure, "text": text,
+                      "trace": in_trace,
                       "blocks": [blocks[k]["id"] for k in owners if k is not None]})
 
     for i, line in enumerate(note):
@@ -774,12 +793,13 @@ def build(path, text, root, scopes, known):
         if not given:
             report["source_state"] = "rejected"
             report["problems"].append("the note has no 'source' property. Remove nothing; correct the property")
-        elif Path(given).is_absolute() or given.startswith("/") or ".." in given.split("/") or os.path.lexists(target):
-            # Not a missing file: an absolute path, a path that leads out of the root, a folder, or a link that
-            # leads out. A mistake in the property or in the source root.
+        elif plain_relative(given) is None or os.path.lexists(target):
+            # Not a missing file. Its form is no plain path under the root (a drive, a network start, a leading
+            # slash, a '..' part), or something is there that on_disk() refused: a folder, or a link that leads
+            # out. A mistake in the property or in the source root.
             report["source_state"] = "rejected"
             report["problems"].append(f"property 'source' is '{given}': not the path of a file under the source root "
-                                      f"(absolute, leading out of it, or no plain file). This is a mistake in the "
+                                      f"(a drive or an absolute path, a path leading out of it, or no plain file). This is a mistake in the "
                                       f"property or in --source, not a deleted file. Remove nothing; tell the person")
         elif others == 0:
             report["source_state"] = "root in doubt"
@@ -885,6 +905,22 @@ def finish(report, known):
     if (report["wrote"] or counts["moved"]) and cited_by:
         todo.append("blocks moved: correct the line numbers of this file that these notes cite (Later runs, step "
                     "6): " + ", ".join(cited_by))
+    rewritten = [e for e in report["blocks"] if e["state"] == "changed" and "in_note" in e
+                 and "moved_to" not in e and "elsewhere" not in e]
+    for entry in rewritten[:10]:
+        here = entry["in_note"]
+        parts = [f"its Level 2 row (note line {here['level2_row']})" if here["level2_row"] else "its Level 2 row",
+                 "the Level 1 lens table",
+                 "the Trace" + (f" (rows at note lines {', '.join(map(str, here['trace_rows']))} name its lines)"
+                                if here["trace_rows"] else ""),
+                 "'Check your understanding' with its answers"]
+        if here["cites"]:
+            parts.append(f"the sentences at note lines {', '.join(map(str, here['cites']))}, which cite its lines")
+        todo.append(f"after block {entry['id']} is rewritten, re-read in this note what rests on it and correct "
+                    f"every statement and value that the changed code makes wrong: " + "; ".join(parts)
+                    + ". Leave the rest (Later runs, step 3)")
+    if len(rewritten) > 10:
+        todo.append(f"the same for the other {len(rewritten) - 10} changed blocks")
     cites = report.get("check_lines", [])
     if cites:
         todo.append("line numbers the note cites in its own text, to correct by hand: " + "; ".join(cites[:15])
@@ -927,9 +963,21 @@ def dependent_notes(known, root, scopes):
     for note in known["notes"]:
         if note["type"] not in ("mechanism", "flow") or not note["given"]:
             continue
-        if scopes and not any(in_scope(source, scopes) for source in note["sources"]):
+        # Chosen by the sources the note declares, whether the files are there or not: a note whose only source
+        # was deleted must not drop out.
+        declared = [(given, on_disk(root, given), plain_relative(given)) for given in note["given"]]
+        if scopes and not any(in_scope(found or plain or "", scopes) for _, found, plain in declared):
             continue
         entry = {"note": note["note"], "path": note["path"], "type": note["type"], "state": "current", "todo": []}
+        missing = [given for given, found, plain in declared if not found and plain
+                   and not os.path.lexists(Path(root) / plain)]
+        if missing:
+            entry["state"] = "source missing"
+            entry["todo"].append(f"its source {', '.join(missing)} is not under the source root (deleted or renamed, "
+                                 f"or --source is wrong): re-read the note against the code and correct it and its "
+                                 f"'sources'; remove nothing without asking (Later runs, step 6)")
+            out.append(entry)
+            continue
         if not note["source_hash"]:
             entry["state"] = "no source_hash"
             entry["todo"].append("it has no source_hash: check the note against the code, then set its commit and "
@@ -993,17 +1041,18 @@ def print_report(report):
                 print(f"AMBIGUOUS {was}: the same code starts at lines {', '.join(map(str, starts[:SHOWN]))}{more}")
         elif entry["state"] == "changed":
             if "moved_to" in entry:
-                parts = [f"its whole code is at {at(*entry['moved_to'])}, past other blocks: no rewrite, --fix-moved "
-                         f"writes the new lines"]
+                parts = [f"its whole code is at {at(*entry['moved_to'])}, past other blocks: the code is the same, --fix-moved "
+                         f"writes the new lines; check sentences that speak of where it stands"]
             elif "elsewhere" in entry:
                 parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks; at more than "
                          f"one place, or where another block could be too, or the search was cut short (BOUNDED): "
-                         f"no rewrite, choose the place and set the block's line numbers by hand"]
+                         f"the code is the same; choose the place, set the block's line numbers by hand and "
+                         f"check sentences that speak of where it stands"]
             else:
                 parts = [f"expected at {at(*entry['expected'])}"]
                 if entry.get("spaces_only"):
-                    parts.append(f"at {at(*entry['likely'])} only white space at line ends differs: copy the code "
-                                 f"again, the explanation holds")
+                    parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
+                                 f"no explanation or value rests on them, then copy the code again")
                 elif entry["gone"]:
                     parts.append("its code is gone: no unexplained line between the placed blocks around it. "
                                  "When you remove the block, add its id to retired_blocks")
