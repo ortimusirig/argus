@@ -27,8 +27,11 @@ with the source file as it is on disk now and gives each block one state:
   not compared  the block has no code of its own that the script can take: no code fence in its own section, or
              two code fences directly under each other. A PROBLEM line says what to repair in the note. It is not
              a changed block, and the result is not CURRENT while one exists. The note's form is checked in every
-             run, with or without --fix-moved, before any block is compared: when the note holds something the
-             script does not handle (what the guard of --fix-moved refuses), every block of it is not compared
+             run, with or without --fix-moved, before any block is compared. Only what makes a block's code,
+             heading or section unsure stops the comparison, and then every block of the note is not compared:
+             code fences that two readings of the note take differently (a line that begins with ``` and holds
+             another backtick, a fence never closed, a fence of ~, an indented fence, a fence in a quote or a
+             list item) and a heading in any form but # marks at the beginning of a line, a space and text
 
 It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
 covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
@@ -55,9 +58,13 @@ exactly four places and nowhere else:
 The heading rows are those of note-templates.md. A block's section ends at the next #, ## or ### heading. No other
 table is written, whatever its headings: not the Trace table, and at depth map no table inside a block. Line
 numbers that a move touches anywhere else (Trace rows, "Check your understanding", "Part of line N", a sentence)
-are named in TODO lines for a person. A note that holds something the writer does not handle is not written at
-all (one PROBLEM line names it), and the writer's result is checked by a second reading of the note before it
-reaches the disk. The script never renames or deletes a note and says what it wrote in WROTE lines. Two runs
+are named in TODO lines for a person. A note that holds something the writer does not handle, but that leaves
+the comparison as it is (an HTML block such as a line that is only <br>, '<?' or '<!', an Obsidian comment, a
+table in another form than the templates'), is compared as usual and can be CURRENT. Only when it has moved
+blocks it is not written at all: one PROBLEM line names the construct and its line, with or without --fix-moved,
+the MOVED lines give the new lines, the moved line numbers of that note are set by hand, and the result is not
+CURRENT until they are. The writer's result is checked by a second reading of the note before it reaches the
+disk. The script never renames or deletes a note and says what it wrote in WROTE lines. Two runs
 cannot write one note at the same time. A note that changed after it was compared is not written: its bytes are
 read again as the last thing before the new text takes its place. What remains is a save by another program in
 the instant between that reading and the replace. The report shows the state after the writing.
@@ -370,19 +377,21 @@ def compare(note_lines, props, lines):
     keep = max(1, PLACES // max(1, len(blocks)))
     budget = SEARCH_WORK // max(1, len(blocks))
     found, bounded, problems, cut_short = [], [], [], set()
-    # The note's form comes first, in every run, whether anything is to be written or not. A note that the guard
-    # of the writer refuses (its two readings of 'what is code' differ, or it holds a construct the readers were
-    # not made for) can give a block code that is not its own: an unchanged block would be reported as changed.
-    # So nothing is compared for such a note. Every block is 'not compared', no place and no unexplained line is
-    # stated, and the one PROBLEM line says what to repair.
-    strange = unhandled(note_lines)
+    # The note's form comes first, in every run, whether anything is to be written or not. The guard's tests are
+    # of two kinds (see STOPS_COMPARING and STOPS_WRITING). A note whose fences or headings can be read in two
+    # ways can give a block code that is not its own: an unchanged block would be reported as changed. So nothing
+    # is compared for such a note. Every block is 'not compared', no place and no unexplained line is stated, and
+    # the one PROBLEM line says what to repair. A construct of the other kind (a line that is only <br>, a
+    # comment, a table in another form) leaves the code, the headings and the sections as they are: the note is
+    # compared as usual, and only the writer keeps out of it (see the end of this function).
+    strange, writer_only = note_form(note_lines)
     if strange:
         result = [{"id": block["id"], "from": block["a"], "to": block["b"], "lines": 0, "no_code": True,
                    "note_form": True, "state": "not compared"} for block in blocks]
         counts = {state: len(result) if state == "not compared" else 0 for state in STATES}
-        problems.append(f"note line {strange[0]} holds {strange[1]}, which the script does not handle. No block of "
-                        f"this note is compared and nothing is written for it: repair the note's form at that line, "
-                        f"then run again. Rewrite no block for this reason")
+        problems.append(f"note line {strange[0]} holds {strange[1]}: what is a block's code, heading or section is "
+                        f"not sure there. No block of this note is compared and nothing is written for it: repair "
+                        f"the note's form at that line, then run again. Rewrite no block for this reason")
         return {"blocks": result, "counts": counts, "unexplained": [], "bounded": bounded, "problems": problems,
                 "lines": total, "retired_blocks": retired_ids(props), "reordered": [], "_blocks": blocks,
                 "_mask": mask, "_declared": declared, "_cites": [], "_depth": props.get("depth", ""),
@@ -646,9 +655,17 @@ def compare(note_lines, props, lines):
             entry["in_note"] = {"level2_row": level2_rows.get(entry["id"]),
                                 "trace_rows": sorted({c["at"] + 1 for c in mine if c["trace"]}),
                                 "cites": sorted({c["at"] + 1 for c in mine if not c["trace"]})}
+    # A construct that only the writer does not handle. The comparison above stands. It matters only when the
+    # note has moves to write: then --fix-moved writes nothing for this note, and the line says so in every run
+    # (without --fix-moved as a hint). A note with nothing to write gets no line and can be CURRENT.
+    if writer_only and any(e["state"] == "moved" or "moved_to" in e for e in result):
+        problems.append(f"note line {writer_only[0]} holds {writer_only[1]}, which the writer of --fix-moved does "
+                        f"not handle. The comparison is not affected, but --fix-moved writes nothing for this note: "
+                        f"set the moved line numbers of this note by hand, to the new lines that the MOVED and "
+                        f"DISPLACED lines of this report give")
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
             "lines": total, "retired_blocks": retired, "reordered": reordered, "_blocks": blocks, "_mask": mask,
-            "_declared": declared, "_cites": cites, "_depth": props.get("depth", "")}
+            "_declared": declared, "_cites": cites, "_depth": props.get("depth", ""), "_writer": writer_only}
 
 
 CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
@@ -812,9 +829,45 @@ def write_note(path, compared, new):
 # ---------------------------------------------------------------- the guard of --fix-moved
 #
 # The writer understands a small Markdown and nothing else. Two functions stand around it, and neither shares any
-# reading of the note with it: unhandled() refuses a note that holds something the writer was not made for, and
+# reading of the note with it: note_form() names what the note holds that the script was not made for, and
 # own_check() looks at what the writer produced and lets only line numbers in known places through. A new shape
 # of note is then refused or caught, not misread.
+#
+# What note_form() names is of two kinds, and every test of form_tests() is in exactly one of the two lists.
+# The question that decides: can this construct change what the shared reader (fence_mask, note_blocks,
+# next_heading) takes as a block's code, its heading or its section? Yes, or not sure: STOPS_COMPARING. No:
+# STOPS_WRITING. A test whose name is in neither list fails the note (KeyError: nothing compared, nothing
+# written), so a new test has to be put in one of them on purpose.
+
+# Kind A. What is a block's code, heading or section cannot be trusted. No block of the note is compared.
+STOPS_COMPARING = {
+    "fence two readings": "a line that is code by one reading of the note's fences and text by another",
+    "fence inline": "a line that begins with ``` and holds another backtick (inline code that looks like a fence)",
+    "fence of ~": "a code fence made of ~",
+    "fence indented": "a code fence that does not start at the beginning of its line",
+    "fence in quote or list": "a code fence inside a quote or a list item",
+    "fence not closed": "a code fence that is opened and not closed",
+    # A heading ends a section. The shared reader knows one form, so a heading in any other form leaves a block's
+    # section longer than it is, and a fence after it can be taken for the code of a block that has none.
+    "heading indented": "a heading that does not start at the beginning of its line",
+    "heading tab or empty": "a heading with a tab after its # marks, or without text",
+    "heading underlined": "an underlined heading (a line of = or - directly under a line of text)",
+    "heading in quote or list": "a heading inside a quote or a list item",
+}
+# Kind B. The writer does not handle it; code, headings and sections are read as without it. The note is compared
+# as usual; only --fix-moved writes nothing for it.
+STOPS_WRITING = {
+    "html block": "an HTML block",
+    "declaration": "a processing instruction, a declaration or an HTML comment (<? or <!)",
+    "obsidian comment": "an Obsidian comment (%%)",
+    "table without |": "a table whose rows do not start with |",
+    "table in quote or list": "a table inside a quote or a list item",
+    "table under quote or list": "a table directly under a quote or a list item",
+    "table indented": "a table row that does not start at the beginning of its line",
+    "table without separator": "a table without a separator row under its heading row",
+    "table under table": "a table directly under another table, or one that starts with a separator row",
+}
+assert not set(STOPS_COMPARING) & set(STOPS_WRITING), "a test of the guard is in both lists"
 
 SEPARATOR_ROW = re.compile(r"\|(\s*:?-+:?\s*\|)+\s*")
 OWN_HEADING = re.compile(r"### Block \w+\b.*\(lines? \d+(\s*-\s*\d+)?\)\s*")
@@ -843,23 +896,26 @@ def commonmark_fences(lines):
     return inside
 
 
-def unhandled(lines):
-    """The first thing in a note that the writer of --fix-moved does not handle, as (line number, what it is), or
-    None. The writer handles: code fences of backticks that start at the beginning of a line, and tables whose
-    rows start at the beginning of a line, with one heading row and one separator row under it. Anything else
-    that could hold or hide a table or a fence is named here: a fence of ~, a fence that is indented or stands in
-    a quote or a list item, a fence that is never closed, an HTML block, an Obsidian comment, a table that is
-    indented, has no separator row, or stands directly under another table or under a quote or list item, '<?' or
-    '<!' outside code, and every heading that is not '#' marks at the beginning of a line followed by a space and
-    text: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
-    without text. The properties block at the top is left out. Before all that, the note is refused when the
-    check's reading of its fences (fence_mask) and CommonMark's (commonmark_fences) do not give the same lines as
-    code, and when a line outside a fence begins with ``` and holds another backtick after that run."""
+def form_tests(lines):
+    """Every thing in a note that the script was not made for, in the order of the lines, as (line number, name
+    of the test). The names are the keys of STOPS_COMPARING and STOPS_WRITING. The script handles: code fences of
+    backticks that start at the beginning of a line, headings that are # marks at the beginning of a line
+    followed by a space and text, and tables whose rows start at the beginning of a line, with one heading row
+    and one separator row under it. Anything else that could hold or hide a table, a fence or a heading is named
+    here: a fence of ~, a fence that is indented or stands in a quote or a list item, a fence that is never
+    closed, an HTML block, an Obsidian comment, a table that is indented, has no separator row, or stands
+    directly under another table or under a quote or list item, '<?' or '<!' outside code, and every other form
+    of heading: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
+    without text. The properties block at the top is left out. Before all that, the check's reading of the
+    note's fences (fence_mask) and CommonMark's (commonmark_fences) must give the same lines as code.
+    After a test of STOPS_COMPARING nothing more needs to be read; after one of STOPS_WRITING the reading goes
+    on as if the line were plain text."""
     # First of all: the check's reading of the fences and CommonMark's must give the same lines as code. Where
-    # they differ, the note holds a fence that can be read in two ways, and the writer keeps out of it.
+    # they differ, the note holds a fence that can be read in two ways.
     for n, (one, other) in enumerate(zip(fence_mask(lines), commonmark_fences(lines)), 1):
         if one != other:
-            return n, "a line that is code by one reading of the note's fences and text by another"
+            yield n, "fence two readings"
+            break
     fence, fence_at, rows = None, 0, 0
     props = bool(lines) and lines[0].strip() == "---"        # the properties block: its lines are no Markdown
     text_above = marker_above = False                # the line before holds text; it begins with a quote or list mark
@@ -878,58 +934,80 @@ def unhandled(lines):
         if ticks >= 3 and "`" in text[ticks:]:
             # Outside a fence, three or more backticks and another backtick after the whole run: inline code that
             # the check's fence reader takes for a fence.
-            return n, "a line that begins with ``` and holds another backtick (inline code that looks like a fence)"
+            yield n, "fence inline"
         if indent == 0 and ticks >= 3:
             fence, fence_at, rows = ticks, n, 0
             text_above = marker_above = False
             continue
         # Headings end sections. The readers know one form: # marks at the beginning of the line, then a space and
-        # text. Every other form of heading is refused, not read.
+        # text. Every other form of heading is named, not read.
         if re.match(r"#{1,6}(?:[ \t]|$)", text):
             if indent:
-                return n, "a heading that does not start at the beginning of its line"
+                yield n, "heading indented"
             if "\t" in line[:8].lstrip("#")[:1] or not line.strip("# \t"):
-                return n, "a heading with a tab after its # marks, or without text"
+                yield n, "heading tab or empty"
         if text_above and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", line):
-            return n, "an underlined heading (a line of = or - directly under a line of text)"
+            yield n, "heading underlined"
         if not text.startswith("|") and re.fullmatch(r":?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*", text):
-            return n, "a table whose rows do not start with |"
+            yield n, "table without |"
         was_marker = marker_above
         text_above = bool(line.strip())
         if text.startswith("~~~"):
-            return n, "a code fence made of ~"
+            yield n, "fence of ~"
         if ticks >= 3:
-            return n, "a code fence that does not start at the beginning of its line"
+            yield n, "fence indented"
         marker = re.match(r"(?:>\s?|[-*+]\s+|\d+[.)]\s+)+", text)
         inner = text[marker.end():] if marker else ""
         marker_above = bool(marker)
-        if marker and (inner.startswith("|") or inner.startswith("```") or inner.startswith("~~~")):
-            return n, "a table or a code fence inside a quote or a list item"
+        if marker and (inner.startswith("```") or inner.startswith("~~~")):
+            yield n, "fence in quote or list"
+        if marker and inner.startswith("|"):
+            yield n, "table in quote or list"
         if marker and re.match(r"#{1,6}(?:[ \t]|$)", inner):
-            return n, "a heading inside a quote or a list item"
+            yield n, "heading in quote or list"
         if text.startswith("|") and rows == 0 and was_marker:
-            return n, "a table directly under a quote or a list item"
+            yield n, "table under quote or list"
         if re.match(r"<[A-Za-z/]", text) and not re.match(r"<[A-Za-z][A-Za-z0-9+.-]*:", text):
-            return n, "an HTML block"
+            yield n, "html block"
         outside_code = without_inline_code(line)     # the shared reader of code spans: `` ${x%% *} `` is code
         if "<?" in outside_code or "<!" in outside_code:
-            return n, "a processing instruction, a declaration or an HTML comment (<? or <!)"
+            yield n, "declaration"
         if "%%" in outside_code:
-            return n, "an Obsidian comment (%%)"
+            yield n, "obsidian comment"
         if not text.startswith("|"):
             rows = 0
             continue
         if indent:
-            return n, "a table row that does not start at the beginning of its line"
+            yield n, "table indented"
         rows += 1
         separator = SEPARATOR_ROW.fullmatch(line.rstrip()) is not None
         if rows == 2 and not separator:
-            return n, "a table without a separator row under its heading row"
+            yield n, "table without separator"
         if rows != 2 and separator:
-            return n, "a table directly under another table, or one that starts with a separator row"
+            yield n, "table under table"
     if fence is not None:
-        return fence_at, "a code fence that is opened and not closed"
-    return None
+        yield fence_at, "fence not closed"
+
+
+def note_form(lines):
+    """What a note holds that the script was not made for, as two answers, each (line number, what it is) or None:
+    the first thing that stops the comparison (STOPS_COMPARING), and the first thing above it that only stops
+    the writer (STOPS_WRITING). With the first answer the second does not matter: nothing is compared and
+    nothing is written."""
+    writer_only = None
+    for n, name in form_tests(lines):
+        if name in STOPS_COMPARING:
+            return (n, STOPS_COMPARING[name]), writer_only
+        what = STOPS_WRITING[name]                   # KeyError: a test that was put in neither list
+        writer_only = writer_only or (n, what)
+    return None, writer_only
+
+
+def unhandled(lines):
+    """The thing in a note because of which --fix-moved writes nothing for it, as (line number, what it is), or
+    None: what stops the comparison, else the first thing the writer does not handle."""
+    stops, writer_only = note_form(lines)
+    return stops or writer_only
 
 
 def own_check(old, new):
@@ -1156,12 +1234,15 @@ def moved_text(data, report):
         return None, [], None, left                  # the PROBLEM line of the comparison says why
     if any("stray" in block for block in blocks):
         return None, [], None, left                  # the PROBLEM line of the comparison names the block
-    if report.get("_form"):
-        return None, [], None, left                  # the PROBLEM line of the comparison names the construct
     # The comparison ran this test on the same text already. It stays here, under the lock and directly before
-    # the writing, so that the writer never rests on a test made elsewhere.
+    # the writing, so that the writer never rests on a test made elsewhere. Both kinds refuse the writing: what
+    # stops the comparison, and what only the writer does not handle.
+    named = report.get("_form") or report.get("_writer")
     strange = unhandled(lines)
-    if strange:
+    if strange and named:
+        return None, [], None, left                  # the PROBLEM line of the comparison names the construct
+    if strange or named:
+        strange = strange or named
         return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
                           f"which the writer does not handle. Set the line numbers of the moved blocks by hand"), left
     wrote, masked_changed = [], False
@@ -1272,12 +1353,15 @@ def build(path, text, root, scopes, known):
         elif (plain_relative(given) is None or os.path.lexists(target)
               or not missing_under_root(root, plain_relative(given))):
             # Not a missing file. Its form is no plain path under the root (a drive, a network start, a leading
-            # slash, a '..' part), or something is there that on_disk() refused (a folder, a link that leads out),
+            # slash, a '..' part, a name no Windows file can have such as 'a?.py' or 'NUL', on every system), or
+            # something is there that on_disk() refused (a folder, a link that leads out),
             # or the folder it would lie in is itself not under the root (a folder link that leads out). A mistake
             # in the property or in the source root.
             report["source_state"] = "rejected"
             report["problems"].append(f"property 'source' is '{given}': not the path of a file under the source root "
-                                      f"(a drive or an absolute path, a path leading out of it, or no plain file). This is a mistake in the "
+                                      f"(a drive or an absolute path, a path leading out of it, a name that is not a "
+                                      f"file path, such as one with ? | * < > \" or a device name, or no plain file). "
+                                      f"This is a mistake in the "
                                       f"property or in --source, not a deleted file. Remove nothing; tell the person")
         elif others == 0:
             report["source_state"] = "root in doubt"
@@ -1580,7 +1664,7 @@ def print_report(report):
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
         elif entry["state"] == "not compared":
-            why = ("the note holds something the script does not handle" if entry.get("note_form") else
+            why = ("the note's code fences or headings can be read in two ways" if entry.get("note_form") else
                    "it has no code fence of its own to compare")
             print(f"NOT COMPARED {was}: {why} (see PROBLEM). Not a changed "
                   f"block, and nothing is said about its place: repair the note's form, then run again")
