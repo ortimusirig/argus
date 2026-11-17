@@ -29,11 +29,14 @@ the recorded line are looked at, and the report says so in a BOUNDED line.
 Without --fix-moved nothing is written. With it, for each block that only moved, the script writes the new line
 numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
 its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
-when its whole code is at one free place that no other block without a sure place could take. The Line column of the Trace table moves too. So --fix-moved writes line numbers in line columns only, never
-inside a code fence, inline code, a Code cell or a sentence. Every 'line N' in the note's text that a move touches
+when its whole code is at one free place that no other block without a sure place could take. The Line column of the Trace table moves too. So --fix-moved writes a number only in a table column whose heading
+is Line or Lines, never in another table, a code fence, inline code, a Code cell or a sentence. A row that looks
+like a line row in a table without such a heading is named in a TODO line. Every 'line N' in the note's text that a move touches
 ("Check your understanding", "Part of line N", a sentence) is named in a TODO line, with its place and the likely
 new number, for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
-note at the same time, and a note that changed after it was compared is not written. The report that follows
+note at the same time. A note that changed after it was compared is not written: its bytes are read again as the
+last thing before the new text takes its place. What remains is a save by another program in the instant between
+that reading and the replace. The report that follows
 shows the state after the writing.
 
 --hash prints the value for the source_hash property: one line per file. A note with one source file (a File note,
@@ -42,6 +45,9 @@ more line, with the value for a Mechanism or Flow note that has all these files 
 
 Each UNEXPLAINED line also gives the id a new block at those lines would get: the id of the block above plus a
 letter, never an id in use and never one the note's property retired_blocks lists.
+
+Mechanism and Flow notes whose 'sources' name a file in scope are looked at too: one whose source_hash no longer
+equals its sources, or that has none, gets a TODO line (in --json: "dependent_notes").
 
 What is still to do for a note is said in TODO lines (in --json: "todo"): act on the blocks, close the note
 (line count, commit, source_hash, written), correct line numbers that other notes cite. The last line says CURRENT
@@ -85,8 +91,21 @@ STATES = ("same", "moved", "changed", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
 LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
-ROW_NUMBER = re.compile(r"^(\s*\|\s*)(\d+)(?:(\s*-\s*)(\d+))?(\s*\|)")
-LEVEL2_LINES = re.compile(r"^(\s*\|[^|]*\|\s*)\d+(?:\s*-\s*\d+)?(\s*\|)")
+LINE_HEADINGS = ("line", "lines")   # the headings of a line column in note-templates.md: the Level 2 table has
+#                                     "Lines", the line table and the Trace table have "Line"
+
+
+def pipe_cells(row):
+    """(start, end) of the text of each cell of a table row: what stands between two | that are not escaped."""
+    edges = [m.start() for m in re.finditer(r"(?<!\\)\|", row)]
+    return [(a + 1, b) for a, b in zip(edges, edges[1:])]
+
+
+def line_column(heading_row):
+    """Which column of a table is a line column: the one whose heading is Line or Lines, else None. --fix-moved
+    writes a number only in such a column, so a table of examples (| Input | Output |) is never touched."""
+    return next((k for k, (a, b) in enumerate(pipe_cells(heading_row))
+                 if heading_row[a:b].strip().lower() in LINE_HEADINGS), None)
 
 
 def span(a, b):
@@ -492,7 +511,7 @@ def cited_lines(note, mask, blocks, entries):
             edges = [m.start() for m in re.finditer(r"(?<!\\)\|", line)]
             texts = [line[a + 1:b] for a, b in zip(edges, edges[1:])]
             if column is None:
-                column = next((k for k, cell in enumerate(texts) if cell.strip().lower() == "line"), -1)
+                column = next((k for k, cell in enumerate(texts) if cell.strip().lower() in LINE_HEADINGS), -1)
             elif 0 <= column < len(texts):
                 m = LINE_CELL_TEXT.fullmatch(texts[column])
                 if m:
@@ -571,15 +590,16 @@ def decode_note(data):
 
 def write_note(path, compared, new):
     """Puts `new` in place of the note, when the note's bytes are still `compared`, the bytes the report was made
-    from. The new text goes to a file of this run's own (a new name, made so that nothing existing is opened and
-    no link is followed) and then takes the note's place in one step. Returns an error text or None."""
+    from. First the new text is written to a file of this run's own (a new name, made so that nothing existing is
+    opened and no link is followed). Then, as the last thing before the replace, the note is read again: only when
+    it still holds the compared bytes does the new file take its place, in one step. Else the new file is removed
+    and nothing is written. What remains: a save by another program in the instant between that last reading and
+    the replace. Returns an error text or None."""
     path = Path(path)
     if path.is_symlink():
         return "the note is a link; nothing written"
     temp = None
     try:
-        if path.read_bytes() != compared:
-            return "the note changed since it was compared; nothing written. Run again"
         handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".argus-", suffix=".tmp")
         with os.fdopen(handle, "wb") as out:
             out.write(new)
@@ -587,6 +607,8 @@ def write_note(path, compared, new):
             shutil.copymode(path, temp)
         except OSError:
             pass
+        if path.read_bytes() != compared:
+            return "the note changed since it was compared; nothing written. Run again"
         os.replace(temp, path)
         temp = None
     except OSError as error:
@@ -602,16 +624,20 @@ def write_note(path, compared, new):
 
 def moved_text(data, report):
     """The note's bytes with the new line numbers of every moved block. `data` are the bytes `report` was made
-    from. Returns (new bytes or None when nothing changes, what changed, error or None)."""
+    from. A number is written only where the place is known to hold a line number: the block heading, a table
+    column headed Line or Lines (the Level 2 table, the line table of a block, the Trace table) and the property
+    masked_lines. Returns (new bytes or None when nothing changes, what changed, error or None, what was left for
+    a person: rows that look like line rows in a table without such a heading)."""
+    left = []
     decoded = decode_note(data)
     if decoded is None:
-        return None, [], "the note is not UTF-8; nothing written"
+        return None, [], "the note is not UTF-8; nothing written", left
     bom, text = decoded
     pieces = re.split(r"(\r\n|\r|\n)", text)
     lines, ends = pieces[0::2], pieces[1::2] + [""]
     mask, blocks, declared = report["_mask"], report["_blocks"], report["_declared"]
     if len(lines) != len(mask):
-        return None, [], "the note does not have the lines that were compared; nothing written"
+        return None, [], "the note does not have the lines that were compared; nothing written", left
     wrote, masked_changed = [], False
     # First the line numbers the note cites in its own text, where they are sure: from the right end of each line,
     # so that the places of the others in that line stay true.
@@ -635,24 +661,47 @@ def moved_text(data, report):
         done = [f"heading (lines {span(block['a'], block['b'])}) -> ({word} {new_range})"]
         if entry["state"] != "moved":
             done.append("its code was there whole, past other blocks")
-        rows = 0
+        rows, in_table, column = 0, False, None
+        low, high = block["a"], block["a"] + len(block["code"]) - 1
         for i in range(block["last"], block["end"]):
-            m = None if mask[i] or not delta else ROW_NUMBER.match(lines[i])
-            # A line row names lines of this block. A row that starts with another number is no line row.
-            low, high = block["a"], block["a"] + len(block["code"]) - 1
-            if m and low <= int(m.group(2)) <= high and low <= int(m.group(4) or m.group(2)) <= high:
-                second = f"{m.group(3)}{int(m.group(4)) + delta}" if m.group(4) else ""
-                lines[i] = f"{m.group(1)}{int(m.group(2)) + delta}{second}{m.group(5)}" + lines[i][m.end():]
-                rows += 1
+            if mask[i] or not is_row(lines[i]):
+                in_table = False
+                continue
+            if not in_table:                         # the heading row of a table says whether it has a line column
+                in_table, column = True, line_column(lines[i])
+                continue
+            spans = pipe_cells(lines[i])
+            if not delta or not spans:
+                continue
+            a, b = spans[column] if column is not None and column < len(spans) else spans[0]
+            m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
+            if not m or not (low <= int(m.group(2)) <= high and low <= int(m.group(4) or m.group(2)) <= high):
+                continue                             # no line number of this block in that cell
+            if column is None:
+                left.append(f"note line {i + 1}: a table row in block {block['id']} starts with "
+                            f"{lines[i][a:b].strip()}, but its table has no column headed Line, so it was not "
+                            f"written. If it is a line row, add {delta:+d}")
+                continue
+            second = f"{m.group(3)}{int(m.group(4)) + delta}" if m.group(4) else ""
+            lines[i] = f"{lines[i][:a]}{m.group(1)}{int(m.group(2)) + delta}{second}{m.group(5)}{lines[i][b:]}"
+            rows += 1
         if rows:
             done.append(f"{rows} line-table rows moved by {delta:+d}")
-        for i in range(level2 + 1, level2_end) if level2 is not None else ():
-            if not mask[i] and is_row(lines[i]) and (cells(lines[i]) or [""])[0] == block["id"]:
-                changed = LEVEL2_LINES.sub(lambda m: f"{m.group(1)}{new_range}{m.group(2)}", lines[i], count=1)
-                if changed != lines[i]:
-                    lines[i] = changed
+        if level2 is not None:
+            head = next((i for i in range(level2 + 1, level2_end) if not mask[i] and is_row(lines[i])), None)
+            column = line_column(lines[head]) if head is not None else None
+            row = next((i for i in range((head or level2) + 1, level2_end) if not mask[i] and is_row(lines[i])
+                        and (cells(lines[i]) or [""])[0] == block["id"]), None)
+            spans = pipe_cells(lines[row]) if row is not None else []
+            if row is not None and column is not None and column < len(spans):
+                a, b = spans[column]
+                m = LINE_CELL_TEXT.fullmatch(lines[row][a:b])
+                if m:
+                    lines[row] = f"{lines[row][:a]}{m.group(1)}{new_range}{m.group(5)}{lines[row][b:]}"
                     done.append("Level 2 row")
-                break
+            elif row is not None:
+                left.append(f"note line {row + 1}: the Level 2 table has no column headed Lines, so the row of block "
+                            f"{block['id']} was not written. Its lines are now {new_range}")
         old, rest = cut_ranges(declared, block["a"], block["a"] + len(block["code"]) - 1)
         if old and delta:
             declared = rest
@@ -669,8 +718,8 @@ def moved_text(data, report):
                 wrote.append(f"masked_lines: {value}")
                 break
     if not wrote:
-        return None, [], None
-    return bom + "".join(line + end for line, end in zip(lines, ends)).encode("utf-8"), wrote, None
+        return None, [], None, left
+    return bom + "".join(line + end for line, end in zip(lines, ends)).encode("utf-8"), wrote, None, left
 
 
 # ---------------------------------------------------------------- main
@@ -766,14 +815,14 @@ def note_report(path, root, scopes, fix, known):
                              "source file in scope; nothing written")
                 else:
                     report = locked
-                    new, wrote, error = moved_text(data, locked["_found"])
-                    to_check = [c for c in locked["_found"]["_cites"] if not c["sure"]]
+                    new, wrote, error, left = moved_text(data, locked["_found"])
+                    to_check = check_lines([c for c in locked["_found"]["_cites"] if not c["sure"]]) + left
                     if new is not None and not error:
                         error = write_note(path, data, new)
                     if new is not None and not error:
                         report = build(path, note_text(decode_note(new)[1]), root, scopes, known)
                         report["wrote"] = wrote
-                        report["check_lines"] = check_lines(to_check)
+                        report["check_lines"] = to_check
         except (OSError, TimeoutError) as failure:
             error = f"nothing written: {failure}"
         if error:
@@ -835,8 +884,39 @@ def survey(notes_dir, root):
         sources = [s for s in (on_disk(root, g.strip()) for g in given if g.strip()) if s]
         links = {m.strip().rstrip("\\").split("/")[-1] for m in re.findall(r"\[\[([^\]|#]+)", text)}
         notes.append({"note": path.stem, "path": str(path), "type": kind, "sources": sources, "links": links,
+                      "given": [g.strip() for g in given if g.strip()], "source_hash": props.get("source_hash", ""),
                       "source": sources[0] if kind == "file" and sources else None})
     return {"notes": notes}
+
+
+def dependent_notes(known, root, scopes):
+    """The Mechanism and Flow notes that rest on a source file in scope, each with what is still to do for it. Such
+    a note is out of date when the hash of its sources is no longer its source_hash. Without a source_hash the
+    script cannot know, so the note gets one. Until then the run is not CURRENT: a run that stopped after the File
+    notes must not look finished."""
+    out = []
+    for note in known["notes"]:
+        if note["type"] not in ("mechanism", "flow") or not note["given"]:
+            continue
+        if scopes and not any(in_scope(source, scopes) for source in note["sources"]):
+            continue
+        entry = {"note": note["note"], "path": note["path"], "type": note["type"], "state": "current", "todo": []}
+        if not note["source_hash"]:
+            entry["state"] = "no source_hash"
+            entry["todo"].append("it has no source_hash: check the note against the code, then set its commit and "
+                                 "source_hash (Later runs, step 6)")
+        else:
+            now, rejected = files_hash(root, note["given"])
+            if rejected:
+                entry["state"] = "problem"
+                entry["todo"].append(f"'sources' names no file under the source root: {', '.join(rejected)}. Correct "
+                                     f"the property; remove nothing")
+            elif now != note["source_hash"]:
+                entry["state"] = "stale"
+                entry["todo"].append("its sources changed since it was written: re-read it against the code, correct "
+                                     "what no longer holds, then set its commit and source_hash (Later runs, step 6)")
+        out.append(entry)
+    return out
 
 
 def note_paths(notes_dir):
@@ -985,24 +1065,31 @@ def main():
                           counts={state: 0 for state in STATES})
         if report:
             reports.append(finish(report, known))
-    todo = [r for r in reports if r["todo"]]
+    dependents = dependent_notes(known, root, scopes)
+    todo = [r for r in reports if r["todo"]] + [d for d in dependents if d["todo"]]
     totals = {state: sum(r["counts"][state] for r in reports) for state in STATES}
     # No File note in scope: nothing was compared, and that is not "current" (a wrong --notes or --scope gives it).
     verdict = "UPDATE NEEDED" if todo else "CURRENT" if reports else "NO FILE NOTE IN SCOPE"
+    stale_dependents = sum(1 for d in dependents if d["todo"])
     code = 0 if verdict == "CURRENT" else 1
     if args.json:
         json.dump({"result": verdict, "exit_code": code, "scope": scopes, "totals": totals,
                    "unexplained_ranges": sum(len(r["unexplained"]) for r in reports),
-                   "notes_to_update": [r["note"] for r in todo], "notes": reports},
+                   "notes_to_update": [r["note"] for r in todo], "notes": reports,
+                   "dependent_notes": dependents},
                   sys.stdout, indent=2, ensure_ascii=False)
         sys.exit(code)
     for report in reports:
         print_report(report)
+    for dependent in dependents:
+        for item in dependent["todo"]:
+            print(f"TODO {dependent['note']}: {item}")
     where = ", ".join(scopes) if scopes else "whole source root"
     print(f"RESULT scope {where}: {len(reports)} File notes, {sum(len(r['blocks']) for r in reports)} blocks: "
           f"{totals['same']} same, {totals['moved']} moved, {totals['changed']} changed, {totals['ambiguous']} "
           f"ambiguous, {totals['undecided']} undecided, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
-          f"{sum(len(r['wrote']) for r in reports)} written: {verdict}")
+          f"{sum(len(r['wrote']) for r in reports)} written, {stale_dependents} of {len(dependents)} Mechanism "
+          f"and Flow notes to look at: {verdict}")
     sys.exit(code)
 
 
