@@ -34,6 +34,7 @@ interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<st
   from: Map<string, Way>;
   refreshed: number;        // the tick at which the last reading of the folders began
   read?: boolean;           // the folders were read to the end at least once
+  unread?: number;          // how many folders the last reading could not read
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
 
 interface Way { file: string; key: string; }
@@ -49,13 +50,20 @@ export function isNoteFile(name: string, windows: boolean): boolean {
 
 /** Every .md file under the folder, folders whose name starts with a dot left out (as `note_files` in the checker).
  *  The listing ends early when `wanted` says that nobody waits for it any more. */
-async function mdFiles(folder: string, windows: boolean, pause: () => Promise<void>, wanted: () => boolean): Promise<string[]> {
+async function mdFiles(folder: string, windows: boolean, pause: () => Promise<void>, wanted: () => boolean,
+  unread: Map<string, string>): Promise<string[]> {
   const found: string[] = [];
   const left = [folder];
   while (left.length > 0 && wanted()) {
     const at = left.pop() as string;
     let listed: fs.Dirent[];
-    try { listed = await fs.promises.readdir(at, { withFileTypes: true }); } catch { continue; }
+    try { listed = await fs.promises.readdir(at, { withFileTypes: true }); } catch (error) {
+      // A folder that is not there holds no notes. A folder that is there and cannot be read is another thing:
+      // what it holds is not known, and that is told (`unread`).
+      const code = (error as NodeJS.ErrnoException).code ?? "error";
+      if (code !== "ENOENT" && code !== "ENOTDIR") { unread.set(at, code); }
+      continue;
+    }
     for (const item of listed) {
       if (item.isDirectory()) {
         if (!item.name.startsWith(".")) { left.push(path.join(at, item.name)); }
@@ -158,6 +166,11 @@ export class NoteIndex {
     return this.of(project)?.read === true;
   }
 
+  /** Whether the last reading could not read every folder: then "this file has no note" is not known. */
+  incomplete(project: Project): boolean {
+    return (this.of(project)?.unread ?? 0) > 0;
+  }
+
   /** Reads the project's folders from disk at once; resolves when the index is up to date. */
   refreshNow(project: Project): Promise<void> {
     const held = this.of(project);
@@ -174,10 +187,11 @@ export class NoteIndex {
       held.rejected = new Map();
       const seen = new Set<string>();
       const from = new Map<string, Way>(), real = new Map<string, string>();
+      const unread = new Map<string, string>();          // folders that are there and could not be read, with the reason
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
       for (const [, folder] of folders) {
-        for (const file of await mdFiles(folder, this.rules.windows, this.pause, () => this.live(held))) {
+        for (const file of await mdFiles(folder, this.rules.windows, this.pause, () => this.live(held), unread)) {
           if (!this.live(held)) { return false; }
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
@@ -189,9 +203,21 @@ export class NoteIndex {
         }
       }
       if (!this.live(held)) { return false; }
+      // A note that was not seen is gone, but for a note under a folder that could not be read this time: what
+      // that folder holds is not known, so its notes stay as they were, and the Problems list names the folder.
+      const hidden = (entry: Entry): boolean => {
+        for (const folder of unread.keys()) { if (relativeIn(folder, entry.path, this.rules) !== undefined) { return true; } }
+        return false;
+      };
       for (const [key, entry] of held.entries) {
-        if (!seen.has(key)) { held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true; }
+        if (seen.has(key) || (unread.size > 0 && hidden(entry))) { continue; }
+        held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true;
       }
+      for (const [folder, code] of unread) {
+        held.rejected.set(folder, `the folder '${folder}' could not be read (${code}): the notes in it are not known; `
+          + "notes read from it before are kept as they were");
+      }
+      held.unread = unread.size;
       for (const [found, way] of from) {
         if (way.key === found && !held.entries.has(way.key)) { from.delete(found); }
       }
@@ -312,9 +338,15 @@ export class NoteIndex {
       const left = before !== undefined && before.key !== key && await this.leave(held, before.key);
       const gone = old !== undefined || was !== undefined || left;
       if (key === undefined) { return gone; }
-      const inNotes = relativeIn(project.notesFolder, file, this.rules);
-      const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
-      if (rel !== undefined && rel.split("/").slice(0, -1).some((part) => part.startsWith("."))) { return gone; }
+      // The rule "nothing under a folder whose name starts with a dot" is about the path as it was found, as in
+      // the reading of the folders: a link `Name.md` in a plain folder may lead into such a folder.
+      const found = (folder: string | undefined): string[] | undefined => {
+        if (folder === undefined) { return undefined; }
+        const rel = path.relative(path.resolve(folder), path.resolve(file));
+        return rel === "" || rel.startsWith("..") || path.isAbsolute(rel) ? undefined : rel.split(path.sep);
+      };
+      const parts = found(project.notesFolder) ?? found(project.vaultFolder);
+      if (parts !== undefined && parts.slice(0, -1).some((part) => part.startsWith("."))) { return gone; }
       const changed = await this.read(held, file, key);
       let there = true;
       try { await fs.promises.lstat(file); } catch { there = false; }

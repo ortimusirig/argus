@@ -224,6 +224,11 @@ ${this.project ? projectKey(this.project) : ""}`;
       // The notes are still being read for the first time: "no note" is not known yet, and nothing offers Create.
       return { kind: "message", text: "Argus is reading the notes of this project…" };
     }
+    if (at.notes.length === 0 && this.index.notes.incomplete(at.project)) {
+      // A folder of the notes could not be read: whether this file has a note is not known, and nothing offers Create.
+      return { kind: "message", text: "Argus could not read every folder of this project's notes, so it is not known whether this file has a note.",
+        problems: this.index.notes.problemsOf(at.project) };
+    }
     if (!at.note || !at.note.file) {
       // No note, or several: the project's problems are shown too, so a refused note is not hidden (core/panelHtml.ts).
       const view = withoutNote(at.sourceRel, this.listed(at.notes), this.index.notes.problemsOf(at.project),

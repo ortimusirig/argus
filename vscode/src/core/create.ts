@@ -173,12 +173,26 @@ async function behindShim(shim: string, lookup: Lookup, p: typeof path.win32): P
   const folder = p.dirname(shim);
   const inside = (rel: string): string | undefined =>
     rel.split(/[\\/]/).some((part) => part === ".." || part === "" || part.includes(":")) ? undefined : p.join(folder, rel);
-  const exe = /^\s*"%dp0%\\([^"%\r\n]+\.exe)"\s+%\*\s*$/im.exec(text);
+  // Every line must be one that npm's launcher writes; one line, and only one, starts the program. A line in a
+  // comment, or a batch file that does anything else, is no launcher: it is refused as any batch file.
+  const SETUP = [/^@echo off$/i, /^goto start$/i, /^:find_dp0$/i, /^set dp0=%~dp0$/i, /^exit \/b$/i, /^:start$/i, /^setlocal$/i,
+    /^call :find_dp0$/i, /^if exist "%dp0%\\node\.exe" \($/i, /^set "_prog=%dp0%\\node\.exe"$/i, /^\) else \($/i,
+    /^set "_prog=node"$/i, /^set pathext=%pathext:;\.js;=;%$/i, /^\)$/];
+  const EXE = /^"%dp0%\\([^"%]+\.exe)"\s+%\*$/i;
+  const JS = /^(?:endlocal & goto #_undefined_# 2>nul \|\| title %comspec% & )?"%_prog%"\s+"%dp0%\\([^"%]+\.[cm]?js)"\s+%\*$/i;
+  const starts: string[] = [];
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || SETUP.some((known) => known.test(line))) { continue; }
+    starts.push(line);
+  }
+  if (starts.length !== 1) { return undefined; }
+  const exe = EXE.exec(starts[0]);
   if (exe) {
     const target = inside(exe[1]);
     return target !== undefined && await lookup.isFile(target) ? { path: target } : undefined;
   }
-  const js = /"%dp0%\\([^"%\r\n]+\.[cm]?js)"\s+%\*/i.exec(text);
+  const js = JS.exec(starts[0]);
   if (js) {
     const script = inside(js[1]);
     if (script === undefined || !await lookup.isFile(script)) { return undefined; }

@@ -327,3 +327,14 @@ With the notes of the helper sample (7 files) and `C:\dev\applexus-chat` as work
 | 1 | P2 | `indexOf` counts UTF-16 units, so a gap of "one character" could be half of an emoji: `x[masked][masked]y` would match `x😀y`, which the checker rejects | `maskedMatch` works on arrays of code points; the parity table has the case |
 
 P2 FIXED: plan round 10 #1 - "Specify Unicode-aware advancement in maskedMatch" - fixed in revision 11, to be confirmed by the code review of the core.
+
+## Owner decisions after the plan (2026-11-16)
+
+- **Matcher: trim, do not stop.** The plan's "no caps" for candidates (review round 2, row 2) is replaced for one
+  case by the owner's decision of 2026-11-16 ("yes go with trim"): all blocks of one note together keep at most
+  2,000,000 places; a block with more than its share keeps the places nearest to its recorded line. The assignment
+  names each such block and the panel, the marker hovers and the CodeLens say so. Known cost, accepted with the
+  decision: in a file where the trim is at work, a block can show as changed although its code is still there
+  further away, and "Update explanation" can be offered for it. Without the trim such a file took memory without
+  end. Files of normal shape never reach the bound.
+- **No test code.** No testing infrastructure and no new test code; changes are proved by running the product.
