@@ -178,16 +178,26 @@ def on_disk(root, rel):
     return found
 
 
+# What no file or folder name on Windows can be: one that holds < > : " | ? * or a control character, one that
+# ends in a dot or a space, or the name of a device (CON, NUL, COM1 ..., with or without an extension).
+NO_FILE_NAME = re.compile(r'[<>:"|?*\x00-\x1f]|[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]) *(?:\.|$)', re.IGNORECASE)
+
+
 def plain_relative(rel):
     """rel as a plain path under the source root, with / and without '.' parts, or None when its form alone says
     it is no such path: empty, with a drive ('C:/x', also 'Z:x' without a slash), a network start ('//server'),
-    a leading / or \\, or a '..' part. It does not look at the disk: on_disk() says whether a file is there. A
-    path that this function refuses can never be 'a file that was deleted'; it is a mistake in a property."""
+    a leading / or \\, a '..' part, or a part that no Windows file name can be ('a?.py', 'a|b.py', a name that
+    ends in a dot or a space, 'NUL', 'com1.txt'). The last holds on every system: a set of notes moves between
+    systems, so such a 'source' is a mistake in the property wherever it is read. It does not look at the disk:
+    on_disk() says whether a file is there. A path that this function refuses can never be 'a file that was
+    deleted'; it is a mistake in a property."""
     text = str(rel).strip().replace("\\", "/")
     if not text or text.startswith("/") or PureWindowsPath(text).drive or ":" in text.split("/")[0]:
         return None
     parts = [part for part in text.split("/") if part not in ("", ".")]
-    return None if not parts or ".." in parts else "/".join(parts)
+    if not parts or ".." in parts or any(NO_FILE_NAME.search(part) for part in parts):
+        return None
+    return "/".join(parts)
 
 
 def missing_under_root(root, plain):
