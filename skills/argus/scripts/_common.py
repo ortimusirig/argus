@@ -1,7 +1,8 @@
-"""Shared by check_notes.py and graph_plan.py: reading files, which files count as source, scopes, graph paths."""
+"""Shared by the scripts: reading files and notes, which files count as source, scopes, graph paths, hashes."""
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -246,3 +247,152 @@ def resolve_graph_paths(graph_paths, files):
 def is_callable_node(node):
     """A function, method or class in the graph. PowerShell functions carry no marker but a label ending in ()."""
     return bool(node.get("_callable") or node.get("_callable_class") or str(node.get("label") or "").endswith("()"))
+
+
+# ---------------------------------------------------------------- reading notes
+
+BLOCK = re.compile(r"^### Block (\w+)\b.*\(lines? (\d+)(?:\s*-\s*(\d+))?\)\s*$")
+LINE_CELL = re.compile(r"(\d+)(?:\s*-\s*(\d+))?")
+FENCE = re.compile(r"^(`{3,})")
+MASK = "[masked]"
+
+
+def frontmatter(text):
+    """The properties at the top of a note, as a dict of strings."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    props = {}
+    for line in text[3:end].splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            props[key.strip()] = value.strip().strip("\"'")
+    return props
+
+
+def fence_mask(lines):
+    """For each line: True when it is a fence line or inside a fence. A fence closes only on one at least as long."""
+    mask, fence = [], None
+    for line in lines:
+        m = FENCE.match(line)
+        if fence is None and m:
+            fence = len(m.group(1))
+            mask.append(True)
+        elif fence is not None:
+            mask.append(True)
+            if m and len(m.group(1)) >= fence and line.strip("`").strip() == "":
+                fence = None
+        else:
+            mask.append(False)
+    return mask
+
+
+def section(lines, mask, heading):
+    """The lines under a '## <heading...>' line that is outside every fence, up to the next such '## ' line."""
+    start = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## " + heading)), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
+    return [lines[i] for i in range(start + 1, end) if not mask[i]]
+
+
+def is_row(line):
+    return line.lstrip().startswith("|")
+
+
+def cells(row):
+    """The cells of one table row, stripped. A | written as \\| stays inside its cell."""
+    parts = re.split(r"(?<!\\)\|", row.strip())
+    return [c.strip() for c in parts[1:-1]]
+
+
+def mask_pattern(text, groups=False):
+    """A regular expression for a line with [masked] in it: the text around each mask, anything in between."""
+    joiner = "(.+?)" if groups else ".+?"
+    return joiner.join(re.escape(part) for part in text.split(MASK))
+
+
+def line_set(text, last):
+    """'3, 7-9' -> {3, 7, 8, 9}, clipped to 1..last. Anything that is not a number or a range is ignored."""
+    result = set()
+    for piece in str(text).split(","):
+        m = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", piece)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2) or m.group(1))
+            result.update(range(max(a, 1), min(b, last) + 1))
+    return result
+
+
+def note_blocks(note, mask):
+    """The '### Block' sections of a File note, in the note's order. `note` is the note's lines, `mask` their
+    fence_mask. Each block is a dict: id, a and b (the recorded lines), start (index of the heading), end (index
+    after the block's last line), first (index of the opening line of its first code fence, or None), last (index
+    of the first line after that fence) and code (the lines inside the fence, [] without one)."""
+    starts = [i for i, line in enumerate(note) if not mask[i] and BLOCK.match(line)]
+    blocks = []
+    for n, start in enumerate(starts):
+        m = BLOCK.match(note[start])
+        end = starts[n + 1] if n + 1 < len(starts) else len(note)
+        end = next((i for i in range(start + 1, end) if not mask[i] and note[i].startswith("## ")), end)
+        first = next((i for i in range(start + 1, end) if mask[i]), None)
+        last = end if first is None else next((i for i in range(first, end) if not mask[i]), end)
+        blocks.append({"id": m.group(1), "a": int(m.group(2)), "b": int(m.group(3) or m.group(2)), "start": start,
+                       "end": end, "first": first, "last": last,
+                       "code": [] if first is None else note[first + 1:last - 1]})
+    return blocks
+
+
+def mask_fits(got, real):
+    """Whether the source line `real` equals the copied line `got` around each [masked], each mask standing for at
+    least one character. The same answer as re.fullmatch(mask_pattern(got), real), in one pass over the line."""
+    parts = got.split(MASK)
+    if not real.startswith(parts[0]):
+        return False
+    pos = len(parts[0])
+    for piece in parts[1:-1]:
+        at = real.find(piece, pos + 1)
+        if at < 0:
+            return False
+        pos = at + len(piece)
+    return len(real) - len(parts[-1]) >= pos + 1 and real.endswith(parts[-1])
+
+
+def same_line(got, real, may_mask):
+    """The check's comparison of one copied line with one source line. `may_mask`: the line's recorded number is
+    listed in the note's masked_lines. A line that is [masked] alone matches any line."""
+    if got == real:
+        return True
+    if MASK not in got or not may_mask:
+        return False
+    if got.strip() == MASK:
+        return True
+    return bool(got.replace(MASK, "").strip()) and mask_fits(got, real)
+
+
+# ---------------------------------------------------------------- source hashes
+
+SOURCE_HASH = re.compile(r"sha256:([0-9a-f]{64})")
+
+
+def file_hash(path):
+    """'sha256:<hex>' over the file's bytes as they are on disk, or None when it cannot be read. The value of the
+    property source_hash of a File note."""
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as error:
+        witness("hash failed", path, type(error).__name__)
+        return None
+    witness("hash", path, digest)
+    return "sha256:" + digest
+
+
+def files_hash(root, files):
+    """'sha256:<hex>' for several source files together: the property source_hash of a Mechanism or Flow note.
+    It is the hash of one line per file, 'path<TAB>hash of the file', the paths as they are spelled on disk and
+    sorted, so the order and the spelling in the note do not matter. A file that cannot be read counts as
+    'missing'."""
+    names = {on_disk(root, f.strip()) or f.strip().replace("\\", "/") for f in files if f.strip()}
+    rows = [f"{rel}\t{file_hash(Path(root) / rel) or 'missing'}\n" for rel in sorted(names)]
+    return "sha256:" + hashlib.sha256("".join(rows).encode("utf-8")).hexdigest()

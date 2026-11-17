@@ -5,6 +5,9 @@
 
 Exit code 0: no FAIL and no MISSING. 1: at least one. 2: wrong arguments. STALE and WARN lines do not change the
 exit code, but the last line counts them, and every masked line is listed for a person to confirm.
+
+STALE: the code changed since the note was written. A note with the property source_hash is judged by that hash
+alone: no git is needed, and uncommitted changes count. A note without it is judged by git and its commit property.
 """
 import argparse
 import hashlib
@@ -16,16 +19,14 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (all_files, fingerprint, inventory, is_callable_node, normalize_scopes, on_disk,  # noqa: E402
-                     read_text, resolve_graph_paths, source_lines, utf8_output, witness)
+from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
+                     files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, mask_pattern,
+                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, section,
+                     SOURCE_HASH, source_lines, utf8_output, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 LENS_BY_TYPE = {"file": LENS, "mechanism": LENS, "start": LENS, "library": LENS[1:]}
-BLOCK = re.compile(r"^### Block (\w+)\b.*\(lines? (\d+)(?:\s*-\s*(\d+))?\)\s*$")
-LINE_CELL = re.compile(r"(\d+)(?:\s*-\s*(\d+))?")
-FENCE = re.compile(r"^(`{3,})")
 LINK = re.compile(r"\[\[([^\]|#]+)")
-MASK = "[masked]"
 MASK_SHARE = 0.25   # at most this share of a file's non-blank lines may carry a mask ...
 MASK_FLOOR = 2      # ... but two masked lines are always allowed
 MISSING_SHOWN = 30
@@ -34,57 +35,6 @@ fails, missing, stale, warns, infos = [], [], [], [], []
 
 
 # ---------------------------------------------------------------- reading notes
-
-def frontmatter(text):
-    """The properties at the top of a note, as a dict of strings."""
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end < 0:
-        return {}
-    props = {}
-    for line in text[3:end].splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            props[key.strip()] = value.strip().strip("\"'")
-    return props
-
-
-def fence_mask(lines):
-    """For each line: True when it is a fence line or inside a fence. A fence closes only on one at least as long."""
-    mask, fence = [], None
-    for line in lines:
-        m = FENCE.match(line)
-        if fence is None and m:
-            fence = len(m.group(1))
-            mask.append(True)
-        elif fence is not None:
-            mask.append(True)
-            if m and len(m.group(1)) >= fence and line.strip("`").strip() == "":
-                fence = None
-        else:
-            mask.append(False)
-    return mask
-
-
-def section(lines, mask, heading):
-    """The lines under a '## <heading...>' line that is outside every fence, up to the next such '## ' line."""
-    start = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## " + heading)), None)
-    if start is None:
-        return None
-    end = next((i for i in range(start + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
-    return [lines[i] for i in range(start + 1, end) if not mask[i]]
-
-
-def is_row(line):
-    return line.lstrip().startswith("|")
-
-
-def cells(row):
-    """The cells of one table row, stripped. A | written as \\| stays inside its cell."""
-    parts = re.split(r"(?<!\\)\|", row.strip())
-    return [c.strip() for c in parts[1:-1]]
-
 
 def without_inline_code(line):
     """The line with every `code span` removed, so that [[ inside code is not read as a link."""
@@ -101,21 +51,15 @@ def excerpt(cell):
     return re.split(r"…", text)[0].strip(), cut
 
 
-def mask_pattern(text, groups=False):
-    """A regular expression for a line with [masked] in it: the text around each mask, anything in between."""
-    joiner = "(.+?)" if groups else ".+?"
-    return joiner.join(re.escape(part) for part in text.split(MASK))
+# <word> or </word> outside code, which Obsidian takes for HTML. Not \<word>, not <br>, not a link <https://...>.
+HTML_TAG = re.compile(r"(?<!\\)</?(?!br\b)[A-Za-z][\w-]*(?:\s[^<>]*)?/?>")
 
 
-def line_set(text, last):
-    """'3, 7-9' -> {3, 7, 8, 9}, clipped to 1..last. Anything that is not a number or a range is ignored."""
-    result = set()
-    for piece in str(text).split(","):
-        m = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", piece)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2) or m.group(1))
-            result.update(range(max(a, 1), min(b, last) + 1))
-    return result
+def props_end(lines):
+    """The index of the line that closes the properties, 0 when they are not closed, -1 when there are none."""
+    if not lines or lines[0] != "---":
+        return -1
+    return next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
 
 
 def lens_missing(rows, wanted):
@@ -164,15 +108,15 @@ def check_file_note(name, text, props, root):
     for label in lens_missing([cells(r) for r in (level1 or []) if is_row(r)], LENS):
         fails.append(f"{name}: Level 1 has no lens row of its own, with an answer, for '{label}'")
 
-    starts = [i for i, line in enumerate(note) if not mask[i] and BLOCK.match(line)]
+    blocks = note_blocks(note, mask)
     if not nonblank:
-        if starts:
+        if blocks:
             fails.append(f"{name}: {src} has no code, so its note must have no '### Block' section")
         infos.append(f"{src}: {len(lines)} lines, 0 non-blank, 0 blocks: an empty file, lens only")
         return src, []
-    if not starts:
+    if not blocks:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
-    block_ids = [BLOCK.match(note[i]).group(1) for i in starts]
+    block_ids = [block["id"] for block in blocks]
     for block_id in sorted({b for b in block_ids if block_ids.count(b) > 1}):
         fails.append(f"{name}: two '### Block {block_id}' sections")
 
@@ -192,11 +136,8 @@ def check_file_note(name, text, props, root):
         fails.append(f"{name}: Level 2 row {extra} has no '### Block {extra}' section")
 
     in_block, in_row, hidden, masked_seen = {}, {}, {}, set()
-    for n, start in enumerate(starts):
-        m = BLOCK.match(note[start])
-        block_id, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
-        end = starts[n + 1] if n + 1 < len(starts) else len(note)
-        end = next((i for i in range(start + 1, end) if not mask[i] and note[i].startswith("## ")), end)
+    for block in blocks:
+        block_id, a, b, start, end = block["id"], block["a"], block["b"], block["start"], block["end"]
         if a < 1 or b > len(lines) or a > b:
             fails.append(f"{name}: block {block_id} range {a}-{b} is outside the file (1-{len(lines)})")
             continue
@@ -205,13 +146,12 @@ def check_file_note(name, text, props, root):
                 fails.append(f"{name}: line {ln} is in block {in_block[ln]} and block {block_id}")
             in_block[ln] = block_id
         # The first code fence of the block must hold exactly the source lines a..b.
-        first = next((i for i in range(start + 1, end) if mask[i]), None)
-        if first is None:
+        if block["first"] is None:
             fails.append(f"{name}: block {block_id} has no code fence")
             after = [note[i] for i in range(start + 1, end)]
         else:
-            last = next((i for i in range(first, end) if not mask[i]), end)
-            code, want = note[first + 1:last - 1], lines[a - 1:b]
+            last = block["last"]
+            code, want = block["code"], lines[a - 1:b]
             if len(code) != len(want):
                 fails.append(f"{name}: block {block_id} code has {len(code)} lines, source lines {a}-{b} are {len(want)}")
             else:
@@ -311,15 +251,21 @@ def check_file_note(name, text, props, root):
     if masked_seen:
         warns.append(f"{name}: {len(masked_seen)} masked lines ({', '.join(map(str, sorted(masked_seen)))}); a person "
                      f"must confirm each hides a secret and nothing else")
-    infos.append(f"{src}: {len(lines)} lines ({encoding}), {len(nonblank)} non-blank, {len(starts)} blocks, depth "
+    infos.append(f"{src}: {len(lines)} lines ({encoding}), {len(nonblank)} non-blank, {len(blocks)} blocks, depth "
                  f"{depth}, in blocks {len(nonblank & set(in_block))}/{len(nonblank)}, rows {rows}"
                  + (f", masked lines: {len(masked_seen)}" if masked_seen else ""))
     return src, sorted(masked_seen)
 
 
+UPDATE = "run changed_blocks.py to see which blocks changed, then update only those"
+
+
 def check_stale(name, props, root, kind, src=None):
-    """A File note is stale when its source has a newer commit. A Mechanism or Flow note is stale when any of the
-    files in its 'sources' property changed after the note's 'commit'."""
+    """Whether the code changed since the note was written. A note with a 'source_hash' property is judged by it
+    alone, with no git: stale when the hash of its source (File note) or of its 'sources' (Mechanism or Flow note)
+    differs now. That also holds for uncommitted changes. A note without it is judged by git: a File note is stale
+    when its source has a newer commit, a Mechanism or Flow note when any of its 'sources' changed after the note's
+    'commit'. Returns how it was judged: 'hash', 'commit' or None."""
     noted = props.get("commit", "")
     if kind == "file":
         files = [src]
@@ -327,23 +273,38 @@ def check_stale(name, props, root, kind, src=None):
         files = [f.strip().replace("\\", "/") for f in props.get("sources", "").split(",") if f.strip()]
         if not files:
             warns.append(f"{name}: no 'sources' property, so a change to the code it describes cannot be detected")
-            return
+            return None
+    recorded = props.get("source_hash", "")
+    if recorded:
+        if SOURCE_HASH.fullmatch(recorded):
+            now = file_hash(Path(root) / src) if kind == "file" else files_hash(root, files)
+            if now != recorded:
+                what = src if kind == "file" else ", ".join(files)
+                tail = UPDATE if kind == "file" else "check the note against the code, then set its source_hash"
+                stale.append(f"{name}: {what} changed since the note was written (source_hash differs, now "
+                             f"{(now or 'unreadable')[:15]}); {tail}")
+            return "hash"
+        warns.append(f"{name}: property 'source_hash' is not 'sha256:' and 64 hex digits; judged by its commit")
     if not noted:
-        warns.append(f"{name}: no 'commit' property, so a change to the source cannot be detected")
-        return
+        warns.append(f"{name}: no 'source_hash' and no 'commit' property, so a change to the source cannot be "
+                     f"detected")
+        return None
     if kind == "file":
         now = git(root, "log", "-1", "--format=%H", "--", files[0])
         if not now:
-            warns.append(f"{name}: git has no history for {files[0]}, stale check skipped")
+            warns.append(f"{name}: git has no history for {files[0]}, stale check skipped (a 'source_hash' property "
+                         f"works without git)")
         elif not now.startswith(noted):
-            stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}")
-        return
+            stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}; {UPDATE}")
+        return "commit"
     if git(root, "rev-parse", "--verify", "--quiet", noted + "^{commit}") is None:
-        warns.append(f"{name}: commit {noted} is not in the source's history, stale check skipped")
-        return
+        warns.append(f"{name}: commit {noted} is not in the source's history, stale check skipped (a 'source_hash' "
+                     f"property works without git)")
+        return "commit"
     newer = git(root, "rev-list", "-1", f"{noted}..HEAD", "--", *files)
     if newer:
         stale.append(f"{name}: written at commit {noted}; {', '.join(files)} changed since (now {newer[:8]})")
+    return "commit"
 
 
 # ---------------------------------------------------------------- the graph
@@ -464,6 +425,7 @@ def main():
         witness("checker", script, hashlib.sha256((Path(__file__).resolve().parent / script).read_bytes()).hexdigest())
 
     explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
+    judged_by = {}  # note name: 'hash' or 'commit', how its stale check was made
     for name, p in notes.items():
         text = read_text(p)[0].replace("\r\n", "\n").replace("\r", "\n")
         props = frontmatter(text)
@@ -486,11 +448,10 @@ def main():
                     fails.append(f"{name}: {src} is also explained by the note '{explained[src]}'")
                 explained[src] = name
                 # The note's own words: not the properties, the title or the Source line (they hold the file name).
-                props_end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0) if lines[0] == "---" else -1
                 own_words[src] = "\n".join(line for number, line in prose
-                                           if number - 1 > props_end
+                                           if number - 1 > props_end(lines)
                                            and not line.startswith("# ") and not line.startswith("Source:"))
-                check_stale(name, props, root, "file", src)
+                judged_by[name] = check_stale(name, props, root, "file", src)
         elif kind in LENS_BY_TYPE:
             rows = [cells(line) for _, line in prose if is_row(line)]
             for label in lens_missing(rows, LENS_BY_TYPE[kind]):
@@ -502,11 +463,16 @@ def main():
             elif not any(lines[i].strip() and not FENCE.match(lines[i])
                          for i in range(opens[0] + 2, min(opens[0] + 200, len(lines))) if mask[i]):
                 fails.append(f"{name}: the mermaid diagram is empty")
-            check_stale(name, props, root, kind)
+            judged_by[name] = check_stale(name, props, root, kind)
+        body_from = props_end(lines) + 1  # the first line after the properties, counted from 1
+        tags = []
         for number, line in prose:
-            if "%%" in line:
+            bare_line = without_inline_code(line)
+            if "%%" in bare_line:
                 fails.append(f"{name} line {number}: an Obsidian comment (%%) hides text from the reader")
-            for target in LINK.findall(without_inline_code(line)):
+            if number > body_from and HTML_TAG.search(bare_line):
+                tags.append(number)
+            for target in LINK.findall(bare_line):
                 target = target.rstrip("\\").strip().split("/")[-1]
                 target = target[:-3] if target.lower().endswith(".md") else target
                 linked_by.setdefault(target, set()).add(name)
@@ -517,6 +483,10 @@ def main():
                 for code in re.findall(r"`([^`]*)`", bare):
                     if re.search(r"(^|[^\\])\|", code):
                         fails.append(f"{name} line {number}: unescaped | inside code in a table: {code[:40]}")
+        if tags:
+            shown = ", ".join(map(str, tags[:10])) + (" ..." if len(tags) > 10 else "")
+            warns.append(f"{name}: <word> outside code on line {shown}: Obsidian reads it as HTML and does not show "
+                         f"it; put it in backticks")
     for name in kinds:
         if kinds[name] != "start" and not name.endswith("Start Here") and not (linked_by.get(name, set()) - {name}):
             fails.append(f"{name}: no other note links to it")
@@ -564,6 +534,7 @@ def main():
             "missing": missing,
             "fails": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in fails],
             "stale": [{"note": about(line), "text": line} for line in stale],
+            "stale_judged_by": {note: how for note, how in sorted(judged_by.items()) if how},
             "warns": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in warns],
             "infos": infos,
             "masked_lines": masked_by_note,
