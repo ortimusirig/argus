@@ -25,13 +25,20 @@ A block that an equally good way places elsewhere, or leaves out, is ambiguous. 
 check_notes.py. On a file where one block's code is at very many places the work is bounded: the places nearest to
 the recorded line are looked at, and the report says so in a BOUNDED line.
 
-Without --fix-moved nothing is written. With it, for each block that only moved (also past other blocks, when its
-whole code is at one free place), the script writes the new line numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
-its line-table rows, and its entries in masked_lines. It writes nothing else, never renames or deletes a note, and
-says what it wrote in WROTE lines. The report that follows shows the state after the writing.
+Without --fix-moved nothing is written. With it, for each block that only moved, the script writes the new line
+numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
+its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
+when its whole code is at one free place that no other block without a sure place could take. The script writes
+nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
+note at the same time, and a note that changed after it was compared is not written. The report that follows
+shows the state after the writing.
 
---hash prints the value for the source_hash property: one line per file, and for several files one more line with
-the value for a Mechanism or Flow note that has these files as its sources.
+--hash prints the value for the source_hash property: one line per file. A note with one source file (a File note,
+or a Mechanism or Flow note with one file in its sources) takes that file's value. For several files there is one
+more line, with the value for a Mechanism or Flow note that has all these files as its sources.
+
+Each UNEXPLAINED line also gives the id a new block at those lines would get: the id of the block above plus a
+letter, never an id in use and never one the note's property retired_blocks lists.
 
 Exit code 0: every block is same, no line is unexplained and no source_hash differs: nothing to update.
 1: at least one block is moved, changed or ambiguous, a line is unexplained, a source_hash differs, a note's source
@@ -39,23 +46,28 @@ file is gone, or a note could not be read or written. 2: wrong arguments, or a f
 """
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
+import time
 from bisect import bisect_left
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (MASK, SOURCE_HASH, cells, fence_mask, file_hash, files_hash, frontmatter, in_scope,  # noqa: E402
-                     is_row, line_set, mask_fits, normalize_scopes, note_blocks, on_disk, read_text, source_lines,
-                     utf8_output)
+from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
+                     frontmatter, in_ranges, in_scope, is_row, line_ranges, mask_fits, merge_ranges,
+                     normalize_scopes, note_blocks, on_disk, read_text, retired_ids, source_lines, utf8_output)
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
 SHOWN = 12              # places or ranges written out in one line of the plain report
+LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
 ROW_NUMBER = re.compile(r"^(\s*\|\s*)(\d+)(?:(\s*-\s*)(\d+))?(\s*\|)")
 LEVEL2_LINES = re.compile(r"^(\s*\|[^|]*\|\s*)\d+(?:\s*-\s*\d+)?(\s*\|)")
@@ -104,13 +116,14 @@ def outward(positions, target):
 
 def places(text, code, first_line, declared, keep, budget):
     """Every start (0-based) where the whole code matches, in rising order, the nearest to the recorded line first
-    when there are more than `keep` or the work passes `budget`. Returns (starts, possible places, whether cut)."""
+    when there are more than `keep` or the work passes `budget`. `declared` are the ranges of masked_lines.
+    Returns (starts, possible places, whether cut)."""
     total, length = len(text.lines), len(code)
     if length == 0 or length > total:
         return [], 0, False
     exact, patterns = [], []                         # (place in the block, number) and (place in the block, line)
     for k, line in enumerate(code):
-        if MASK in line and (first_line + k) in declared:
+        if MASK in line and in_ranges(declared, first_line + k):
             if line.strip() == MASK:
                 continue                             # [masked] alone: any line
             if line.replace(MASK, "").strip():
@@ -265,11 +278,16 @@ def compare(note_lines, props, lines):
     mask = fence_mask(note_lines)
     blocks = note_blocks(note_lines, mask)
     total = len(lines)
-    declared = line_set(props.get("masked_lines", ""), 10 ** 9)
+    declared = line_ranges(props.get("masked_lines", ""))
     text = Text(lines)
     keep = max(1, PLACES // max(1, len(blocks)))
     budget = SEARCH_WORK // max(1, len(blocks))
     found, bounded, problems = [], [], []
+    last_known = max([total] + [max(b["b"], b["a"] + len(b["code"]) - 1) for b in blocks])
+    for a, b in declared:
+        if b > last_known:
+            problems.append(f"masked_lines names {'line' if a == b else 'lines'} {span(a, b)}, outside the file "
+                            f"(1-{total}) and outside every block")
     ids = [block["id"] for block in blocks]
     for block_id in sorted({i for i in ids if ids.count(i) > 1}):
         problems.append(f"two '### Block {block_id}' sections")
@@ -305,18 +323,25 @@ def compare(note_lines, props, lines):
             entry["state"] = "changed"
         result.append(entry)
     # A changed block whose whole code is in the source at lines no placed block holds: it moved past other blocks.
-    # When there is one such place and no other block's code fits there too, --fix-moved may write it.
+    # --fix-moved may write such a move only when it is the block's one free place and no other block without a
+    # sure place could take any of those lines: not a changed block, not an ambiguous one, at none of its places.
+    # When the search for places was cut short somewhere, places may be unseen, and no such move is offered.
     for index, entry in enumerate(result):
         length = entry["lines"]
         free = [s for s in found[index] if not any(covered[s:s + length])] if entry["state"] == "changed" else []
         if free:
             entry["elsewhere"] = [[s + 1, s + length] for s in free[:SHOWN]]
-    claims = [tuple(e["elsewhere"][0]) for e in result if len(e.get("elsewhere", ())) == 1]
+            entry["_free"] = free
+    for index, entry in enumerate(result):
+        if len(entry.get("_free", ())) != 1 or bounded:
+            continue
+        a, b = entry["_free"][0], entry["_free"][0] + entry["lines"] - 1       # 0-based, both ends in
+        rivals = (s for other, e in enumerate(result) if other != index and "at" not in e
+                  for s in found[other] if s <= b and a <= s + e["lines"] - 1)
+        if next(rivals, None) is None:
+            entry["moved_to"] = [a + 1, b + 1]
     for entry in result:
-        if len(entry.get("elsewhere", ())) == 1:
-            a, b = entry["elsewhere"][0]
-            if sum(1 for c, d in claims if c <= b and a <= d) == 1:
-                entry["moved_to"] = [a, b]
+        entry.pop("_free", None)
 
     # Unexplained: non-blank lines outside every block that has one sure place.
     bare = [i + 1 for i in range(total) if not covered[i] and lines[i].strip()]
@@ -369,31 +394,136 @@ def compare(note_lines, props, lines):
             if nearly:
                 entry["spaces_only"] = True
                 entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
+    # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
+    # id the note uses or has retired.
+    retired = retired_ids(props)
+    taken = {block["id"] for block in blocks} | set(retired)
+    placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
+    for u in unexplained:
+        above = next((block_id for end, block_id in reversed(placed) if end < u["from"]), "0")
+        u["new_id"] = next_id(above, taken)
+        taken.add(u["new_id"])
+    for block_id in sorted({block["id"] for block in blocks} & set(retired)):
+        problems.append(f"block {block_id} uses an id that retired_blocks lists")
     counts = {state: sum(1 for e in result if e["state"] == state) for state in ("same", "moved", "changed", "ambiguous")}
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
-            "lines": total, "_blocks": blocks, "_mask": mask, "_declared": declared}
+            "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared}
+
+
+def next_id(above, taken):
+    """The id of a new block under the block `above`: its id plus the first of a, b ... z, za, zb ... that gives an
+    id not in `taken` (the ids in use and the retired ones)."""
+    prefix = ""
+    while True:
+        for letter in "abcdefghijklmnopqrstuvwxyz":
+            if above + prefix + letter not in taken:
+                return above + prefix + letter
+        prefix += "z"
 
 
 # ---------------------------------------------------------------- writing the new lines of moved blocks
 
-def fix_moved(path, report):
-    """Writes the new line numbers of every moved block into the note. Returns (what was written, error or None)."""
-    data = Path(path).read_bytes()
+class NoteLock:
+    """One run at a time may read, compare and write a note. The lock is a file in ~/.argus/locks named after the
+    note's path, locked through the operating system, so it is free again when the run ends, however it ends."""
+
+    def __init__(self, path):
+        home = Path(os.environ.get("ARGUS_HOME") or Path.home() / ".argus") / "locks"
+        key = hashlib.sha256(os.path.normcase(str(Path(path).resolve())).encode("utf-8")).hexdigest()[:32]
+        self.file, self.handle = home / f"{key}.lock", None
+
+    def _try(self):
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(self.handle, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def __enter__(self):
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = os.open(self.file, os.O_RDWR | os.O_CREAT)
+        stop = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                self._try()
+                return self
+            except OSError:
+                if time.monotonic() > stop:
+                    os.close(self.handle)
+                    self.handle = None
+                    raise TimeoutError(f"another run holds this note (waited {LOCK_WAIT} s)")
+                time.sleep(0.2)
+
+    def __exit__(self, *_):
+        if self.handle is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(self.handle, 0, os.SEEK_SET)
+                    msvcrt.locking(self.handle, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            os.close(self.handle)
+
+
+def decode_note(data):
+    """(byte order mark, text) of a note that --fix-moved may write, or None when it is not UTF-8."""
     bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
     try:
-        text = data[len(bom):].decode("utf-8")
+        return bom, data[len(bom):].decode("utf-8")
     except UnicodeDecodeError:
-        return [], "the note is not UTF-8; nothing written"
+        return None
+
+
+def write_note(path, compared, new):
+    """Puts `new` in place of the note, when the note's bytes are still `compared`, the bytes the report was made
+    from. The new text goes to a file of this run's own (a new name, made so that nothing existing is opened and
+    no link is followed) and then takes the note's place in one step. Returns an error text or None."""
+    path = Path(path)
+    if path.is_symlink():
+        return "the note is a link; nothing written"
+    temp = None
+    try:
+        if path.read_bytes() != compared:
+            return "the note changed since it was compared; nothing written. Run again"
+        handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".argus-", suffix=".tmp")
+        with os.fdopen(handle, "wb") as out:
+            out.write(new)
+        try:
+            shutil.copymode(path, temp)
+        except OSError:
+            pass
+        os.replace(temp, path)
+        temp = None
+    except OSError as error:
+        return f"could not write the note: {error}"
+    finally:
+        if temp is not None:                         # this run's own file, and only that one
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+    return None
+
+
+def moved_text(data, report):
+    """The note's bytes with the new line numbers of every moved block. `data` are the bytes `report` was made
+    from. Returns (new bytes or None when nothing changes, what changed, error or None)."""
+    decoded = decode_note(data)
+    if decoded is None:
+        return None, [], "the note is not UTF-8; nothing written"
+    bom, text = decoded
     pieces = re.split(r"(\r\n|\r|\n)", text)
     lines, ends = pieces[0::2], pieces[1::2] + [""]
-    mask, blocks, declared = report["_mask"], report["_blocks"], set(report["_declared"])
+    mask, blocks, declared = report["_mask"], report["_blocks"], report["_declared"]
     if len(lines) != len(mask):
-        return [], "the note changed while it was read; nothing written"
+        return None, [], "the note does not have the lines that were compared; nothing written"
     wrote, masked_changed = [], False
     level2 = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## Level 2")), None)
     level2_end = len(lines) if level2 is None else next(
         (i for i in range(level2 + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
-    moved_from, moved_to = set(), set()
+    masked_new = []                                  # the masked ranges of moved blocks, at their new lines
     for block, entry in zip(blocks, report["blocks"]):
         if entry["state"] != "moved" and "moved_to" not in entry:
             continue
@@ -421,14 +551,14 @@ def fix_moved(path, report):
                     lines[i] = changed
                     done.append("Level 2 row")
                 break
-        old = {n for n in declared if block["a"] <= n < block["a"] + len(block["code"])}
+        old, rest = cut_ranges(declared, block["a"], block["a"] + len(block["code"]) - 1)
         if old and delta:
-            moved_from |= old
-            moved_to |= {n + delta for n in old}
+            declared = rest
+            masked_new += [[a + delta, b + delta] for a, b in old]
             masked_changed = True
         wrote.append(f"block {block['id']}: " + ", ".join(done))
     if masked_changed:
-        value = ", ".join(span(a, b) for a, b in ranges_of(sorted((declared - moved_from) | moved_to)))
+        value = ", ".join(span(a, b) for a, b in merge_ranges(declared + masked_new))
         for i in range(1, len(lines)):
             if lines[i].strip() == "---":
                 break
@@ -437,19 +567,8 @@ def fix_moved(path, report):
                 wrote.append(f"masked_lines: {value}")
                 break
     if not wrote:
-        return [], None
-    new = bom + "".join(line + end for line, end in zip(lines, ends)).encode("utf-8")
-    temp = Path(str(path) + ".argus-tmp")
-    try:
-        temp.write_bytes(new)
-        os.replace(temp, path)
-    except OSError as error:
-        try:
-            temp.unlink()
-        except OSError:
-            pass
-        return [], f"could not write the note: {error}"
-    return wrote, None
+        return None, [], None
+    return bom + "".join(line + end for line, end in zip(lines, ends)).encode("utf-8"), wrote, None
 
 
 # ---------------------------------------------------------------- main
@@ -476,16 +595,31 @@ def note_report(path, root, scopes, fix):
     lines, _ = source_lines(Path(root) / src)
     found = compare(text.split("\n"), props, lines)
     if fix and any(e["state"] == "moved" or "moved_to" in e for e in found["blocks"]):
-        wrote, error = fix_moved(path, found)
+        # Read, compare and write as one step: under the note's lock, from one reading of the note's bytes.
+        try:
+            with NoteLock(path):
+                data = Path(path).read_bytes()
+                decoded = decode_note(data)
+                if decoded is None:
+                    error, wrote = "the note is not UTF-8; nothing written", []
+                else:
+                    text = decoded[1].replace("\r\n", "\n").replace("\r", "\n")
+                    props = frontmatter(text)
+                    found = compare(text.split("\n"), props, lines)
+                    new, wrote, error = moved_text(data, found)
+                    if new is not None and not error:
+                        error = write_note(path, data, new)
+                    if new is not None and not error:
+                        text = decode_note(new)[1].replace("\r\n", "\n").replace("\r", "\n")
+                        props = frontmatter(text)
+                        problems = found["problems"]
+                        found = compare(text.split("\n"), props, lines)
+                        found["problems"] = problems
+                        report["wrote"] = wrote
+        except (OSError, TimeoutError) as failure:
+            error = f"nothing written: {failure}"
         if error:
             found["problems"].append(error)
-        elif wrote:
-            text = read_text(path)[0].replace("\r\n", "\n").replace("\r", "\n")
-            props = frontmatter(text)
-            problems = found["problems"]
-            found = compare(text.split("\n"), props, lines)
-            found["problems"] = problems
-            report["wrote"] = wrote
     recorded, now = props.get("source_hash", ""), file_hash(Path(root) / src)
     state = "none" if not recorded else "same" if recorded == now else "differs"
     if recorded and not SOURCE_HASH.fullmatch(recorded):
@@ -534,15 +668,17 @@ def print_report(report):
                 parts = [f"its whole code is at {at(*entry['moved_to'])}, past other blocks: no rewrite, --fix-moved "
                          f"writes the new lines"]
             elif "elsewhere" in entry:
-                parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks: no rewrite, "
-                         f"choose the place and set the block's line numbers by hand"]
+                parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks, at more than "
+                         f"one place or where another block could be too: no rewrite, choose the place and set "
+                         f"the block's line numbers by hand"]
             else:
                 parts = [f"expected at {at(*entry['expected'])}"]
                 if entry.get("spaces_only"):
                     parts.append(f"at {at(*entry['likely'])} only white space at line ends differs: copy the code "
                                  f"again, the explanation holds")
                 elif entry["gone"]:
-                    parts.append("its code is gone: no unexplained line between the placed blocks around it")
+                    parts.append("its code is gone: no unexplained line between the placed blocks around it. "
+                                 "When you remove the block, add its id to retired_blocks")
                 else:
                     parts.append(f"its new form may be in lines {spans(entry['new_form'])}")
                     if "likely" in entry:
@@ -557,7 +693,7 @@ def print_report(report):
             why = f"beside block {', '.join(u['beside'])}, which has no sure place: may be its new form"
         else:
             why = "new code: no changed block beside it"
-        print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}")
+        print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
 
 
 def main():
@@ -588,7 +724,7 @@ def main():
         for name in names:
             print(f"{file_hash(root / name)}  {name}")
         if len(names) > 1:
-            print(f"{files_hash(root, names)}  together, for a note with these files as its sources")
+            print(f"{files_hash(root, names)[0]}  together, for a note with these files as its sources")
         sys.exit(0)
     if not args.notes or not Path(args.notes).is_dir():
         ap.error(f"--notes must name a folder: {args.notes}")

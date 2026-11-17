@@ -389,10 +389,77 @@ def file_hash(path):
 
 
 def files_hash(root, files):
-    """'sha256:<hex>' for several source files together: the property source_hash of a Mechanism or Flow note.
-    It is the hash of one line per file, 'path<TAB>hash of the file', the paths as they are spelled on disk and
-    sorted, so the order and the spelling in the note do not matter. A file that cannot be read counts as
-    'missing'."""
-    names = {on_disk(root, f.strip()) or f.strip().replace("\\", "/") for f in files if f.strip()}
-    rows = [f"{rel}\t{file_hash(Path(root) / rel) or 'missing'}\n" for rel in sorted(names)]
-    return "sha256:" + hashlib.sha256("".join(rows).encode("utf-8")).hexdigest()
+    """(hash, rejected): the property source_hash of a Mechanism or Flow note, for the source files it lists.
+
+    One file: the file's own hash, the same value a File note of that file has. Several files: the hash of one
+    line per file, 'path<TAB>hash of the file', the paths as they are spelled on disk and sorted, so the order and
+    the spelling in the note do not matter.
+
+    `rejected` are the names that are no file under the source root (missing, an absolute path, a path or a link
+    that leads out of the root). Such a file is never opened. It counts as 'missing' in the hash of several
+    files; when it is the only file the hash is None."""
+    given = sorted({f.strip().replace("\\", "/") for f in files if f.strip()})
+    found = {name: on_disk(root, name) for name in given}
+    rejected = [name for name in given if not found[name]]
+    if len(given) == 1:
+        return (None if rejected else file_hash(Path(root) / found[given[0]])), rejected
+    rows = sorted(f"{found[name]}\t{file_hash(Path(root) / found[name]) or 'missing'}\n" if found[name]
+                  else f"{name}\tmissing\n" for name in given)
+    return "sha256:" + hashlib.sha256("".join(rows).encode("utf-8")).hexdigest(), rejected
+
+
+# ---------------------------------------------------------------- line ranges and block ids
+
+def line_ranges(text):
+    """'3, 7-9, 8-12' -> [[3, 3], [7, 12]]: the ranges in rising order, those that meet joined. Never a list of
+    single lines, so a range of any size costs nothing. Anything that is not a number or a range is ignored."""
+    found = []
+    for piece in str(text).split(","):
+        m = re.fullmatch(r"\s*(\d{1,12})(?:\s*-\s*(\d{1,12}))?\s*", piece)
+        if m:
+            a, b = max(int(m.group(1)), 1), int(m.group(2) or m.group(1))
+            if a <= b:
+                found.append([a, b])
+    return merge_ranges(found)
+
+
+def merge_ranges(ranges):
+    result = []
+    for a, b in sorted(ranges):
+        if result and a <= result[-1][1] + 1:
+            result[-1][1] = max(result[-1][1], b)
+        else:
+            result.append([a, b])
+    return result
+
+
+def in_ranges(ranges, n):
+    """Whether line n is in one of the merged ranges."""
+    low, high = 0, len(ranges)
+    while low < high:
+        mid = (low + high) // 2
+        if ranges[mid][1] < n:
+            low = mid + 1
+        else:
+            high = mid
+    return low < len(ranges) and ranges[low][0] <= n
+
+
+def cut_ranges(ranges, a, b):
+    """(the parts of the ranges inside a..b, the parts outside)."""
+    inside, outside = [], []
+    for c, d in ranges:
+        if d < a or c > b:
+            outside.append([c, d])
+            continue
+        inside.append([max(c, a), min(d, b)])
+        if c < a:
+            outside.append([c, a - 1])
+        if d > b:
+            outside.append([b + 1, d])
+    return inside, outside
+
+
+def retired_ids(props):
+    """The block ids a File note lists in its property retired_blocks: ids of removed blocks, never used again."""
+    return [piece.strip() for piece in props.get("retired_blocks", "").split(",") if piece.strip()]

@@ -21,7 +21,7 @@ sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the sc
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
                      files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, mask_pattern,
-                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, section,
+                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, section,
                      SOURCE_HASH, source_lines, utf8_output, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
@@ -37,8 +37,41 @@ fails, missing, stale, warns, infos = [], [], [], [], []
 # ---------------------------------------------------------------- reading notes
 
 def without_inline_code(line):
-    """The line with every `code span` removed, so that [[ inside code is not read as a link."""
-    return re.sub(r"(`+)(?:(?!\1).)*?\1", " ", line)
+    """The line with every `code span` removed, so that [[ or %% inside code is not read as a link or a comment.
+    Code spans are read as Markdown reads them: a run of backticks opens a span that the next run of the same
+    length closes; a backtick with a backslash in front of it (outside a span) is a plain character and opens
+    nothing; a run that is never closed is plain text."""
+    out, i, n = [], 0, len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "\\" and i + 1 < n:
+            out.append(line[i:i + 2])        # an escaped character, a backtick too: kept as text
+            i += 2
+        elif ch == "`":
+            j = i
+            while j < n and line[j] == "`":
+                j += 1
+            close, k = -1, j
+            while k < n and close < 0:
+                if line[k] != "`":
+                    k += 1
+                    continue
+                e = k
+                while e < n and line[e] == "`":
+                    e += 1
+                if e - k == j - i:
+                    close = k
+                k = e
+            if close < 0:
+                out.append(line[i:j])        # never closed: the backticks are text
+                i = j
+            else:
+                out.append(" ")
+                i = close + (j - i)
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def excerpt(cell):
@@ -117,6 +150,9 @@ def check_file_note(name, text, props, root):
     if not blocks:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
     block_ids = [block["id"] for block in blocks]
+    for block_id in sorted(set(block_ids) & set(retired_ids(props))):
+        fails.append(f"{name}: block {block_id} uses an id that the property retired_blocks lists; the id of a "
+                     f"removed block is never used again")
     for block_id in sorted({b for b in block_ids if block_ids.count(b) > 1}):
         fails.append(f"{name}: two '### Block {block_id}' sections")
 
@@ -189,7 +225,12 @@ def check_file_note(name, text, props, root):
             if r1 > r2:
                 fails.append(f"{name}: row {label} runs backwards")
                 continue
-            for ln in range(r1, r2 + 1):
+            # Lines beyond the end of the file are counted, not walked: a row may name any number.
+            beyond = r2 - max(len(lines), r1 - 1)
+            if beyond > 0:
+                fails.append(f"{name}: block {block_id} has a row for line {max(len(lines) + 1, r1)}, outside {a}-{b}"
+                             + (f" (and {beyond - 1} more lines beyond the end of the file)" if beyond > 1 else ""))
+            for ln in range(r1, min(r2, len(lines)) + 1):
                 if ln < a or ln > b:
                     fails.append(f"{name}: block {block_id} has a row for line {ln}, outside {a}-{b}")
                 elif ln in in_row and ln in nonblank:
@@ -210,7 +251,7 @@ def check_file_note(name, text, props, root):
             if target is None:
                 continue
             real = lines[target - 1].strip()
-            if quoted == MASK and all(k in declared for k in range(r1, r2 + 1) if k in nonblank):
+            if quoted == MASK and all(k in declared for k in range(r1, min(r2, len(lines)) + 1) if k in nonblank):
                 continue  # a row for lines the note declares as masked
             if not quoted or not quoted.replace(MASK, "").strip():
                 fails.append(f"{name}: row {label} quotes no code in its Code cell")
@@ -277,7 +318,9 @@ def check_stale(name, props, root, kind, src=None):
     recorded = props.get("source_hash", "")
     if recorded:
         if SOURCE_HASH.fullmatch(recorded):
-            now = file_hash(Path(root) / src) if kind == "file" else files_hash(root, files)
+            now, rejected = (file_hash(Path(root) / src), []) if kind == "file" else files_hash(root, files)
+            for bad in rejected:
+                warns.append(f"{name}: 'sources' names no file under the source root: '{bad}' (not opened)")
             if now != recorded:
                 what = src if kind == "file" else ", ".join(files)
                 tail = UPDATE if kind == "file" else "check the note against the code, then set its source_hash"
