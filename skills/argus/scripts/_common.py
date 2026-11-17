@@ -185,6 +185,21 @@ def plain_relative(rel):
     return None if not parts or ".." in parts else "/".join(parts)
 
 
+def missing_under_root(root, plain):
+    """Whether a file that is not there would lie under the source root: the nearest folder of its path that does
+    exist must itself be a place under the root, by the rule on_disk() uses (links followed). `plain` is a path
+    from plain_relative(). False for 'link/missing.py' when the folder 'link' leads out of the root."""
+    base = Path(root).resolve()
+    path = base / plain
+    try:
+        while not os.path.lexists(path):
+            path = path.parent
+        path.resolve().relative_to(base)
+        return path.resolve().is_dir()
+    except (OSError, ValueError):
+        return False
+
+
 def all_files(root):
     """Every file under root except what is inside .git, as posix paths."""
     root = Path(root)
@@ -466,14 +481,30 @@ def files_hash(root, files):
     `rejected` are the names that are no file under the source root (missing, an absolute path, a path or a link
     that leads out of the root). Such a file is never opened. It counts as 'missing' in the hash of several
     files; when it is the only file the hash is None."""
-    given = sorted({f.strip().replace("\\", "/") for f in files if f.strip()})
-    found = {name: on_disk(root, name) for name in given}
-    rejected = [name for name in given if not found[name]]
-    if len(given) == 1:
-        return (None if rejected else file_hash(Path(root) / found[given[0]])), rejected
-    rows = sorted(f"{found[name]}\t{file_hash(Path(root) / found[name]) or 'missing'}\n" if found[name]
-                  else f"{name}\tmissing\n" for name in given)
+    present, rejected = source_set(root, files)
+    if len(present) + len(rejected) == 1:
+        return (None if rejected else file_hash(Path(root) / present[0])), rejected
+    rows = sorted([f"{name}\t{file_hash(Path(root) / name) or 'missing'}\n" for name in present]
+                  + [f"{name}\tmissing\n" for name in rejected])
     return "sha256:" + hashlib.sha256("".join(rows).encode("utf-8")).hexdigest(), rejected
+
+
+def source_set(root, files):
+    """(present, rejected) for a list of source names as a note or a command line gives them. `present` are the
+    files under the source root, each once, in their spelling on disk, sorted: 'a/b.py' and './a/b.py' are one
+    file. `rejected` are the names that are no file under the root, each once (two spellings of one plain path
+    count once). Everything that hashes or counts the sources of a note goes through here, so no two places can
+    take the same list for a different number of files."""
+    present, rejected = set(), set()
+    for name in (str(f).strip().replace("\\", "/") for f in files):
+        if not name:
+            continue
+        found = on_disk(root, name)
+        if found:
+            present.add(found)
+        else:
+            rejected.add(plain_relative(name) or name)
+    return sorted(present), sorted(rejected)
 
 
 # ---------------------------------------------------------------- line ranges and block ids
