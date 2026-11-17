@@ -32,3 +32,20 @@ The owner agreed the work in `docs/NEXT-block-updates.md`: a later run of the sk
 5. Install the skill for the owner: copy `skills/argus` to `C:\Users\aiuser4\.claude\skills\argus`. Then the extension's Create and Update can work (their default command says "Use the argus skill").
 6. The owner's hand test of Create and Update in VS Code (`docs/EXTENSION-HAND-TEST.md`), after a window reload.
 7. Nothing is pushed: `main`, `vscode-extension` and `skill-2.10` are all ahead of GitHub. The owner pushes.
+
+## Later the same evening: where the skill review ended (usage 74% of the 80% stop line)
+
+Skill 2.10, branch `skill-2.10`, head `06b28f8`. NOT merged, NOT installed. The existing 72 tests pass.
+
+- Thirteen Codex stress rounds. Findings: 9, 6, 4, 4, 4, 3, 4, 4, 5, 3, 2, 5, 5. P1: 5, 4, 2, 3, 2, 3, 1, 1, 1, 2, 2, 2, 2. Rounds 1 to 12 are fixed. Round 13 (review file `code-06b28f8*-focus.md` in `C:\dev\argus\.git\cross-review\skill-2.10\`) is OPEN: 2 P1, 3 P2:
+  1. P1 `changed_blocks.py:845`: in a depth-full note a `# Appendix` heading after a block's code fence, followed by a table with the template's line-table heading row, is still taken for the block's line table and written; both guards accept it. Fix direction: both readers end a block at any heading of the same or a higher level.
+  2. P1 `SKILL.md:109`: the "go back" after a STALE line repeats the run's own `--scope`, so a stale note of another file is never reached; the agent can cycle. Fix direction: carry the stale note's file into the repeat, or say that it is outside this run and report it.
+  3. P2 `changed_blocks.py:968`: a short table row (`| 1 |`) raises `IndexError`. 4. P2 `:966`: the Level 2 table is parsed again for every block (10 s for 3,200 blocks). 5. P2 `:541`: the search for the block before an unexplained range is quadratic.
+- What the rounds showed: the part that writes into notes (`--fix-moved`) produced a P1 in most rounds, each time a new note shape. It was narrowed three times: line columns only; then two guards (`unhandled()` refuses whole notes with constructs the writer does not handle, `own_check()` compares old and new text); then exactly five template places with exact heading rows.
+- The first real agent run of "Later runs" WORKED (a fresh agent on Sonnet, on a copy of the real `xreview.sh` notes after 3 lines were inserted and 1 changed): the script wrote 112 moved blocks, the agent rewrote 1 block and added 1, result CURRENT, 125,910 tokens (first writing of that file: about 275,000). Its main lesson is built in: outside a File note, code is cited by block, not by line.
+- OWNER DECISION NEEDED (the agent stopped here, as it had said it would):
+  (a) fix round 13 and go on with rounds until P1 is zero (about 1 to 2% usage per round, number of rounds unknown), then merge and install; or
+  (b) merge and install 2.10 with `--fix-moved` taken out of the skill's "Later runs" (the script stays a reporter; the agent sets moved line numbers itself, which costs tokens on every update but cannot damage a note), and keep the writer on the branch for later; or
+  (c) install 2.10 as it is for the owner's own use only (pilot), knowing the two open P1.
+  The review rule (cross-model-review, the gate) allows a merge only with P0 = P1 = 0, so (c) is the owner's exception to make, not the agent's.
+- The extension (`vscode-extension`, head `54565d0`) is reviewed and waits for the skill: after a merge run `npm run build` there, align `withoutInlineCode` in `vscode/src/core/notes.ts`, rebuild the package.
