@@ -20,13 +20,12 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
-                     files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, mask_pattern,
+                     files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, link_names, mask_pattern,
                      normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, section,
                      SOURCE_HASH, source_lines, utf8_output, without_inline_code, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 LENS_BY_TYPE = {"file": LENS, "mechanism": LENS, "start": LENS, "library": LENS[1:]}
-LINK = re.compile(r"\[\[([^\]|#]+)")
 MASK_SHARE = 0.25   # at most this share of a file's non-blank lines may carry a mask ...
 MASK_FLOOR = 2      # ... but two masked lines are always allowed
 MISSING_SHOWN = 30
@@ -330,9 +329,7 @@ def check_flow_note(name, lines, mask, file_blocks):
 
     def linked(text):
         found = []
-        for target in LINK.findall(without_inline_code(text)):
-            target = target.rstrip("\\").strip().split("/")[-1]
-            target = target[:-3] if target.lower().endswith(".md") else target
+        for target in link_names(text):
             if target in file_blocks and target not in found:
                 found.append(target)
         return found
@@ -537,9 +534,7 @@ def main():
                 fails.append(f"{name} line {number}: an Obsidian comment (%%) hides text from the reader")
             if number > body_from and HTML_TAG.search(bare_line):
                 tags.append(number)
-            for target in LINK.findall(bare_line):
-                target = target.rstrip("\\").strip().split("/")[-1]
-                target = target[:-3] if target.lower().endswith(".md") else target
+            for target in link_names(line):
                 linked_by.setdefault(target, set()).add(name)
                 if target not in targets:
                     fails.append(f"{name}: link to a note that does not exist: [[{target}]]")

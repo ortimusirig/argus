@@ -350,6 +350,20 @@ def without_inline_code(line):
     return "".join(out)
 
 
+LINK = re.compile(r"\[\[([^\]|#]+)")
+
+
+def link_names(text):
+    """The notes that the [[links]] of a piece of note text name, in order: the text outside code spans, each link
+    without its alias, its heading, its folders and an optional .md. The one place that knows this; the check and
+    changed_blocks.py both use it. Give it text that holds no code fence."""
+    names = []
+    for target in LINK.findall(without_inline_code(text)):
+        target = target.rstrip("\\").strip().split("/")[-1]
+        names.append(target[:-3] if target.lower().endswith(".md") else target)
+    return names
+
+
 def mask_pattern(text, groups=False):
     """A regular expression for a line with [masked] in it: the text around each mask, anything in between."""
     joiner = "(.+?)" if groups else ".+?"
