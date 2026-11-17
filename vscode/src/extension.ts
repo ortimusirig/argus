@@ -1,4 +1,4 @@
-// Argus for VS Code: registers the panel, the markers, the check, Create, the commands and the events. Wiring only; the
+// Argus for VS Code: registers the panel, the markers, the check, Create and Update, the commands and the events. Wiring only; the
 // logic is in src/core.
 
 import * as vscode from "vscode";
@@ -8,6 +8,7 @@ import { Index } from "./index";
 import { Markers } from "./markers";
 import { Panel } from "./panel";
 import { Matcher } from "./core/matching";
+import { updateNeed } from "./core/selection";
 
 /** The document a command was given (a button of the panel names the file it stands under). Only an open document
  *  of this window counts; anything else is as if nothing was given. */
@@ -25,6 +26,11 @@ export function activate(context: vscode.ExtensionContext): void {
   panel.validation = (project, sourceRel, note) => check.badge(project, sourceRel, note);
   const create = new Create(index, check, (text) => { panel.say(text); }, () => { panel.render(); });
   panel.creating = (project, sourceRel, notes) => create.status(project, sourceRel, notes);
+  // What Update would do for a document, when its match is done; the same match the panel's button is drawn from.
+  create.need = (document, note) => {
+    const assignment = matcher.fresh(document.uri.toString(), document.version, note);
+    return assignment ? updateNeed(assignment) : undefined;
+  };
 
   const active = (): vscode.TextDocument | undefined => vscode.window.activeTextEditor?.document;
   const redraw = (): void => { panel.render(); markers.refresh(); };
@@ -49,7 +55,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const say = await check.check(asked(given) ?? panel.document());
       if (say) { panel.say(say); } else { panel.render(); }
     }),
-    vscode.commands.registerCommand("argus.create", (given?: unknown) => create.create(asked(given) ?? panel.document())),
+    vscode.commands.registerCommand("argus.create", (given?: unknown) => create.run("create", asked(given) ?? panel.document())),
+    vscode.commands.registerCommand("argus.update", (given?: unknown) => create.run("update", asked(given) ?? panel.document())),
     vscode.commands.registerCommand("argus.openInObsidian", () => panel.openInObsidian()),
 
     vscode.window.onDidChangeTextEditorSelection((event) => {

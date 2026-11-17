@@ -5,7 +5,7 @@ import { LinkTo, escape, render } from "./markdown";
 import { Details } from "./checkResult";
 import { Assignment, Placed } from "./match";
 import { Block, FileNote } from "./notes";
-import { placesOf, summary, underSelection } from "./selection";
+import { Need, placesOf, summary, underSelection, updateNeed } from "./selection";
 
 /** The page's content security policy: nothing by default; styles and images from the extension's media folder
  *  only; scripts only with the nonce of this render. */
@@ -34,7 +34,8 @@ ${o.body}
 export interface Badge { label: string; why?: string; details?: Details; }
 export interface Listed { id: number; name: string; folder: string; }
 
-/** What a run of Create says for the file shown (core/create.ts). While it runs, no Create button is offered. */
+/** What a run of Create or Update says for the file shown (core/create.ts). While it runs, no Create button and no
+ *  Update button is offered. */
 export interface Creating { text: string; running: boolean; }
 
 export type View =
@@ -61,6 +62,22 @@ function button(msg: keyof typeof BUTTONS): string {
 
 function many(n: number, one: string, more: string): string {
   return `${n} ${n === 1 ? one : more}`;
+}
+
+/** The words of the Update button: they say what will be done, for example
+ *  "Update explanation (2 changed blocks, 1 unexplained range)". */
+export function updateLabel(need: Need): string {
+  const parts = [...(need.changed > 0 ? [many(need.changed, "changed block", "changed blocks")] : []),
+    ...(need.unexplained > 0 ? [many(need.unexplained, "unexplained range", "unexplained ranges")] : [])];
+  return parts.length === 0 ? "Update explanation" : `Update explanation (${parts.join(", ")})`;
+}
+
+/** The Update button of a file's view; nothing when it is not offered. It is offered for a note that can be read,
+ *  when the match is done and shows a changed block or an unexplained range, and no run is going for the file. */
+function updateButton(view: Extract<View, { kind: "file" }>): string {
+  if (view.note.problems.length > 0 || !view.assignment || view.create?.running) { return ""; }
+  const need = updateNeed(view.assignment);
+  return need.changed === 0 && need.unexplained === 0 ? "" : ` <button data-msg="update">${escape(updateLabel(need))}</button>`;
 }
 
 function listed(items: Listed[]): string {
@@ -203,7 +220,7 @@ function fileBody(view: Extract<View, { kind: "file" }>): string {
   }
   out.push(`<p class="badge"><span class="badge-label">${escape(view.badge.label)}</span>${view.badge.why ? ` <span class="why">${escape(view.badge.why)}</span>` : ""}</p>`);
   if (view.badge.details) { out.push(checkHtml(view.badge.details)); }
-  out.push(`<p class="actions">${button("check")} <button data-obsidian="${view.noteId}">Open note in Obsidian</button></p>`);
+  out.push(`<p class="actions">${button("check")} <button data-obsidian="${view.noteId}">Open note in Obsidian</button>${updateButton(view)}</p>`);
   out.push(...createHtml(view.create), ...problemsHtml(view.problems));
   if (unreadable) {
     out.push("<ul class=\"problems\">" + note.problems.map((p) => `<li>${escape(p)}</li>`).join("\n") + "</ul>");

@@ -54,7 +54,7 @@ test("every message the page sends is one the extension handles, and the reverse
   const sent = [...new Set([...read("media/panel.js").matchAll(/type: "([A-Za-z]+)"/g)].map((m) => m[1]))].sort();
   const handled = [...new Set([...read("src/core/messages.ts").matchAll(/case "([A-Za-z]+)":/g)].map((m) => m[1]))].sort();
   assert.deepEqual(sent, handled);
-  assert.deepEqual(sent, ["back", "check", "create", "external", "obsidian", "openNote", "pick", "setup"]);
+  assert.deepEqual(sent, ["back", "check", "create", "external", "obsidian", "openNote", "pick", "setup", "update"]);
 });
 
 test("the README says what a person needs: install, the settings, the skill, the states, the badges, what is never done", () => {

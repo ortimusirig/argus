@@ -47,7 +47,7 @@ test("media/panel.js sends messages only: no fetch, no XMLHttpRequest, no import
     assert.ok(!js.includes(word), `panel.js holds ${word}`);
   }
   const types = [...js.matchAll(/type: "([A-Za-z]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual([...new Set(types)], ["back", "check", "create", "external", "obsidian", "openNote", "pick", "setup"].sort()
+  assert.deepEqual([...new Set(types)], ["back", "check", "create", "external", "obsidian", "openNote", "pick", "setup", "update"].sort()
     .filter((t) => types.includes(t)));
   assert.ok(types.length > 0);
   const css = fs.readFileSync(path.resolve(__dirname, "../../media/panel.css"), "utf8");

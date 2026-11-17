@@ -31,11 +31,12 @@ Open a source file. The Argus panel is in the activity bar. When no project is s
 | --- | --- | --- |
 | `argus.projects` | A list. Each entry has `sourceRoot` (the folder the notes' `source` paths are relative to) and `notesFolder` (the folder with the Argus notes). Optional: `vaultFolder` (the root of the Obsidian vault, for shared Concept and Library notes) and `graph` (the path of a graphify `graph.json` for the check) | Empty |
 | `argus.createCommand` | The agent program and its arguments, as a list. The placeholders `${file}`, `${notesFolder}`, `${sourceRoot}` and `${depth}` are filled in each argument | `["claude", "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."]` |
-| `argus.createModel` | The model the agent uses. When it is not empty, the two arguments `--model` and this value are placed right after the program, before the other arguments of the command | Empty |
+| `argus.updateCommand` | The same for "Update explanation". Here `${depth}` is the depth of the file's note | `["claude", "Use the argus skill. Update the explanation of ${file}: run changed_blocks.py, then rewrite only the changed blocks and add blocks for unexplained lines. Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."]` |
+| `argus.createModel` | The model the agent uses, for Create and for Update. When it is not empty, the two arguments `--model` and this value are placed right after the program, before the other arguments of the command | Empty |
 | `argus.createDepth` | The depth asked for on create: `map` or `full` | `full` |
 | `argus.python` | The Python program for the check | `python` |
 
-`argus.createCommand`, `argus.createModel` and `argus.python` are read from your user settings only. A workspace cannot set them.
+`argus.createCommand`, `argus.updateCommand`, `argus.createModel` and `argus.python` are read from your user settings only. A workspace cannot set them.
 
 `argus.createModel` is the `--model` option of the Claude Code program, for example `sonnet` or `opus`. For another agent leave it empty and write that agent's own option into the command. Leave it empty too when the command names `node` and a script: the option would come before the script. The value may hold letters, digits and `. - _ : /` only, at most 100 characters, and must not begin with `-`. With any other value nothing is started, and the panel says so. With several workspace folders, each needs its own entry in `argus.projects`.
 
@@ -46,6 +47,7 @@ Open a source file. The Argus panel is in the activity bar. When no project is s
 | Argus: Explain selection | Shows the blocks under the selection. An empty selection means the line of the cursor. Also in the editor's right-click menu |
 | Argus: Explain this file | Shows the file's purpose table and every block |
 | Argus: Create explanation | Has the coding agent write the note for the file (see "Create") |
+| Argus: Update explanation | Has the coding agent bring the file's note up to the code (see "Update") |
 | Argus: Check notes | Runs the Argus check for the file's note and shows the result |
 | Argus: Refresh notes | Reads the notes folders again |
 | Argus: Open note in Obsidian | Opens the note that is shown in Obsidian |
@@ -88,7 +90,17 @@ A fault in another note of the same folder keeps this note from showing "checked
 - One agent runs at a time.
 - When the agent ends without an error and has written the note, the extension runs the check and shows the badge.
 - When the agent stops with an error, its output stays in the terminal.
-- The program is started directly with its list of arguments. No command shell reads them. On Windows a batch file (`.cmd` or `.bat`) is refused for that reason: name an `.exe` in `argus.createCommand`, or `node` with the path of the agent's script as the first argument.
+- The program is started directly with its list of arguments. No command shell reads them. On Windows a batch file (`.cmd` or `.bat`) is refused for that reason: name an `.exe` in the command, or `node` with the path of the agent's script as the first argument.
+
+## Update
+
+"Update explanation" is for a file that has a note whose blocks no longer all fit the code. The panel shows the button when the note has at least one changed block or the file has at least one range of unexplained lines. The button says what will be done, for example "Update explanation (2 changed blocks, 1 unexplained range)".
+
+- It starts the coding agent as Create does, in a terminal named "Argus: update explanation", with the command of `argus.updateCommand`. Every rule of Create holds here too.
+- The agent is asked to rewrite only the changed blocks and to add blocks for the unexplained lines. The depth is the depth of the note, not `argus.createDepth`.
+- The file must be saved. With unsaved changes the extension asks "Save and update" first.
+- One agent runs at a time, for Create and Update together.
+- When the agent ends without an error and has changed the note, the panel says "the note was updated", and the extension runs the check and shows the badge. When the note is the same as before, the panel says "the agent ended without changing the note".
 
 ## The skill
 
@@ -98,7 +110,7 @@ The agent needs the argus skill. Copy `skills/argus` from the Argus repository i
 python -B skills/argus/scripts/setup_tools.py --install
 ```
 
-Another agent works too: put its program and its arguments into `argus.createCommand`.
+Another agent works too: put its program and its arguments into `argus.createCommand` and `argus.updateCommand`.
 
 ## Obsidian
 
@@ -106,7 +118,7 @@ Another agent works too: put its program and its arguments into `argus.createCom
 
 ## Safety
 
-- In Restricted Mode (a workspace you have not trusted) the extension shows notes with your own settings only. Create and Check stay off.
+- In Restricted Mode (a workspace you have not trusted) the extension shows notes with your own settings only. Create, Update and Check stay off.
 - Text from a note is shown as text. A note cannot run script in the panel.
 - A link in a note that is not a note opens only on a click, through VS Code's own prompt.
 - Source code leaves the computer only through the coding agent you set up yourself.

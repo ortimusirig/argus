@@ -29,11 +29,12 @@
       "supported": "limited",
       "restrictedConfigurations": [
         "argus.createCommand",
+        "argus.updateCommand",
         "argus.createModel",
         "argus.python",
         "argus.projects"
       ],
-      "description": "In Restricted Mode Argus shows notes with your own settings only; Create and Check stay off until the workspace is trusted."
+      "description": "In Restricted Mode Argus shows notes with your own settings only; Create, Update and Check stay off until the workspace is trusted."
     }
   },
   "contributes": {
@@ -82,11 +83,23 @@
           ],
           "description": "The agent program and its arguments. Placeholders: ${file}, ${notesFolder}, ${sourceRoot}, ${depth}. Read from your user settings only."
         },
+        "argus.updateCommand": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "application",
+          "default": [
+            "claude",
+            "Use the argus skill. Update the explanation of ${file}: run changed_blocks.py, then rewrite only the changed blocks and add blocks for unexplained lines. Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."
+          ],
+          "description": "The agent program and its arguments for \"Update explanation\". Placeholders: ${file}, ${notesFolder}, ${sourceRoot}, ${depth} (the depth of the file's note). Read from your user settings only."
+        },
         "argus.createModel": {
           "type": "string",
           "scope": "application",
           "default": "",
-          "description": "The model the agent uses. When set, the two arguments --model and this value are placed right after the program. This is the option of the Claude Code program; for another agent leave it empty. Read from your user settings only."
+          "description": "The model the agent uses, for Create and for Update. When set, the two arguments --model and this value are placed right after the program. This is the option of the Claude Code program; for another agent leave it empty. Read from your user settings only."
         },
         "argus.createDepth": {
           "type": "string",
@@ -117,6 +130,10 @@
       {
         "command": "argus.create",
         "title": "Argus: Create explanation"
+      },
+      {
+        "command": "argus.update",
+        "title": "Argus: Update explanation"
       },
       {
         "command": "argus.check",

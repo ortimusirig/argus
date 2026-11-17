@@ -1,14 +1,29 @@
-// The rules of "Create explanation". No import of "vscode": src/create.ts carries them out. Here: what the command
-// becomes, which program it names, whether a run may start, what a run may show and for which file, and what the
-// end of a run means.
+// The rules of "Create explanation" and "Update explanation". No import of "vscode": src/create.ts carries them
+// out. Here: what the command becomes, which program it names, whether a run may start, what a run may show and
+// for which file, and what the end of a run means. The two kinds of run share every rule; only words differ.
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Need } from "./selection";
 
-/** The name of the task, and so of its terminal. */
+/** The kind of a run: Create writes the note of a file that has none, Update brings a note up to the code. */
+export type Kind = "create" | "update";
+
+/** The name of the task of Create, and so of its terminal. */
 export const TASK_NAME = "Argus: create explanation";
-const SETTING = "see the setting argus.createCommand";
+const TASK: Record<Kind, string> = { create: TASK_NAME, update: "Argus: update explanation" };
+const COMMAND: Record<Kind, string> = { create: "argus.createCommand", update: "argus.updateCommand" };
+
+/** The name of the task of a run of this kind, and so of its terminal. */
+export function taskName(kind: Kind): string {
+  return TASK[kind];
+}
+
+/** The setting that holds the command of this kind of run. */
+export function commandSetting(kind: Kind): string {
+  return COMMAND[kind];
+}
 
 export interface Values { file: string; notesFolder: string; sourceRoot: string; depth: "map" | "full"; }
 
@@ -64,9 +79,39 @@ export function refusal(at: { trusted: boolean; onDisk: boolean; file: string | 
   return undefined;
 }
 
+/** Why Update starts nothing for a file that Create's rules let through; undefined when it may go on. `notes`: how
+ *  many notes explain the file. `note`: the one note that is shown for it. `need`: what the match of the note
+ *  against the text found, when it is known; not known, the agent finds out itself. */
+export function updateRefusal(at: { notes: number; note: "none" | "unreadable" | "readable"; need?: Need }): string | undefined {
+  if (at.notes === 0) { return "no Argus note explains this file yet, so there is nothing to update; use 'Create explanation'. Nothing was started"; }
+  if (at.note === "none") { return "several notes explain this file; pick one in the Argus panel first. Nothing was started"; }
+  if (at.note === "unreadable") { return "the note of this file cannot be read, so it is not given to the agent to update; nothing was started"; }
+  if (at.need && at.need.changed === 0 && at.need.unexplained === 0) {
+    return "every block of the note fits the code and no line is unexplained: there is nothing to update. Nothing was started";
+  }
+  return undefined;
+}
+
+/** The question asked before a run when the file has unsaved changes: the agent reads the file from disk. */
+export function saveQuestion(kind: Kind, file: string): { message: string; detail: string; yes: string } {
+  const message = `${file} has unsaved changes. The agent reads the file from disk.`;
+  return kind === "create"
+    ? { message, detail: "Create explains the saved file only.", yes: "Save and create" }
+    : { message, detail: "Update compares the note with the saved file only.", yes: "Save and update" };
+}
+
+/** Said when the file or the settings changed between the click and the start. */
+export function changedMeanwhile(kind: Kind): string {
+  return `the file or the settings changed while ${kind === "create" ? "Create" : "Update"} was starting; nothing was started`;
+}
+
+/** Said when the note of a file is not there any more at the start of an Update. */
+export const NOTE_GONE = "the note of this file is not there any more; nothing was started";
+
 /** What the lookup of a program asks of the system. Tests give the other system, and a disk that is not there. */
 export interface Lookup { windows: boolean; env: Record<string, string | undefined>; isFile(file: string): Promise<boolean>;
-  read?: (file: string) => Promise<string>; }   // the text of a launcher file; without it a batch file is always refused
+  read?: (file: string) => Promise<string>;     // the text of a launcher file; without it a batch file is always refused
+  setting?: string; }                           // the setting the command came from, named in a problem; argus.createCommand when not given
 /** `before`: arguments that come before the command's own (the script that node runs, for an npm launcher). */
 export type Program = { path: string; before?: string[] } | { problem: string };
 
@@ -77,6 +122,7 @@ export type Program = { path: string; before?: string[] } | { problem: string };
  *  through a command shell, which would read the arguments. */
 export async function findProgram(program: string, lookup: Lookup): Promise<Program> {
   const p = lookup.windows ? path.win32 : path.posix;
+  const setting = lookup.setting ?? COMMAND.create, SETTING = `see the setting ${setting}`;
   if (program === "" || program.includes("\0")) { return { problem: `could not start the agent: the command names no program; ${SETTING}` }; }
   const full = (file: string): boolean => p.isAbsolute(file) && (!lookup.windows || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(file));
   const env = (name: string): string | undefined => {
@@ -112,7 +158,7 @@ export async function findProgram(program: string, lookup: Lookup): Promise<Prog
     const through = lookup.read ? await behindShim(found, lookup, p) : undefined;
     if (through) { return through; }
     return { problem: `could not start '${found}': it is a batch file, and Windows hands the arguments of a batch file to a command shell. `
-      + `Name a program (an .exe) in argus.createCommand; ${SETTING}` };
+      + `Name a program (an .exe) in ${setting}; ${SETTING}` };
   }
   return { path: found };
 }
@@ -193,41 +239,55 @@ export async function fileHash(file: string): Promise<string | undefined> {
 }
 
 /** What the end of a run means, in the design's order. `before` and `after` are the note marks of the file from
- *  before the start and from the index read again after the end. `check`: the check is run and its state shown. */
-export function afterRun(ended: Ended, program: string, before: string, after: string, sourceChanged: boolean): { say?: string; check: boolean } {
+ *  before the start and from the index read again after the end. `check`: the check is run and its state shown.
+ *  The rules are the same for both kinds of run; the sentences fit the kind: Create writes a note, Update changes one. */
+export function afterRun(ended: Ended, program: string, before: string, after: string, sourceChanged: boolean,
+  kind: Kind = "create"): { say?: string; check: boolean } {
   if (ended.how === "no-process") {
-    return { check: false, say: `the agent did not run: the task ended without starting the program '${program}'; ${SETTING}` };
+    return { check: false, say: `the agent did not run: the task ended without starting the program '${program}'; see the setting ${COMMAND[kind]}` };
   }
   if (ended.code !== 0) {
     return { check: false, say: `the agent stopped with an error${ended.code === undefined ? "" : ` (exit code ${ended.code})`}; `
-      + `its output is in the terminal '${TASK_NAME}'` };
+      + `its output is in the terminal '${TASK[kind]}'` };
+  }
+  const moved = "the file changed on disk while the agent ran; the note describes the text the agent read";
+  if (kind === "update") {
+    if (after === "") { return { check: false, say: "the agent ended, and the note of this file is not there any more" }; }
+    if (after === before) { return { check: false, say: "the agent ended without changing the note" }; }
+    return { check: true, say: sourceChanged ? `the note was updated; ${moved}` : "the note was updated" };
   }
   if (after === "" || after === before) { return { check: false, say: "the agent finished without writing the note" }; }
-  return sourceChanged
-    ? { check: true, say: "the file changed on disk while the agent ran; the note describes the text the agent read" }
-    : { check: true };
+  return sourceChanged ? { check: true, say: moved } : { check: true };
 }
 
 export type Phase = "starting" | "running" | "ending";
 /** One run of the agent: the project (its key) and the file (its path inside the source root) it was started for. */
-export interface Run { readonly serial: number; readonly project: string; readonly file: string; phase: Phase; orphan: boolean; }
+export interface Run { readonly serial: number; readonly project: string; readonly file: string; readonly kind: Kind; phase: Phase; orphan: boolean; }
 export interface Status { text: string; running: boolean; }
 
-const PHASE: Record<Phase, string> = {
-  starting: "starting the agent…",
-  running: `agent running in the terminal '${TASK_NAME}'; answer it there if it asks`,
-  ending: "the agent has ended; its notes are being read and checked…",
+/** What a run says while it goes. The line names the kind of the run: by its terminal, or in words. */
+const PHASE: Record<Kind, Record<Phase, string>> = {
+  create: {
+    starting: "starting the agent…",
+    running: `agent running in the terminal '${TASK.create}'; answer it there if it asks`,
+    ending: "the agent has ended; its notes are being read and checked…",
+  },
+  update: {
+    starting: "Update: starting the agent…",
+    running: `agent running in the terminal '${TASK.update}'; answer it there if it asks`,
+    ending: "Update: the agent has ended; the note is being read and checked…",
+  },
 };
 
 export function alreadyRunning(run: Run): string {
-  return `the agent is already running for ${run.file}; answer it in the terminal '${TASK_NAME}'. No second one was started`;
+  return `the agent is already running for ${run.file}; answer it in the terminal '${TASK[run.kind]}'. No second one was started`;
 }
 
 function keyOf(project: string, file: string): string {
   return JSON.stringify([project, file]);
 }
 
-/** The runs of Create: one at a time, and what each may show.
+/** The runs of Create and Update: one at a time across both kinds, and what each may show.
  *  A run belongs to one file of one project. What it says while it runs, and the sentence it leaves at its end,
  *  are given for that file of that project only. The sentence goes when the file's notes change, when a new run
  *  starts for the file, and when its project leaves the settings. A run whose project left the settings shows
@@ -238,10 +298,10 @@ export class Creates {
   private readonly ended = new Map<string, { project: string; text: string; mark: string }>();
 
   /** A run starts, unless one is going: then undefined, and nothing may be started. */
-  begin(project: string, file: string): Run | undefined {
+  begin(project: string, file: string, kind: Kind = "create"): Run | undefined {
     if (this.run) { return undefined; }
     this.ended.delete(keyOf(project, file));
-    this.run = { serial: ++this.serial, project, file, phase: "starting", orphan: false };
+    this.run = { serial: ++this.serial, project, file, kind, phase: "starting", orphan: false };
     return this.run;
   }
 
@@ -277,7 +337,7 @@ export class Creates {
    *  when a sentence is kept for the file. */
   status(project: string, file: string, mark: () => string): Status | undefined {
     const run = this.run;
-    if (run && !run.orphan && run.project === project && run.file === file) { return { running: true, text: PHASE[run.phase] }; }
+    if (run && !run.orphan && run.project === project && run.file === file) { return { running: true, text: PHASE[run.kind][run.phase] }; }
     const key = keyOf(project, file);
     const ended = this.ended.get(key);
     if (!ended) { return undefined; }

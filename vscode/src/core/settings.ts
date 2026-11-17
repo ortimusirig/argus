@@ -5,16 +5,20 @@ import { Project } from "./projects";
 /** The values the design gives; used when the user has set none. */
 export const DEFAULT_CREATE_COMMAND: readonly string[] = ["claude",
   "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."];
+export const DEFAULT_UPDATE_COMMAND: readonly string[] = ["claude",
+  "Use the argus skill. Update the explanation of ${file}: run changed_blocks.py, then rewrite only the changed blocks and add blocks "
+  + "for unexplained lines. Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."];
 export const DEFAULT_PYTHON = "python";
 
 /** What `WorkspaceConfiguration.inspect()` answers. Only `globalValue`, the user's own, is ever read here. */
 export interface Inspected { globalValue?: unknown; workspaceValue?: unknown; workspaceFolderValue?: unknown; defaultValue?: unknown; }
 
-/** `argus.createCommand`: the user's own list of strings, else the extension's constant. A workspace cannot set it. */
-export function userCommand(inspected: Inspected | undefined): string[] {
+/** `argus.createCommand`, or `argus.updateCommand` for an Update: the user's own list of strings, else the
+ *  extension's constant for that kind of run. A workspace cannot set either. */
+export function userCommand(inspected: Inspected | undefined, kind: "create" | "update" = "create"): string[] {
   const own = inspected?.globalValue;
   if (Array.isArray(own) && own.length > 0 && own.every((part) => typeof part === "string") && own[0] !== "") { return [...own]; }
-  return [...DEFAULT_CREATE_COMMAND];
+  return [...(kind === "update" ? DEFAULT_UPDATE_COMMAND : DEFAULT_CREATE_COMMAND)];
 }
 
 /** `argus.python`: the user's own value, else the extension's constant. A workspace cannot set it. */

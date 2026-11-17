@@ -34,3 +34,13 @@ export function summary(assignment: Assignment): Summary {
   for (const [a, b] of assignment.unexplained) { s.unexplained += b - a + 1; }
   return s;
 }
+
+/** What "Update explanation" would do for a file: how many blocks are changed, and how many ranges of lines have
+ *  no explanation. */
+export interface Need { changed: number; unexplained: number; }
+
+export function updateNeed(assignment: Assignment): Need {
+  let changed = 0;
+  for (const placed of assignment.placed) { if (placed.state === "changed") { changed++; } }
+  return { changed, unexplained: assignment.unexplained.length };
+}

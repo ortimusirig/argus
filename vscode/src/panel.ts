@@ -45,7 +45,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   /** The validation badge of a file's note; piece 6 (check.ts) sets it. */
   validation: (project: Project, sourceRel: string, note: Entry) => Badge =
     () => ({ label: "not checked", why: "no check has been run" });
-  /** What a run of Create says for a file of a project, given the notes that explain it; piece 7 (create.ts) sets it. */
+  /** What a run of Create or Update says for a file of a project, given the notes that explain it; piece 7 (create.ts) sets it. */
   creating: (project: Project, sourceRel: string, notes: readonly Entry[]) => Creating | undefined = () => undefined;
 
   constructor(extensionUri: vscode.Uri, private readonly index: Index, private readonly matcher: Matcher) {
@@ -402,6 +402,7 @@ ${this.project ? projectKey(this.project) : ""}`;
       // A button of the page acts on the file the page shows, also when the person went on to another file and
       // the page has not followed yet.
       case "create":
+      case "update":
       case "check": {
         // The click must come from the page that is shown now: a click of a page that was replaced meanwhile
         // was meant for another file, and starts nothing.
@@ -411,7 +412,7 @@ ${this.project ? projectKey(this.project) : ""}`;
         }
         const drawn = this.drawn;
         if (!drawn || drawn.isClosed) { this.tell("the file this page showed is closed; nothing was started"); break; }
-        await vscode.commands.executeCommand(action.do === "create" ? "argus.create" : "argus.check", drawn);
+        await vscode.commands.executeCommand(`argus.${action.do}`, drawn);
         return;
       }
       case "setup": await this.setup(); return;

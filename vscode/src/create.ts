@@ -1,4 +1,4 @@
-// "Create explanation" inside VS Code: starts the coding agent as a task in a terminal the person can type into,
+// "Create explanation" and "Update explanation" inside VS Code, one code path for both: starts the coding agent as a task in a terminal the person can type into,
 // follows it to its end, and then has the note checked. Wiring only. The rules are in src/core: create.ts (the
 // command, the program, one run at a time, what a run may show and for which file, what its end means), run.ts
 // (`mayStart`, the trust guard and the only task start), settings.ts (the command comes from the user's own
@@ -9,16 +9,16 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { Check } from "./check";
 import { Index } from "./index";
-import { Creates, Ended, Follow, Run, Status, TASK_NAME, afterRun, alreadyRunning, fileHash, fill, findProgram, noteMark, refusal,
-  modelArgs, revisionMark, variableIn } from "./core/create";
+import { Creates, Ended, Follow, Kind, NOTE_GONE, Run, Status, afterRun, alreadyRunning, changedMeanwhile, commandSetting, fileHash, fill,
+  findProgram, modelArgs, noteMark, refusal, revisionMark, saveQuestion, taskName, updateRefusal, variableIn } from "./core/create";
 import { Entry } from "./core/noteIndex";
 import { Project, relativeIn } from "./core/projects";
 import { mayStart } from "./core/run";
+import { Need } from "./core/selection";
 import { createDepth, projectKey, userCommand, userModel } from "./core/settings";
 
 const SETTLE_MS = 500;        // the agent's last writes reach the watchers before the notes are read
 const AGAIN_MS = 2000;        // a check whose result was not used (the notes still moved) is run once more
-const CHANGED = "the file or the settings changed while Create was starting; nothing was started";
 
 /** What a run was started with. */
 interface Started { run: Run; project: Project; file: string; path: string; program: string; notes: string; source: string | undefined; }
@@ -41,6 +41,8 @@ export class Create implements vscode.Disposable {
   private readonly listeners: vscode.Disposable[];
   private disposed = false;
   private waiting?: { timer: NodeJS.Timeout; go: () => void };   // the one pause of the run that is ending
+  /** What Update would do for a document and its note, when the match of the two is done; extension.ts sets it. */
+  need: (document: vscode.TextDocument, note: Entry) => Need | undefined = () => undefined;
 
   /** `say` shows a sentence to the person now; `changed` is called when what a run says may have changed. */
   constructor(private readonly index: Index, private readonly check: Check, private readonly say: (text: string) => void,
@@ -63,7 +65,7 @@ export class Create implements vscode.Disposable {
     this.runs.settings((key) => this.index.projects.some((project) => projectKey(project) === key));
   }
 
-  /** What Create says for this file of this project: asked at each drawing of the panel. */
+  /** What a run of Create or Update says for this file of this project: asked at each drawing of the panel. */
   status(project: Project, sourceRel: string, notes: readonly Entry[]): Status | undefined {
     return this.runs.status(projectKey(project), sourceRel, () => revisionMark(notes));
   }
@@ -79,15 +81,28 @@ export class Create implements vscode.Disposable {
     return !this.disposed && this.runs.live(run);
   }
 
-  /** "Argus: Create explanation" for a document. A second call while a run goes starts nothing. */
-  async create(document: vscode.TextDocument | undefined): Promise<void> {
+  /** The one note that is shown for a document, when it lies inside the project's folders now; as in the panel. */
+  private noteOf(document: vscode.TextDocument): { notes: number; note: Entry | undefined } {
+    const at = this.index.locate(document);
+    const holds = (entry: Entry): boolean => this.index.notes.holds(entry);
+    return { notes: at.notes.filter(holds).length, note: at.note && at.note.file && holds(at.note) ? at.note : undefined };
+  }
+
+  /** "Argus: Create explanation" and "Argus: Update explanation" for a document. A second call while a run of
+   *  either kind goes starts nothing. */
+  async run(kind: Kind, document: vscode.TextDocument | undefined): Promise<void> {
     if (!document) { this.say("open a file first; nothing was started"); return; }
     const at = this.index.locate(document);
-    const no = refusal({ trusted: vscode.workspace.isTrusted, onDisk: !document.isUntitled && document.uri.scheme === "file",
+    let no = refusal({ trusted: vscode.workspace.isTrusted, onDisk: !document.isUntitled && document.uri.scheme === "file",
       file: at.project ? at.sourceRel : undefined });
+    if (no === undefined && kind === "update") {
+      const { notes, note } = this.noteOf(document);
+      no = updateRefusal({ notes, note: !note?.file ? "none" : note.file.problems.length > 0 ? "unreadable" : "readable",
+        need: note ? this.need(document, note) : undefined });
+    }
     if (no !== undefined) { this.say(no); return; }
     const project = at.project as Project, file = at.sourceRel as string;
-    const run = this.runs.begin(projectKey(project), file);
+    const run = this.runs.begin(projectKey(project), file, kind);
     if (!run) {
       const going = this.runs.running();
       this.say(going ? alreadyRunning(going) : "the agent is already running; no second one was started");
@@ -110,10 +125,11 @@ export class Create implements vscode.Disposable {
   /** Saves, looks the program up, records the hashes and starts the task. Undefined: the agent was started. A
    *  sentence: nothing runs, for that reason; the empty sentence when the person cancelled. */
   private async start(run: Run, document: vscode.TextDocument, project: Project, file: string): Promise<string | undefined> {
+    const kind = run.kind;
     if (document.isDirty) {
-      const answer = await vscode.window.showWarningMessage(`${file} has unsaved changes. The agent reads the file from disk.`,
-        { modal: true, detail: "Create explains the saved file only." }, "Save and create");
-      if (answer !== "Save and create") { return ""; }
+      const ask = saveQuestion(kind, file);
+      const answer = await vscode.window.showWarningMessage(ask.message, { modal: true, detail: ask.detail }, ask.yes);
+      if (answer !== ask.yes) { return ""; }
       const saved = await document.save();
       if (!saved || document.isDirty) { return "the file could not be saved; nothing was started"; }
     }
@@ -121,15 +137,21 @@ export class Create implements vscode.Disposable {
     const config = vscode.workspace.getConfiguration("argus");
     // The folders are handed over as full paths: the agent runs in the source root, and a folder written
     // relative in the settings would mean another place there than it means to the extension.
-    const values = { file, notesFolder: path.resolve(project.notesFolder), sourceRoot: path.resolve(project.sourceRoot), depth: createDepth(config.get<unknown>("createDepth")) };
+    // The depth: for Create the setting; for Update the depth of the file's note (its `depth` property; a note
+    // without one counts as full), read now, after the save.
+    const note = kind === "update" ? this.noteOf(document).note : undefined;
+    if (kind === "update" && !note) { return NOTE_GONE; }
+    const values = { file, notesFolder: path.resolve(project.notesFolder), sourceRoot: path.resolve(project.sourceRoot),
+      depth: createDepth(note ? note.file?.props.depth : config.get<unknown>("createDepth")) };
     const variable = variableIn(values);
     if (variable !== undefined) { return variable; }
     // The model is the user's own setting too, and is tested before anything is looked up or started.
     const model = modelArgs(userModel(config.inspect<unknown>("createModel")));
     if ("problem" in model) { return model.problem; }
-    const command = fill(userCommand(config.inspect<unknown>("createCommand")), values);
+    const setting = commandSetting(kind);
+    const command = fill(userCommand(config.inspect<unknown>(setting.slice("argus.".length)), kind), values);
     const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram,
-      read: (file) => fs.promises.readFile(file, "utf8") });
+      read: (file) => fs.promises.readFile(file, "utf8"), setting });
     if ("problem" in program) { return program.problem; }
     // The hashes from before the start: the file as saved, and the file's notes as they are on disk now.
     await this.index.refreshNow(project).catch(() => undefined);
@@ -143,13 +165,14 @@ export class Create implements vscode.Disposable {
     // Time has passed (the question, the save, the disk): all of it is asked again before anything is started.
     const now = this.index.locate(document);
     if (!this.live(run) || document.isClosed || document.isDirty || !vscode.workspace.isTrusted
-      || !now.project || projectKey(now.project) !== run.project || now.sourceRel !== file) { return CHANGED; }
+      || !now.project || projectKey(now.project) !== run.project || now.sourceRel !== file) { return changedMeanwhile(kind); }
     const started: Started = { run, project, file, path: document.uri.fsPath, program: program.path,
       notes: noteMark(this.index.notes.fileNotesFor(project, file)), source };
+    if (kind === "update" && started.notes === "") { return NOTE_GONE; }
 
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
-    const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, TASK_NAME, "argus",
+    const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, taskName(kind), "argus",
       new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...model.args, ...command.slice(1)], { cwd: path.resolve(project.sourceRoot) }));
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, focus: true, panel: vscode.TaskPanelKind.Dedicated, close: false };
     const follow = new Follow((ended) => { void this.ended(started, ended); });
@@ -181,9 +204,9 @@ export class Create implements vscode.Disposable {
       await this.wait(SETTLE_MS);
       await this.index.refreshNow(project).catch(() => undefined);
       if (!this.live(run)) { this.late(run); return; }
-      this.check.inputChanged(project);                      // a finished Create is an input event of the check
+      this.check.inputChanged(project);                      // a finished run is an input event of the check
       const result = afterRun(ended, started.program, started.notes, noteMark(this.index.notes.fileNotesFor(project, file)),
-        await fileHash(started.path) !== started.source);
+        await fileHash(started.path) !== started.source, run.kind);
       if (result.check) {
         // The check's own generation rule decides whether its result may be shown; a result that was not used
         // because the notes still moved is asked for once more.
