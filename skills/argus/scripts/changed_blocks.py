@@ -14,7 +14,8 @@ with the source file as it is on disk now and gives each block one state:
              beside it that may be its new form, and whether it is gone. Or its whole code is in the source but
              past other blocks (two functions changed places): then the lines where it is now are given
   ambiguous  the same code is at several places and the order of the blocks does not decide which
-  undecided  its code is at other lines, but the search was cut short (BOUNDED), so the place is not sure
+  undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
+             limit. It is not a changed block: its code may be in the source as it was
 
 It also gives the ranges of non-blank source lines that no placed block covers (unexplained), and whether the
 note's source_hash still equals the file.
@@ -80,7 +81,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
-                     frontmatter, in_ranges, in_scope, is_row, line_ranges, mask_fits, merge_ranges,
+                     frontmatter, in_ranges, in_scope, is_row, line_ranges, link_names, mask_fits, merge_ranges,
                      normalize_scopes, note_blocks, on_disk, read_text, retired_ids, source_lines, utf8_output,
                      without_inline_code)
 
@@ -91,6 +92,7 @@ STATES = ("same", "moved", "changed", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
 LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
+LINE_CELL_TEXT = re.compile(r"(\s*)(\d{1,9})(?:(\s*-\s*)(\d{1,9}))?(\s*)")
 LINE_HEADINGS = ("line", "lines")   # the headings of a line column in note-templates.md: the Level 2 table has
 #                                     "Lines", the line table and the Trace table have "Line"
 
@@ -106,6 +108,42 @@ def line_column(heading_row):
     writes a number only in such a column, so a table of examples (| Input | Output |) is never touched."""
     return next((k for k, (a, b) in enumerate(pipe_cells(heading_row))
                  if heading_row[a:b].strip().lower() in LINE_HEADINGS), None)
+
+
+def tables(lines, mask, start, end):
+    """The tables between two places of a note, each as the list of the indices of its rows. A table is rows that
+    follow each other; any line that is no table row, or is inside a code fence, ends it."""
+    found, rows = [], []
+    for i in range(start, end):
+        if not mask[i] and is_row(lines[i]):
+            rows.append(i)
+        elif rows:
+            found.append(rows)
+            rows = []
+    return found + ([rows] if rows else [])
+
+
+def line_cells(lines, table):
+    """The line-number cells of ONE table: for each row under the heading row whose cell in the column headed Line
+    or Lines holds nothing but a line number or a range, (index of the row, start of the cell, end of the cell, the
+    match of LINE_CELL_TEXT). The second value says whether the table has such a column at all. Everything this
+    function knows it takes from the table it is given, so nothing of one table can reach the next."""
+    column = line_column(lines[table[0]])
+    if column is None:
+        return [], False
+    found = []
+    for i in table[1:]:
+        cells_at = pipe_cells(lines[i])
+        if column < len(cells_at):
+            a, b = cells_at[column]
+            m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
+            if m:
+                found.append((i, a, b, m))
+    return found, True
+
+
+def numbers_of(m):
+    return [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
 
 
 def span(a, b):
@@ -336,8 +374,10 @@ def compare(note_lines, props, lines):
                            f"{len(starts)} found nearest to line {block['a']} were looked at")
         found.append(starts)
     if cut_short:
-        bounded.append("the search was cut short for this note, so --fix-moved writes no move for it: every block "
-                       "that is not at its recorded lines is undecided")
+        bounded.append("the search was cut short for this note, so --fix-moved writes no move for it. A block "
+                       "that is not at its recorded lines, or whose own search stopped at its limit, is undecided: "
+                       "it is not a changed block and does not count towards rewriting the note. Look at it in the "
+                       "file")
     best_starts, left_out, unproven = assign([(b["a"], len(b["code"])) for b in blocks], found, total)
     for index in unproven:
         bounded.append(f"block {blocks[index]['id']}: whether an equally good placing leaves it out was not worked "
@@ -364,6 +404,11 @@ def compare(note_lines, props, lines):
         elif best:
             entry["state"] = "ambiguous"
             entry["candidates"] = [start + 1 for start in best]
+        elif index in cut_short or (cut_short and found[index]):
+            # No place in the best way, but the search stopped at its limit for this block, or it has places and
+            # another block's search stopped. Its code may well be in the source unchanged. Only a search that ran
+            # to its end and found the code nowhere says "changed".
+            entry["state"] = "undecided"
         else:
             entry["state"] = "changed"
         result.append(entry)
@@ -457,7 +502,6 @@ def compare(note_lines, props, lines):
 
 
 CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
-LINE_CELL_TEXT = re.compile(r"(\s*)(\d{1,9})(?:(\s*-\s*)(\d{1,9}))?(\s*)")
 
 
 def cited_lines(note, mask, blocks, entries):
@@ -498,27 +542,19 @@ def cited_lines(note, mask, blocks, entries):
         found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": sure, "text": text,
                       "blocks": [blocks[k]["id"] for k in owners if k is not None]})
 
-    trace, column = False, None
     for i, line in enumerate(note):
         if mask[i] or i <= props_end or i in headings:
             continue
-        if line.startswith("## "):
-            trace, column = line.startswith("## Trace"), None
         for m in CITE.finditer(without_inline_code(line)):       # places in this text are not used: never written
             numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
             cite(i, m.start(2), m.end(4) if m.group(4) else m.end(2), numbers, [m.group(3) or ""], False)
-        if trace and is_row(line):
-            edges = [m.start() for m in re.finditer(r"(?<!\\)\|", line)]
-            texts = [line[a + 1:b] for a, b in zip(edges, edges[1:])]
-            if column is None:
-                column = next((k for k, cell in enumerate(texts) if cell.strip().lower() in LINE_HEADINGS), -1)
-            elif 0 <= column < len(texts):
-                m = LINE_CELL_TEXT.fullmatch(texts[column])
-                if m:
-                    base = edges[column] + 1
-                    numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
-                    cite(i, base + m.start(2), base + (m.end(4) if m.group(4) else m.end(2)), numbers,
-                         [m.group(3) or ""], True)
+    # The Line column of each table of each Trace section, one table at a time.
+    for start in (i for i, line in enumerate(note) if not mask[i] and line.startswith("## Trace")):
+        end = next((i for i in range(start + 1, len(note)) if not mask[i] and note[i].startswith("## ")), len(note))
+        for table in tables(note, mask, start + 1, end):
+            for i, a, b, m in line_cells(note, table)[0]:
+                cite(i, a + m.start(2), a + (m.end(4) if m.group(4) else m.end(2)), numbers_of(m),
+                     [m.group(3) or ""], True)
     return found
 
 
@@ -661,47 +697,38 @@ def moved_text(data, report):
         done = [f"heading (lines {span(block['a'], block['b'])}) -> ({word} {new_range})"]
         if entry["state"] != "moved":
             done.append("its code was there whole, past other blocks")
-        rows, in_table, column = 0, False, None
+        rows = 0
         low, high = block["a"], block["a"] + len(block["code"]) - 1
-        for i in range(block["last"], block["end"]):
-            if mask[i] or not is_row(lines[i]):
-                in_table = False
+        for table in tables(lines, mask, block["last"], block["end"]) if delta else ():
+            found, has_column = line_cells(lines, table)
+            if not has_column:
+                # No column headed Line: nothing of this table is written. A row that starts with a line number
+                # of this block may be a line row all the same, so it is named for a person.
+                for i in table[1:]:
+                    first = pipe_cells(lines[i])[:1]
+                    m = LINE_CELL_TEXT.fullmatch(lines[i][first[0][0]:first[0][1]]) if first else None
+                    if m and all(low <= n <= high for n in numbers_of(m)):
+                        left.append(f"note line {i + 1}: a table row in block {block['id']} starts with "
+                                    f"{m.group(0).strip()}, but its table has no column headed Line, so it was "
+                                    f"not written. If it is a line row, add {delta:+d}")
                 continue
-            if not in_table:                         # the heading row of a table says whether it has a line column
-                in_table, column = True, line_column(lines[i])
-                continue
-            spans = pipe_cells(lines[i])
-            if not delta or not spans:
-                continue
-            a, b = spans[column] if column is not None and column < len(spans) else spans[0]
-            m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
-            if not m or not (low <= int(m.group(2)) <= high and low <= int(m.group(4) or m.group(2)) <= high):
-                continue                             # no line number of this block in that cell
-            if column is None:
-                left.append(f"note line {i + 1}: a table row in block {block['id']} starts with "
-                            f"{lines[i][a:b].strip()}, but its table has no column headed Line, so it was not "
-                            f"written. If it is a line row, add {delta:+d}")
-                continue
-            second = f"{m.group(3)}{int(m.group(4)) + delta}" if m.group(4) else ""
-            lines[i] = f"{lines[i][:a]}{m.group(1)}{int(m.group(2)) + delta}{second}{m.group(5)}{lines[i][b:]}"
-            rows += 1
+            for i, a, b, m in found:
+                if all(low <= n <= high for n in numbers_of(m)):     # a line of this block
+                    second = f"{m.group(3)}{int(m.group(4)) + delta}" if m.group(4) else ""
+                    lines[i] = f"{lines[i][:a]}{m.group(1)}{int(m.group(2)) + delta}{second}{m.group(5)}{lines[i][b:]}"
+                    rows += 1
         if rows:
             done.append(f"{rows} line-table rows moved by {delta:+d}")
-        if level2 is not None:
-            head = next((i for i in range(level2 + 1, level2_end) if not mask[i] and is_row(lines[i])), None)
-            column = line_column(lines[head]) if head is not None else None
-            row = next((i for i in range((head or level2) + 1, level2_end) if not mask[i] and is_row(lines[i])
-                        and (cells(lines[i]) or [""])[0] == block["id"]), None)
-            spans = pipe_cells(lines[row]) if row is not None else []
-            if row is not None and column is not None and column < len(spans):
-                a, b = spans[column]
-                m = LINE_CELL_TEXT.fullmatch(lines[row][a:b])
-                if m:
-                    lines[row] = f"{lines[row][:a]}{m.group(1)}{new_range}{m.group(5)}{lines[row][b:]}"
+        for table in tables(lines, mask, level2 + 1, level2_end)[:1] if level2 is not None else ():
+            found, has_column = line_cells(lines, table)
+            mine = [i for i in table[1:] if (cells(lines[i]) or [""])[0] == block["id"]][:1]
+            if mine and not has_column:
+                left.append(f"note line {mine[0] + 1}: the Level 2 table has no column headed Lines, so the row of "
+                            f"block {block['id']} was not written. Its lines are now {new_range}")
+            for i, a, b, m in found:
+                if [i] == mine:
+                    lines[i] = f"{lines[i][:a]}{m.group(1)}{new_range}{m.group(5)}{lines[i][b:]}"
                     done.append("Level 2 row")
-            elif row is not None:
-                left.append(f"note line {row + 1}: the Level 2 table has no column headed Lines, so the row of block "
-                            f"{block['id']} was not written. Its lines are now {new_range}")
         old, rest = cut_ranges(declared, block["a"], block["a"] + len(block["code"]) - 1)
         if old and delta:
             declared = rest
@@ -882,7 +909,9 @@ def survey(notes_dir, root):
         kind = props.get("type", "")
         given = [props.get("source", "")] if kind == "file" else props.get("sources", "").split(",")
         sources = [s for s in (on_disk(root, g.strip()) for g in given if g.strip()) if s]
-        links = {m.strip().rstrip("\\").split("/")[-1] for m in re.findall(r"\[\[([^\]|#]+)", text)}
+        lines = text.split("\n")
+        fenced = fence_mask(lines)                   # links are read as the check reads them: outside code
+        links = {name for i, line in enumerate(lines) if not fenced[i] for name in link_names(line)}
         notes.append({"note": path.stem, "path": str(path), "type": kind, "sources": sources, "links": links,
                       "given": [g.strip() for g in given if g.strip()], "source_hash": props.get("source_hash", ""),
                       "source": sources[0] if kind == "file" and sources else None})
@@ -948,9 +977,12 @@ def print_report(report):
         if entry["state"] == "moved":
             print(f"MOVED {was}: now {at(*entry['at'])}")
         elif entry["state"] == "undecided":
-            print(f"UNDECIDED {was}: its code is at {at(*entry['proposed'])}, but the search for places was cut "
-                  f"short (see BOUNDED), so a full search could place it elsewhere. Nothing is written for it: "
-                  f"read the code and set its line numbers by hand")
+            where = (f"its code is at {at(*entry['proposed'])}, but the search for places was cut short (see "
+                     f"BOUNDED), so a full search could place it elsewhere" if "proposed" in entry else
+                     "the search stopped at its limit before a place for it was found (see BOUNDED); its code may "
+                     "be in the source unchanged")
+            print(f"UNDECIDED {was}: {where}. Not a changed block. Nothing is written for it: look at the file "
+                  f"and set its line numbers by hand")
         elif entry["state"] == "ambiguous":
             starts = entry["candidates"]
             more = f" and {len(starts) - SHOWN} more" if len(starts) > SHOWN else ""
@@ -1053,16 +1085,17 @@ def main():
         ap.error(f"--notes must name a folder: {args.notes}")
     notes_dir = Path(args.notes)
     known = survey(notes_dir, root)
-    empty = {"source": "", "depth": "", "wrote": [], "blocks": [], "unexplained": [], "bounded": [], "lines": 0,
-             "source_state": "not read", "source_gone": False,
-             "source_hash": {"recorded": None, "now": None, "state": "none"}}
     reports = []
     for path in note_paths(notes_dir):
         try:
             report = note_report(path, root, scopes, args.fix_moved, known)
         except OSError as error:
-            report = dict(empty, note=path.stem, path=str(path), problems=[f"could not be read: {error}"],
-                          counts={state: 0 for state in STATES})
+            # Made new for each note: no list or dict of one note's report is shared with another's.
+            report = {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
+                      "unexplained": [], "bounded": [], "lines": 0, "source_state": "not read",
+                      "source_gone": False, "problems": [f"could not be read: {error}"],
+                      "counts": {state: 0 for state in STATES},
+                      "source_hash": {"recorded": None, "now": None, "state": "none"}}
         if report:
             reports.append(finish(report, known))
     dependents = dependent_notes(known, root, scopes)
