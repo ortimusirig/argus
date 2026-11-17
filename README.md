@@ -72,7 +72,7 @@ Version 2.10.0. Replaces the DOCX generator of version 1.
 
 | Version | Change |
 | --- | --- |
-| 2.10.0 | A later run rewrites only the blocks whose code changed (`changed_blocks.py`), not the whole note. Git is optional: notes carry `source_hash`, and a file with changes that are not committed no longer looks current. The check no longer takes `%%` inside code for a comment, and warns about `<word>` outside code. Every run writes a Flow note with a diagram of every end state; graphify's `graph.html` is kept in `<notes folder>/_graph/` and named in Start Here |
+| 2.10.0 | A later run rewrites only the blocks whose code changed (`changed_blocks.py`), not the whole note. Git is optional: notes carry `source_hash`, and a file with changes that are not committed no longer looks current. The check no longer takes `%%` inside code for a comment, and warns about `<word>` outside code. Every run writes a Flow note with a diagram of every end state; graphify's `graph.html` is kept in `<notes folder>/_graph/` and named in Start Here. Outside a File note a place in the code is named by its block, not by a line number, so inserted lines no longer make other notes wrong. `--fix-moved` refuses a note that holds something its writer does not handle and checks its own result before it writes |
 
 | Part | State |
 | --- | --- |
