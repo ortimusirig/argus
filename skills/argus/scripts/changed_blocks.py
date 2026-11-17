@@ -499,32 +499,11 @@ def compare(note_lines, props, lines):
                 u["beside_more"] = len(ids) - SHOWN
         ranges, gap_starts = [[u["from"], u["to"]] for u in gap], [u["from"] for u in gap]
         gap_size, gap_lines = sum(b - a + 1 for a, b in ranges), None
-        # Several changed blocks before one gap: which lines of the gap are whose? Each range goes to the block
-        # whose old code it looks most like, when it looks like one at all. A block that gets no range, while no
-        # range is left over, is gone. Ranges that look like no block stay with the blocks that got none.
-        several = [i for i in group if result[i]["state"] == "changed"]
-        own, spare = None, []
-        if len(several) > 1 and ranges and len(several) * len(ranges) <= 400:
-            own = {}
-            old_text = {i: "\n".join(blocks[i]["code"])[:4000] for i in several}
-            for u in gap:
-                piece = "\n".join(lines[u["from"] - 1:u["to"]])[:4000]
-                cost = sum(len(old_text[i]) for i in several) * len(piece) // 50 + 1
-                if cost > hint_work:
-                    own = None                       # no work left for this: all of them share the gap, as before
-                    break
-                hint_work -= cost
-                likeness = {i: difflib.SequenceMatcher(None, old_text[i], piece, autojunk=False).ratio() for i in several}
-                best = max(several, key=lambda i: likeness[i])
-                if likeness[best] >= 0.5:
-                    own.setdefault(best, []).append([u["from"], u["to"]])
-                    u["changed_beside"] = [result[best]["id"]]
-                else:
-                    spare.append(u)
-            if own is not None:
-                without = [result[i]["id"] for i in several if i not in own]
-                for u in spare:
-                    u["changed_beside"] = without[:SHOWN]
+        # Several changed blocks before one gap lie together in its lines: the script does not divide the lines
+        # between them and calls none of them gone. A block is gone only when its gap holds no unexplained line
+        # at all. What it may add as a hint is sure: the lines of a block's old code that are still there.
+        several = [result[i]["id"] for i in group if result[i]["state"] == "changed"]
+        too_few = len(several) > 1 and gap_size < len(several)   # fewer lines than blocks: one of them must be gone
         low_line = max(1, min(low, max(total, 1)))
         high_line = max(low_line, min(high, max(total, 1)))
         for index in group:
@@ -535,19 +514,19 @@ def compare(note_lines, props, lines):
             entry["expected"] = [first, min(max(entry["to"] + shift, first), high_line)]
             if entry["state"] != "changed":
                 continue
-            mine = ranges if own is None else own.get(index) or [[u["from"], u["to"]] for u in spare]
             # The ranges nearest to where the block was expected; how many more there are is said beside them.
-            at = max(0, min(bisect_left([a for a, _ in mine], first) - 1, len(mine) - SHOWN))
-            entry["new_form"] = mine[at:at + SHOWN]
-            if len(mine) > SHOWN:
-                entry["new_form_more"] = len(mine) - SHOWN
-            entry["gone"] = not mine
+            at = max(0, min(bisect_left(gap_starts, first) - 1, len(ranges) - SHOWN))
+            entry["new_form"] = ranges[at:at + SHOWN]
+            if len(ranges) > SHOWN:
+                entry["new_form_more"] = len(ranges) - SHOWN
+            entry["gone"] = not gap                  # only an empty gap says gone, never a comparison of likeness
+            if gap and len(several) > 1:
+                entry["together"] = [block_id for block_id in several if block_id != entry["id"]][:SHOWN]
+                entry["fewer_lines_than_blocks"] = too_few
             entry["between"] = [before["id"] if before else None, after["id"] if after else None]
             code = blocks[index]["code"]
-            if own is not None:
-                gap_lines = [n for a, b in mine for n in range(a, b + 1)]
-            cost = len(code) * (gap_size if own is None else len(gap_lines))
-            if code and mine and cost <= 400_000:
+            cost = len(code) * gap_size
+            if code and gap_size and cost <= 400_000:
                 if cost > hint_work:
                     hints_left_out += 1
                 else:
@@ -1453,11 +1432,16 @@ def print_report(report):
                 parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
                              f"no explanation or value rests on them, then copy the code again")
             elif entry["gone"]:
-                parts.append("its code is gone: no unexplained line between the placed blocks around it, or "
-                             "none that looks like it. When you remove the block, add its id to retired_blocks")
+                parts.append("its code is gone: no unexplained line between the placed blocks around it. "
+                             "When you remove the block, add its id to retired_blocks")
             else:
                 more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
                 parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
+                if entry.get("together"):
+                    parts.append(f"it lies together with changed block {', '.join(entry['together'])} in these "
+                                 f"lines: divide the lines between them by reading the code"
+                                 + ("; there are fewer lines than blocks, so at least one of them is gone"
+                                    if entry["fewer_lines_than_blocks"] else ""))
                 if "likely" in entry:
                     still, of = entry["lines_still_there"]
                     parts.append(f"{still} of its {of} non-blank lines are still there, in "
@@ -1471,7 +1455,12 @@ def print_report(report):
             why = f"beside block {', '.join(u['beside'])}{more}, which has no sure place: may be its new form"
         else:
             why = "new code: no changed block beside it"
-        if not u["code_of"] and len(u.get("changed_beside", ())) == 1:
+        if not u["code_of"] and len(u.get("changed_beside", ())) > 1:
+            together = u["changed_beside"]
+            print(f"UNEXPLAINED {at(u['from'], u['to'])}: blocks {', '.join(together[:-1])} and {together[-1]} changed "
+                  f"and lie together in these lines: divide the lines between them by reading the code (lines none "
+                  f"of them takes would be a new block with the id {u['new_id']})")
+        elif not u["code_of"] and len(u.get("changed_beside", ())) == 1:
             # The lines lie where one changed block is expected: they are most likely that block, not a new one.
             block_id = u["changed_beside"][0]
             print(f"UNEXPLAINED {at(u['from'], u['to'])}: probably the new form of block {block_id}: take these "
