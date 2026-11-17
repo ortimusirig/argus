@@ -315,6 +315,7 @@ def check_stale(name, props, root, kind, src=None):
 
 BLOCK_ID = r"\d\w*"
 ID_LIST = BLOCK_ID + r"(?:(?:\s*,\s*|\s+and\s+|\s+to\s+)" + BLOCK_ID + r")*"
+WIKILINK = re.compile(r"\[\[[^\]]*\]\]")       # taken out of the cell first: a note's name may hold "block 2"
 IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
 
 
@@ -348,7 +349,7 @@ def check_flow_note(name, lines, mask, file_blocks):
             continue
         if column < len(c):
             named += [("the Steps table", m.group(1), linked(row) or all_linked)
-                      for m in IDS_IN_ROW.finditer(without_inline_code(c[column]))]
+                      for m in IDS_IN_ROW.finditer(WIKILINK.sub(" ", without_inline_code(c[column])))]
     if named and not all_linked:
         ids = sorted({block_id for _, written, _ in named for block_id in re.findall(BLOCK_ID, written)})
         fails.append(f"{name}: it names block {', '.join(ids[:10])}{' ...' if len(ids) > 10 else ''} but links no "
