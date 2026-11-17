@@ -358,7 +358,9 @@ def check_stale(name, props, root, kind, src=None):
 
 BLOCK_ID = r"\d\w*"
 ID_LIST = BLOCK_ID + r"(?:(?:\s*,\s*|\s+and\s+|\s+to\s+)" + BLOCK_ID + r")*"
-IDS_IN_NODE = re.compile(r"\((?:blocks?\s+)?(" + ID_LIST + r")\)")   # in the diagram: (53a), (53a, 53b), (32 to 34)
+# In the diagram: the last round bracket of a node's text, right before the text ends: "... (53a, 53b)"] or
+# ... (32 to 34)"}. A number in brackets anywhere else in the text, such as "error (404) and stop", is text.
+IDS_IN_NODE = re.compile(r"\((?:blocks?\s+)?(" + ID_LIST + r")\)\s*\"?\s*[\]})]")
 IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
 
 
@@ -388,10 +390,19 @@ def check_flow_note(name, lines, mask, file_blocks):
             inside = False
         elif mask[i] and inside:
             named += [("the diagram", m.group(1), all_linked) for m in IDS_IN_NODE.finditer(line)]
+    # In the Steps table only the cell that names the blocks is read (the column whose heading says "block",
+    # else the second): "block 29" in the words of another cell is text.
+    column = None
     for row in section(lines, mask, "Steps") or []:
-        if is_row(row):
+        if not is_row(row):
+            continue
+        c = cells(row)
+        if column is None:
+            column = next((k for k, cell in enumerate(c) if "block" in cell.lower()), 1)
+            continue
+        if column < len(c):
             named += [("the Steps table", m.group(1), linked(row) or all_linked)
-                      for m in IDS_IN_ROW.finditer(without_inline_code(row))]
+                      for m in IDS_IN_ROW.finditer(without_inline_code(c[column]))]
     if named and not all_linked:
         ids = sorted({block_id for _, written, _ in named for block_id in re.findall(BLOCK_ID, written)})
         fails.append(f"{name}: it names block {', '.join(ids[:10])}{' ...' if len(ids) > 10 else ''} but links no "
