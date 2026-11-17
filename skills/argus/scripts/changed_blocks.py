@@ -32,10 +32,13 @@ Without --fix-moved nothing is written. With it, for each block that only moved,
 numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
 its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
 when its whole code is at one free place that no other block without a sure place could take. 
-The tables are the three of note-templates.md, found by their exact heading rows: the Level 2 table under
-'## Level 2: blocks', and at depth full the first table after a block's code and the Trace table. No other table
-is ever written, whatever its headings, and at depth map no table inside a block. A table where one of the three
-is expected but with another heading row is named in a TODO line. Every 'line N' in the note's text that a move touches
+The tables are the three of note-templates.md, each at the template's place and with the template's exact heading
+row. The Level 2 table stands directly under the heading '## Level 2: blocks': only blank lines between. At depth
+full, a block's line table stands directly after the block's code fence: only blank lines between; and the Trace
+table is the first table of the Trace section, with only blank lines and sentences above it. A block's section
+ends at the next #, ## or ### heading, a ## section at the next # or ## heading. A table anywhere else, or with
+another heading row, is never written, and at depth map no table inside a block. Where a block at depth full has
+no line table at that place, or the note no Level 2 table, a TODO line says so. Every 'line N' in the note's text that a move touches
 ("Check your understanding", "Part of line N", a sentence) is named in a TODO line, with its place and the likely
 new number, for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
 note at the same time. A note that changed after it was compared is not written: its bytes are read again as the
@@ -537,8 +540,10 @@ def compare(note_lines, props, lines):
     retired = retired_ids(props)
     taken = {block["id"] for block in blocks} | set(retired)
     placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
+    ends = [end for end, _ in placed]
     for u in unexplained:
-        above = next((block_id for end, block_id in reversed(placed) if end < u["from"]), "0")
+        k = bisect_left(ends, u["from"])             # the placed blocks that end above this range
+        above = placed[k - 1][1] if k else "0"
         u["new_id"] = next_id(above, taken)
         taken.add(u["new_id"])
     for block_id in sorted({block["id"] for block in blocks} & set(retired)):
@@ -620,21 +625,15 @@ def cited_lines(note, mask, blocks, entries, depth):
         for m in CITE.finditer(without_inline_code(line)):       # places in this text are not used: never written
             numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
             cite(i, m.start(2), m.end(4) if m.group(4) else m.end(2), numbers, [m.group(3) or ""], False)
-    # The Line column of the Trace table: at depth full, the first table of the Trace section, when its heading
-    # row is the template's.
-    for start in (i for i, line in enumerate(note) if not mask[i] and line.startswith("## Trace") and depth == "full"):
-        end = next((i for i in range(start + 1, len(note)) if not mask[i] and note[i].startswith("## ")), len(note))
-        for table in tables(note, mask, start + 1, end)[:1]:
-            if not header_is(note[table[0]], TRACE_HEADER):
-                continue
-            for i in table[1:]:
-                spans_of_row = pipe_cells(note[i])
-                if len(spans_of_row) > 1:
-                    a, b = spans_of_row[1]
-                    m = LINE_CELL_TEXT.fullmatch(note[i][a:b])
-                    if m:
-                        cite(i, a + m.start(2), a + (m.end(4) if m.group(4) else m.end(2)), numbers_of(m),
-                             [m.group(3) or ""], True)
+    # The Line column of the Trace table: at depth full, the table at the template's place in the Trace section.
+    for i in ((trace_table(note, mask) or [0])[1:] if depth == "full" else ()):
+        spans_of_row = pipe_cells(note[i])
+        if len(spans_of_row) > 1:
+            a, b = spans_of_row[1]
+            m = LINE_CELL_TEXT.fullmatch(note[i][a:b])
+            if m:
+                cite(i, a + m.start(2), a + (m.end(4) if m.group(4) else m.end(2)), numbers_of(m),
+                     [m.group(3) or ""], True)
     return found
 
 
@@ -806,12 +805,13 @@ def own_check(old, new):
     differs but the numbers of the line range:
       (a) a block heading;
       (b) the masked_lines property;
-      (c) a row of the Level 2 table: the first table of the section '## Level 2: blocks', with the template's
-          heading row, in its Lines cell;
-      (d) at depth full, a row of a block's line table: the first table after the block's code fence, with the
-          template's heading row, in its Line cell;
-      (e) at depth full, a row of the Trace table: the first table of the Trace section, with the template's
-          heading row, in its Line cell.
+      (c) a row of the Level 2 table: the table directly under the heading '## Level 2: blocks' (only blank
+          lines between), with the template's heading row, in its Lines cell;
+      (d) at depth full, a row of a block's line table: the table directly after the block's code fence (only
+          blank lines between), inside the block's section, with the template's heading row, in its Line cell;
+      (e) at depth full, a row of the Trace table: the first table of the Trace section, with only blank lines
+          and sentences above it, with the template's heading row, in its Line cell.
+    A section ends at the next heading that is not deeper than its own: a block at any #, ## or ### line.
     Else the number of the first line that breaks this (0: the number of lines changed). It reads the note in its
     own way, with its own copy of the heading rows, and uses nothing of the writer's."""
     level2_header = ["#", "Lines", "Purpose", "Why this way", "Concepts"]
@@ -822,8 +822,10 @@ def own_check(old, new):
     in_props = bool(old) and old[0].strip() == "---"
     depth_full = False
     fence = None                                     # the open fence, as (its character, its length)
-    section, in_block, code_seen = "", False, False  # the last '## ' heading; inside a block; its code fence is behind
-    table_no, header = 0, None                       # tables since the section or the code fence began; this table's heading cells
+    section, in_block = "", False                    # the last '## ' heading; inside a block's own section
+    code_seen = False                                # the block's code fence is behind us
+    place = ""                                       # which template table may begin on the next row: level2, line, trace
+    kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
         props_line = in_props and n > 1
         if props_line and was.strip() == "---":
@@ -841,18 +843,28 @@ def own_check(old, new):
         elif fence is not None and mark == fence[0] and run >= fence[1] and text.strip(mark).strip() == "":
             fence = None
             if in_block and not code_seen:
-                code_seen, table_no = True, 0        # the block's code fence has just closed
-        if not inside and not in_props:
-            if was.startswith("## "):
-                section, in_block, table_no = was.strip(), False, 0
-            elif was.startswith("### "):
-                in_block, code_seen, table_no = OWN_HEADING.fullmatch(was) is not None, False, 0
+                code_seen, place = True, "line"      # the block's code fence has just closed: its line table may follow
+            else:
+                place = ""
+        elif inside:
+            place = ""                               # a fence between a heading and a table: no template table there
+        level = len(was) - len(was.lstrip("#")) if not inside and not in_props and re.match(r"#{1,6} ", was) else 0
+        if level:
+            # A heading ends what is not deeper than it: a ## section at # or ##, a block at #, ## or ###.
+            if level <= 2:
+                section = was.strip() if level == 2 else ""
+            if level <= 3:
+                in_block, code_seen = level == 3 and OWN_HEADING.fullmatch(was) is not None, False
+            place = ("level2" if section == "## Level 2: blocks" else "trace" if section.startswith("## Trace")
+                     else "") if level == 2 else ""
         first_row = False
         if inside or not was.startswith("|"):
-            header = None
+            header, kind = None, ""
+            if not inside and not level and was.strip() and place != "trace":
+                place = ""                           # text before the table: only the Trace section may have it
         elif header is None:
             header, first_row = [cell.strip() for cell in re.split(r"(?<!\\)\|", was)[1:-1]], True
-            table_no += 1
+            kind, place = place, ""                  # the table that begins here takes the place, or has none
         if was == now:
             continue
         if inside:
@@ -866,13 +878,13 @@ def own_check(old, new):
             if was[:was.rindex("(line")] == now[:now.rindex("(line")]:
                 continue
             return n
-        if header is None or first_row or table_no != 1:
+        if header is None or first_row:
             return n
-        if section == "## Level 2: blocks" and not in_block and header == level2_header:
+        if kind == "level2" and header == level2_header:
             column = 2                               # counted in the split below, where the first part is empty
-        elif depth_full and in_block and code_seen and header == line_header:
+        elif kind == "line" and depth_full and in_block and header == line_header:
             column = 1
-        elif depth_full and section.startswith("## Trace") and not in_block and header == trace_header:
+        elif kind == "trace" and depth_full and header == trace_header:
             column = 2
         else:
             return n
@@ -885,15 +897,62 @@ def own_check(old, new):
     return None
 
 
+class Refuse(Exception):
+    """The writer met something it will not write around. Nothing is written for the note; the text is the reason."""
+
+
+def table_at(lines, mask, start, stop, sentences=False):
+    """The table that stands at the template's place after line index `start`: its rows, or None. Only blank lines
+    may stand between `start` and the table's heading row, and with `sentences` also plain lines of text (the
+    Trace section has a sentence there). A heading, a code fence or, without `sentences`, any text before the
+    table means: there is no table at the template's place. `stop` is where the section ends."""
+    i = start
+    while i < stop and not mask[i] and not is_row(lines[i]):
+        if lines[i].strip() and (not sentences or lines[i].startswith("#")):
+            return None
+        i += 1
+    rows = []
+    while i < stop and not mask[i] and is_row(lines[i]):
+        rows.append(i)
+        i += 1
+    return rows or None
+
+
+def next_heading(lines, mask, start, level):
+    """The index of the next heading of this level or a higher one (fewer #) after `start`, outside code; else the
+    end of the note. A block (###) ends at any #, ## or ### line; a ## section at any # or ## line."""
+    mark = re.compile(r"#{1,%d} " % level)
+    return next((i for i in range(start + 1, len(lines)) if not mask[i] and mark.match(lines[i])), len(lines))
+
+
 def level2_table(lines, mask):
-    """The Level 2 table of a note as the indices of its rows, or None: the first table of the section
-    '## Level 2: blocks', when its heading row is the template's."""
+    """The Level 2 table of a note as the indices of its rows, or None: the table directly under the heading
+    '## Level 2: blocks' (only blank lines between), when its heading row is the template's."""
     start = next((i for i, line in enumerate(lines) if not mask[i] and line.strip() == LEVEL2_SECTION), None)
     if start is None:
         return None
-    end = next((i for i in range(start + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
-    first = tables(lines, mask, start + 1, end)[:1]
-    return first[0] if first and header_is(lines[first[0][0]], LEVEL2_HEADER) else None
+    rows = table_at(lines, mask, start + 1, next_heading(lines, mask, start, 2))
+    return rows if rows and header_is(lines[rows[0]], LEVEL2_HEADER) else None
+
+
+def trace_table(lines, mask):
+    """The Trace table as the indices of its rows, or None: in the first section whose heading starts with
+    '## Trace', the first table, with nothing but blank lines and sentences above it, when its heading row is the
+    template's."""
+    start = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## Trace")), None)
+    if start is None:
+        return None
+    rows = table_at(lines, mask, start + 1, next_heading(lines, mask, start, 2), sentences=True)
+    return rows if rows and header_is(lines[rows[0]], TRACE_HEADER) else None
+
+
+def line_cell(lines, i, column, table):
+    """Where the cell of a row is, as (start, end). A row that lacks the cell is not written around: Refuse."""
+    found = pipe_cells(lines[i])
+    if column >= len(found):
+        raise Refuse(f"note line {i + 1}: a row of the {table} lacks the cell that holds its lines. --fix-moved "
+                     f"writes nothing for this note; complete the row")
+    return found[column]
 
 
 def moved_text(data, report):
@@ -931,7 +990,10 @@ def moved_text(data, report):
         wrote.append(f"{len(sure)} line numbers in the Line column of the Trace table moved with their blocks")  # (e)
     masked_new = []                                  # the masked ranges of moved blocks, at their new lines
     full = report["_depth"] == "full"                # a line table and a Trace table exist at depth full only
-    level2 = level2_table(lines, mask)               # (c): None when the note has no table with the template's heading
+    level2 = level2_table(lines, mask)               # (c): None when the note has no such table at the template's place
+    rows_of = {}                                     # block id -> its rows in the Level 2 table, read once
+    for i in (level2 or [0])[1:]:
+        rows_of.setdefault((cells(lines[i]) or [""])[0], []).append(i)
     level2_missing = False
     for block, entry in zip(blocks, report["blocks"]):
         if entry["state"] != "moved" and "moved_to" not in entry:
@@ -944,28 +1006,29 @@ def moved_text(data, report):
         done = [f"heading (lines {span(block['a'], block['b'])}) -> ({word} {new_range})"]
         if entry["state"] != "moved":
             done.append("its code was there whole, past other blocks")
-        # (d) The block's line table: at depth full only, the first table after the block's code fence, and only
-        # when its heading row is the template's. No other table in a block is written, at any depth.
+        # (d) The block's line table: at depth full only, the table directly after the block's code fence (only
+        # blank lines between), inside the block's own section, and only when its heading row is the template's.
+        # The section ends at the next #, ## or ### heading. No other table in a block is written, at any depth.
         rows = 0
         low, high = block["a"], block["a"] + len(block["code"]) - 1
-        first = (tables(lines, mask, block["last"], block["end"])[:1] if full and delta else [])
-        if first and header_is(lines[first[0][0]], LINE_HEADER):
-            for i in first[0][1:]:
-                a, b = pipe_cells(lines[i])[0]
+        section_end = min(block["end"], next_heading(lines, mask, block["start"], 3))
+        table = table_at(lines, mask, block["last"], section_end) if full and delta and block["first"] is not None else None
+        if table and header_is(lines[table[0]], LINE_HEADER):
+            for i in table[1:]:
+                a, b = line_cell(lines, i, 0, "line table")
                 m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
                 if m and all(low <= n <= high for n in numbers_of(m)):       # a line of this block
                     lines[i] = lines[i][:a] + new_numbers(m, [n + delta for n in numbers_of(m)]) + lines[i][b:]
                     rows += 1
-        elif first:
-            left.append(f"note line {first[0][0] + 1}: the first table after the code of block {block['id']} does not "
-                        f"have the template's heading row (Line, Code, What happens, Real value), so its rows were "
-                        f"not written. Where they are line rows, add {delta:+d}")
+        elif full and delta:
+            left.append(f"block {block['id']}: no line table at the template's place (directly after the block's "
+                        f"code, with the heading row Line, Code, What happens, Real value), so no line row was "
+                        f"written. Where the block has line rows, add {delta:+d}")
         if rows:
             done.append(f"{rows} line-table rows moved by {delta:+d}")
         # (c) The block's row of the Level 2 table: the row that starts with its id, in the Lines cell.
-        mine = [i for i in (level2 or [0])[1:] if (cells(lines[i]) or [""])[0] == block["id"]]
-        for i in mine:
-            a, b = pipe_cells(lines[i])[1]
+        for i in rows_of.get(block["id"], ()):
+            a, b = line_cell(lines, i, 1, "Level 2 table")
             m = LINE_CELL_TEXT.fullmatch(lines[i][a:b])
             if m:
                 lines[i] = lines[i][:a] + new_numbers(m, [new_a, new_b]) + lines[i][b:]
@@ -978,8 +1041,9 @@ def moved_text(data, report):
             masked_changed = True
         wrote.append(f"block {block['id']}: " + ", ".join(done))
     if level2_missing:
-        left.append("the note has no Level 2 table with the template's heading row (#, Lines, Purpose, Why this "
-                    "way, Concepts) under '## Level 2: blocks', so no Lines cell was written. Set them by hand")
+        left.append("the note has no Level 2 table at the template's place (directly under '## Level 2: blocks', "
+                    "with the heading row #, Lines, Purpose, Why this way, Concepts), so no Lines cell was written. "
+                    "Set them by hand")
     if masked_changed:
         value = ", ".join(span(a, b) for a, b in merge_ranges(declared + masked_new))
         for i in range(1, len(lines)):
@@ -1090,7 +1154,10 @@ def note_report(path, root, scopes, fix, known):
                              "source file in scope; nothing written")
                 else:
                     report = locked
-                    new, wrote, error, left = moved_text(data, locked["_found"])
+                    try:
+                        new, wrote, error, left = moved_text(data, locked["_found"])
+                    except Refuse as refusal:
+                        new, wrote, error, left = None, [], str(refusal), []
                     to_check = check_lines([c for c in locked["_found"]["_cites"] if not c["sure"]]) + left
                     if new is not None and not error:
                         # The writer's result is looked at by a check of its own before it may reach the disk.
@@ -1402,11 +1469,14 @@ def main():
     for path in note_paths(notes_dir):
         try:
             report = note_report(path, root, scopes, args.fix_moved, known)
-        except OSError as error:
+        except Exception as error:                   # noqa: BLE001  one note must not end the run or hide the others
             # Made new for each note: no list or dict of one note's report is shared with another's.
             report = {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
                       "unexplained": [], "bounded": [], "lines": 0, "source_state": "not read",
-                      "source_gone": False, "problems": [f"could not be read: {error}"], "reordered": [],
+                      "source_gone": False, "reordered": [],
+                      "problems": [f"could not be read: {error}" if isinstance(error, OSError) else
+                                   f"the script failed on this note ({type(error).__name__}: {error}); nothing was "
+                                   f"written for it. The other notes are reported as usual"],
                       "counts": {state: 0 for state in STATES},
                       "source_hash": {"recorded": None, "now": None, "state": "none"}}
         if report:
