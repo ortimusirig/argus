@@ -12,7 +12,7 @@ import { Index } from "./index";
 import { Creates, Ended, Follow, Kind, NOTE_GONE, Run, Status, afterRun, alreadyRunning, changedMeanwhile, commandSetting, fileHash, fill,
   findProgram, modelArgs, noteMark, refusal, revisionMark, saveQuestion, taskName, updateRefusal, variableIn } from "./core/create";
 import { Entry } from "./core/noteIndex";
-import { Project, relativeIn } from "./core/projects";
+import { Project, relativeIn, systemRules } from "./core/projects";
 import { mayStart } from "./core/run";
 import { Need } from "./core/selection";
 import { createDepth, projectKey, userCommand, userModel } from "./core/settings";
@@ -141,7 +141,11 @@ export class Create implements vscode.Disposable {
     // without one counts as full), read now, after the save.
     const note = kind === "update" ? this.noteOf(document).note : undefined;
     if (kind === "update" && !note) { return NOTE_GONE; }
-    const values = { file, notesFolder: path.resolve(project.notesFolder), sourceRoot: path.resolve(project.sourceRoot),
+    // The folders as the index itself resolves them (links and ".." by the file system's own rule), so the agent
+    // works in the very folders the extension reads.
+    const folder = (given: string): string => { try { return systemRules.real(given); } catch { return path.resolve(given); } };
+    const sourceRoot = folder(project.sourceRoot);
+    const values = { file, notesFolder: folder(project.notesFolder), sourceRoot,
       depth: createDepth(note ? note.file?.props.depth : config.get<unknown>("createDepth")) };
     const variable = variableIn(values);
     if (variable !== undefined) { return variable; }
@@ -173,7 +177,7 @@ export class Create implements vscode.Disposable {
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
     const task = new vscode.Task({ type: "argus" }, vscode.TaskScope.Workspace, taskName(kind), "argus",
-      new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...model.args, ...command.slice(1)], { cwd: path.resolve(project.sourceRoot) }));
+      new vscode.ProcessExecution(program.path, [...(program.before ?? []), ...model.args, ...command.slice(1)], { cwd: sourceRoot }));
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, focus: true, panel: vscode.TaskPanelKind.Dedicated, close: false };
     const follow = new Follow((ended) => { void this.ended(started, ended); });
     this.following = { task, follow };

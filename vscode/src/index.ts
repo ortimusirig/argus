@@ -118,9 +118,10 @@ export class Index implements vscode.Disposable {
   async refreshAll(): Promise<void> {
     this.where.clear();                  // "Refresh notes" asks the disk again for everything, also where each document lies
     this.warm();
-    for (const project of this.projects) {
-      try { await this.notes.refreshNow(project); } catch { /* a folder that cannot be read holds no notes */ }
-    }
+    // Each project is read on its own: one whose folder does not answer (a share that hangs) does not hold up
+    // the others. Within a project the readings still run one after the other (its queue).
+    await Promise.all(this.projects.map((project) =>
+      this.notes.refreshNow(project).catch(() => undefined)));   // a folder that cannot be read holds no notes
   }
 
   /** Asks the disk for the real path of every source root, a few at a time (many projects). Until all are

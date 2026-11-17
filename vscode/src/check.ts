@@ -30,6 +30,7 @@ interface Per {
   git: GitWatch;                       // whether git's folders are watched, and what a `.git` event means (core/gitWatch.ts)
   gitWatchers: vscode.Disposable[];
   graphWatchers: vscode.Disposable[];  // on the graph file, and on the file it leads to when it is a link
+  graphPlaces?: string;                // the files the graph watchers are on, as one text
   graphAsked: number;                  // counts the questions where the graph leads: only the answer to the last one is used
   gitTimer?: NodeJS.Timeout;
   gitWork: Promise<void>;              // git is asked one question at a time
@@ -106,10 +107,15 @@ export class Check implements vscode.Disposable {
     const real = await fs.promises.realpath(graph).catch(() => undefined);
     if (this.per.get(projectKey(per.project)) !== per) { return; }        // the settings changed meanwhile
     if (asked !== per.graphAsked) { return; }                             // asked again meanwhile: that answer is the newer one
+    const windows = process.platform === "win32";
+    // Asked before every check and confirmation too (a link that led nowhere may lead somewhere now): the
+    // watchers are set anew only when the files to watch are other ones.
+    const places = graphPlaces(graph, real, windows), key = places.join("\n");
+    if (key === per.graphPlaces && per.graphWatchers.length > 0) { return; }
+    per.graphPlaces = key;
     for (const watcher of per.graphWatchers) { watcher.dispose(); }
     per.graphWatchers = [];
-    const windows = process.platform === "win32";
-    for (const place of graphPlaces(graph, real, windows)) {
+    for (const place of places) {
       const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(path.resolve(place))), "*"));
       const seen = (uri: vscode.Uri): void => {
         if (!isPlace(uri.fsPath, place, windows)) { return; }
@@ -197,6 +203,7 @@ export class Check implements vscode.Disposable {
     per.work = per.work.then(async () => {
       if (this.per.get(projectKey(per.project)) !== per || per.checks.due().length === 0) { return; }
       if (!vscode.workspace.isTrusted) { return; }             // onDidGrantWorkspaceTrust starts these calls
+      await this.watchGraph(per);                              // where the graph leads is asked again before a confirmation
       await this.index.refreshNow(per.project).catch(() => undefined);
       for (const sourceRel of per.checks.due()) {
         const startedAt = per.checks.begin();
@@ -226,6 +233,7 @@ export class Check implements vscode.Disposable {
     if (!per) { return { say: "this file is not in an Argus project; nothing was checked", always: true, used: false }; }
     if (!vscode.workspace.isTrusted) { return { say: `not checked: ${RESTRICTED}`, always: true, used: false }; }
     if (per.running.has(key)) { return { used: false }; }
+    await this.watchGraph(per);                                // where the graph leads is asked again before a check
     per.running.add(key);
     this.changed();
     let used = false;
