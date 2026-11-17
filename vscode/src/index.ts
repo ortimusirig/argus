@@ -97,7 +97,8 @@ export class Index implements vscode.Disposable {
    *  else, or gone) and what follows is decided there (NoteIndex.changed), never here from the path's name. */
   private event(project: Project, folder: string, file: string): void {
     // What lies under a folder whose name starts with a dot is neither the index's nor the checker's, but for a
-    // file that a link among the notes leads to: its change is the change of that note.
+    // file that a link among the notes leads to, and for a folder above such a file (the watcher may tell of the
+    // folder only when it is renamed or deleted): its change is the change of that note.
     if (path.relative(actualFolder(folder), file).split(path.sep).slice(0, -1).some((part) => part.startsWith("."))
       && !this.notes.leadsTo(project, file)) { return; }
     this.touched.fire(project);

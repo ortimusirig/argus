@@ -236,7 +236,7 @@ export class NoteIndex {
   /** A watcher's event for a path under the project's notes folder or vault folder: created, changed or deleted.
    *  What the path is is asked of the disk, never read from its name: a folder (whatever its name, `v1.0` or
    *  `archive.md`) has the project's folders read again; a .md file is read again; any other file is nothing,
-   *  unless a link `Name.md` leads to it (`throughLink`).
+   *  unless a link `Name.md` leads to it, or to a file under it (`throughLink`).
    *  A path that is gone cannot be asked: when notes are indexed under it, it was a folder, and the folders are
    *  read again (so a rename that reports only the old path leaves no note at a path that is gone); else it is
    *  read again as a note, which drops the note that was there (a folder of links to notes is known by the paths
@@ -251,7 +251,7 @@ export class NoteIndex {
       const rel = inNotes ?? (project.vaultFolder ? relativeIn(project.vaultFolder, file, this.rules) : undefined);
       const parts = rel === undefined ? [] : rel.split("/");
       // Under a folder whose name starts with a dot nothing is the index's, but for the file a known link leads
-      // to: its change is the change of the note that is read through the link.
+      // to, and a folder above such a file: its change is the change of the note that is read through the link.
       if (parts.slice(0, -1).some((part) => part.startsWith("."))) { return this.throughLink(held, file); }
       let folder: boolean | undefined;                       // undefined: gone
       try { folder = (await fs.promises.stat(file)).isDirectory(); } catch { folder = undefined; }
@@ -292,25 +292,42 @@ export class NoteIndex {
     return file;
   }
 
-  /** Whether a link that the index read leads to this file. */
+  /** Whether a known link is touched by an event for the path of this key: the link's target is that very file,
+   *  or lies under it (the path is a folder above the target). The keys are real paths, compared as the index
+   *  compares them (on Windows without regard to letter case, as `keyOf` made them). */
+  private touches(way: Way, found: string, key: string, under: string): boolean {
+    return found !== way.key && (way.key === key || way.key.startsWith(under));
+  }
+
+  /** Whether a link that the index read leads to this file, or to a file under it when it is a folder (a folder
+   *  above the link's target that was renamed or deleted, where the watcher tells of the folder only). */
   leadsTo(project: Project, file: string): boolean {
     const held = this.of(project);
     if (!held) { return false; }
     let key: string;
     try { key = this.keyOf(file); } catch { return false; }
-    for (const [found, way] of held.from) { if (way.key === key && found !== key) { return true; } }
+    const under = key + (this.rules.windows ? "\\" : "/");
+    for (const [found, way] of held.from) { if (this.touches(way, found, key, under)) { return true; } }
     return false;
   }
 
-  /** An event for a file that is no .md by its name: it may be what a link `Name.md` leads to, changed, made or
-   *  deleted. Then the link is read again. Any other file is nothing to the index, and nothing is read. */
-  private throughLink(held: Held, file: string): Promise<boolean> | boolean {
+  /** An event for a path that is no note by its name and no folder of notes: it may be what a link `Name.md`
+   *  leads to, changed, made or deleted, or a folder above such a file (`.cache/sub` renamed or deleted, with
+   *  `Alias.md` leading to `.cache/sub/note.txt`). Then each such link is read again: one pass over the
+   *  remembered links. Any other path is nothing to the index, and nothing is read. */
+  private async throughLink(held: Held, file: string): Promise<boolean> {
     let key: string;
     try { key = this.keyOf(file); } catch { return false; }
-    for (const [found, way] of held.from) {
-      if (way.key === key && found !== key) { return this.rereadWork(held, way.file); }
+    const under = key + (this.rules.windows ? "\\" : "/");
+    // The links are taken first: reading one again changes what is remembered.
+    const links: string[] = [];
+    for (const [found, way] of held.from) { if (this.touches(way, found, key, under)) { links.push(way.file); } }
+    let changed = false;
+    for (const link of links) {
+      if (!this.live(held)) { return false; }
+      if (await this.rereadWork(held, link)) { changed = true; }
     }
-    return false;
+    return changed;
   }
 
   /** Reads one file again after it changed, appeared or went. */
