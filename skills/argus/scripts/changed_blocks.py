@@ -24,14 +24,18 @@ with the source file as it is on disk now and gives each block one state:
   ambiguous  the same code is at several places and the order of the blocks does not decide which
   undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
              limit. Its code may be in the source as it was
-  not compared  the block has no code of its own that the script can take: no code fence in its own section, or
-             two code fences directly under each other. A PROBLEM line says what to repair in the note. It is not
-             a changed block, and the result is not CURRENT while one exists. The note's form is checked in every
+  not compared  the block has no code of its own that the script can take: no code fence in its own section, a
+             code fence with no line in it, or two code fences directly under each other. A PROBLEM line says
+             what to repair in the note. It is not a changed block, and the result is not CURRENT while one
+             exists. The note's form is checked in every
              run, with or without --fix-moved, before any block is compared. Only what makes a block's code,
              heading or section unsure stops the comparison, and then every block of the note is not compared:
              code fences that two readings of the note take differently (a line that begins with ``` and holds
              another backtick, a fence never closed, a fence of ~, an indented fence, a fence in a quote or a
-             list item) and a heading in any form but # marks at the beginning of a line, a space and text
+             list item) and a heading in any form but # marks at the beginning of a line, a space and text.
+             A line of only = or only - is such a heading (an underlined one) only directly under a line of
+             paragraph text. Under a blank line, a # heading, a table, a list item, a quote, a code fence or
+             another rule, a line --- is a rule, and a rule stops nothing
 
 It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
 covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
@@ -438,6 +442,14 @@ def compare(note_lines, props, lines):
     for block in blocks:
         if block["first"] is None and "stray" not in block:
             problems.append(f"block {block['id']} has no code fence")
+        elif block["first"] is not None and not block["code"]:
+            # The fence is there and holds no line: the code was never copied into it. Code of zero lines is in
+            # no file, so a comparison would say 'changed' of a block whose source may be as it was. Nothing is
+            # compared for this block. The note's form is sure, so its other blocks are compared and written as
+            # usual.
+            block["empty"] = True
+            problems.append(f"block {block['id']}: its code fence is empty: copy the block's code into it, then "
+                            f"run again")
         starts, possible, cut = places(text, block["code"], block["a"], declared, keep, budget)
         if cut:
             cut_short.add(len(found))
@@ -458,9 +470,11 @@ def compare(note_lines, props, lines):
     for index, block in enumerate(blocks):
         length, a, b = len(block["code"]), block["a"], block["b"]
         entry = {"id": block["id"], "from": a, "to": b, "lines": length}
-        if block["first"] is None:
+        if block["first"] is None or block.get("empty"):
             entry["no_code"] = True                  # no code of its own to compare: no place is stated for it
-        best = best_starts[index]
+        if block.get("empty"):
+            entry["empty_fence"] = True
+        best =best_starts[index]
         if len(best) == 1 and not left_out[index] and cut_short and not (best[0] + 1 == a and b == a + length - 1):
             # The block is not at its recorded lines, and places of some block of this note were left out of the
             # search. The best way to place the blocks could be another one with those places, also for a block
@@ -851,7 +865,9 @@ STOPS_COMPARING = {
     # section longer than it is, and a fence after it can be taken for the code of a block that has none.
     "heading indented": "a heading that does not start at the beginning of its line",
     "heading tab or empty": "a heading with a tab after its # marks, or without text",
-    "heading underlined": "an underlined heading (a line of = or - directly under a line of text)",
+    # Only under paragraph text. A line --- under a blank line, a # heading, a table, a list item, a quote, a
+    # fence or another rule is a rule: it ends no section, and no test names it.
+    "heading underlined": "an underlined heading (a line of = or - directly under a line of paragraph text)",
     "heading in quote or list": "a heading inside a quote or a list item",
 }
 # Kind B. The writer does not handle it; code, headings and sections are read as without it. The note is compared
@@ -870,6 +886,9 @@ STOPS_WRITING = {
 assert not set(STOPS_COMPARING) & set(STOPS_WRITING), "a test of the guard is in both lists"
 
 SEPARATOR_ROW = re.compile(r"\|(\s*:?-+:?\s*\|)+\s*")
+UNDERLINE = re.compile(r"[ \t]*(?:=+|-+)[ \t]*")                  # what can make the line above it a heading
+RULE_LINE = re.compile(r"[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*")    # a rule: ---, ***, ___, also - - -
+FAR = float("inf")                                               # the text column of a quote: no line reaches it
 OWN_HEADING = re.compile(r"### Block \w+\b.*\(lines? \d+(\s*-\s*\d+)?\)\s*")
 OWN_LINE_CELL = re.compile(r"\s*\d+(\s*-\s*\d+)?\s*")
 
@@ -906,8 +925,11 @@ def form_tests(lines):
     closed, an HTML block, an Obsidian comment, a table that is indented, has no separator row, or stands
     directly under another table or under a quote or list item, '<?' or '<!' outside code, and every other form
     of heading: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
-    without text. The properties block at the top is left out. Before all that, the check's reading of the
-    note's fences (fence_mask) and CommonMark's (commonmark_fences) must give the same lines as code.
+    without text. A line of only = or only - is an underlined heading only when the line directly above it is
+    paragraph text and the line stands in that paragraph's container (see `above` below); in every other place
+    a line --- is a rule and is not named. The properties block at the top is left out. Before all that, the
+    check's reading of the note's fences (fence_mask) and CommonMark's (commonmark_fences) must give the same
+    lines as code.
     After a test of STOPS_COMPARING nothing more needs to be read; after one of STOPS_WRITING the reading goes
     on as if the line were plain text."""
     # First of all: the check's reading of the fences and CommonMark's must give the same lines as code. Where
@@ -918,7 +940,19 @@ def form_tests(lines):
             break
     fence, fence_at, rows = None, 0, 0
     props = bool(lines) and lines[0].strip() == "---"        # the properties block: its lines are no Markdown
-    text_above = marker_above = False                # the line before holds text; it begins with a quote or list mark
+    marker_above = False                             # the line before begins with a quote or list mark
+    # For the underlined heading. Markdown makes a line of = or - a heading only under paragraph text, and only
+    # in the paragraph's own container: under '- item' a line --- at the beginning of the line is a rule.
+    #   above  None when the line before is no paragraph text (blank, a # heading, a rule, a row of a table, a
+    #          fence, an empty list item, a quote); else the column from which a line under it is in the same
+    #          container: 0 at the top level, the item's text column in a list item
+    #   item   the text column of the list item that is open (FAR for a quote), or None
+    #   lazy   the line before is paragraph text of that item: a line of text under it goes on with it, at any
+    #          indent
+    # Where the reading is not sure, the line counts as paragraph text at the top level: a heading is then
+    # named that may be none, never the other way round.
+    above, item, lazy = None, None, False
+    table, header_cells = False, 0                   # inside a table with a separator row that fits its heading row
     for n, line in enumerate(lines, 1):
         if props:
             props = n == 1 or line.strip() != "---"
@@ -929,7 +963,8 @@ def form_tests(lines):
         if fence is not None:
             if indent == 0 and ticks >= fence and text.strip("`").strip() == "":
                 fence = None
-            text_above = marker_above = False
+            marker_above = False
+            above, item, lazy = None, None, False
             continue
         if ticks >= 3 and "`" in text[ticks:]:
             # Outside a fence, three or more backticks and another backtick after the whole run: inline code that
@@ -937,7 +972,8 @@ def form_tests(lines):
             yield n, "fence inline"
         if indent == 0 and ticks >= 3:
             fence, fence_at, rows = ticks, n, 0
-            text_above = marker_above = False
+            marker_above = False
+            above, item, lazy, table = None, None, False, False
             continue
         # Headings end sections. The readers know one form: # marks at the beginning of the line, then a space and
         # text. Every other form of heading is named, not read.
@@ -946,12 +982,13 @@ def form_tests(lines):
                 yield n, "heading indented"
             if "\t" in line[:8].lstrip("#")[:1] or not line.strip("# \t"):
                 yield n, "heading tab or empty"
-        if text_above and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", line):
+        wide = line.expandtabs(4)
+        column = len(wide) - len(wide.lstrip(" "))
+        if above is not None and column >= above and UNDERLINE.fullmatch(line):
             yield n, "heading underlined"
         if not text.startswith("|") and re.fullmatch(r":?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*", text):
             yield n, "table without |"
         was_marker = marker_above
-        text_above = bool(line.strip())
         if text.startswith("~~~"):
             yield n, "fence of ~"
         if ticks >= 3:
@@ -959,6 +996,31 @@ def form_tests(lines):
         marker = re.match(r"(?:>\s?|[-*+]\s+|\d+[.)]\s+)+", text)
         inner = text[marker.end():] if marker else ""
         marker_above = bool(marker)
+        # What this line is for a line of = or - directly under it.
+        if not text.startswith("|"):
+            table = False
+        elif rows == 0:
+            table, header_cells = False, len(pipe_cells(line))
+        elif rows == 1:
+            table = SEPARATOR_ROW.fullmatch(line.rstrip()) is not None and len(pipe_cells(line)) == header_cells
+        if not text:
+            above, lazy = None, False                # a blank line ends the paragraph; the list item stays open
+        elif marker:
+            lead = (line[:indent] + marker.group()).expandtabs(4)
+            reach = FAR if ">" in marker.group() else len(lead)
+            # Paragraph text after the mark opens a paragraph in the item. Not: nothing, a heading, a rule, a
+            # fence, a table row, HTML, or text five or more columns after the mark (that is indented code).
+            opens = (bool(inner.strip()) and len(lead) - len(lead.rstrip(" ")) <= 4
+                     and not re.match(r"#{1,6}(?:[ \t]|$)|```|~~~|\||<", inner) and not RULE_LINE.fullmatch(inner))
+            item = reach if inner.strip() else None
+            above, lazy = (reach if opens and reach != FAR else None), opens
+        elif (re.fullmatch(r"(?:[-*+]|\d+[.)])[ \t]*", text) or re.match(r"#{1,6}(?:[ \t]|$)", text)
+              or RULE_LINE.fullmatch(line) or table):
+            above, item, lazy = None, None, False    # an empty list item, a # heading, a rule, a row of a table
+        elif item is not None and (lazy or column >= item) and not text.startswith("<"):
+            above, lazy = (None if item == FAR else item), True      # text of the open list item or quote
+        else:
+            above, item, lazy = 0, None, False       # paragraph text at the top level
         if marker and (inner.startswith("```") or inner.startswith("~~~")):
             yield n, "fence in quote or list"
         if marker and inner.startswith("|"):
@@ -1050,7 +1112,11 @@ def own_check(old, new):
     place = ""                                       # which template table may begin on the next row: level2 or line
     moved_head = 0                                   # the line of a changed block heading whose code fence is not seen yet
     closed_at, watched = -1, 0                       # where a block's code fence closed; that block's changed heading
-    text_above = False                               # the line before holds text (for an underlined heading)
+    # For an underlined heading, read here once more and with nothing of the guard's: a line of = or - is a
+    # heading only directly under paragraph text, in that paragraph's own container.
+    under = None                                     # the column from which a line is under paragraph text, or None
+    in_item, runs_on = None, False                   # the open list item's text column; its paragraph goes on
+    row_count, first_cells, real_table = 0, 0, False # the table we are in: rows, cells of row 1, a fitting separator
     kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
         props_line = in_props and n > 1
@@ -1091,9 +1157,47 @@ def own_check(old, new):
             marks = re.match(r"(#{1,6})(?:[ \t]|$)", bare)
             if marks:
                 level, plain = len(marks.group(1)), bare == was and was[len(marks.group(1)):][:1] == " "
-            elif text_above and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", was):
+            elif (under is not None and len(was.expandtabs(4)) - len(was.expandtabs(4).lstrip(" ")) >= under
+                  and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", was)):
                 level = 1 if "=" in was else 2
-        text_above = not inside and not in_props and bool(was.strip())
+        # What this line is for a line of = or - directly under it. Paragraph text at the top level gives 0, in a
+        # list item the item's text column. Nothing gives a column: a blank line, a line of or in a fence, the
+        # properties, a # heading, a rule (---, ***, ___), an empty list item, a quote line, and a row of a
+        # table that has a separator row with as many cells as its first row.
+        stripped = was.lstrip(" \t")
+        if inside or in_props:
+            under, in_item, runs_on, row_count, real_table = None, None, False, 0, False
+        else:
+            if not stripped.startswith("|"):
+                row_count, real_table = 0, False
+            else:
+                row_count += 1
+                cell_count = len(re.split(r"(?<!\\)\|", was)) - 2
+                if row_count == 1:
+                    first_cells = cell_count
+                elif row_count == 2:
+                    real_table = (re.fullmatch(r"\|(?:\s*:?-+:?\s*\|)+\s*", was) is not None
+                                  and cell_count == first_cells)
+            mark = re.match(r"(?:>\s?|[-*+]\s+|\d+[.)]\s+)+", stripped)
+            if not stripped:
+                under, runs_on = None, False
+            elif mark:
+                before = (was[:len(was) - len(stripped)] + mark.group()).expandtabs(4)
+                rest = stripped[mark.end():]
+                quoted = ">" in mark.group()
+                paragraph = (rest.strip() != "" and len(before) - len(before.rstrip(" ")) <= 4
+                             and re.match(r"#{1,6}(?:[ \t]|$)|```|~~~|\||<", rest) is None
+                             and re.fullmatch(r"[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*", rest) is None)
+                in_item = None if not rest.strip() else float("inf") if quoted else len(before)
+                under, runs_on = (len(before) if paragraph and not quoted else None), paragraph
+            elif (level or re.fullmatch(r"(?:[-*+]|\d+[.)])[ \t]*", stripped) or real_table
+                  or re.fullmatch(r"[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*", was)):
+                under, in_item, runs_on = None, None, False
+            elif (in_item is not None and not stripped.startswith("<")
+                  and (runs_on or len(was.expandtabs(4)) - len(was.expandtabs(4).lstrip(" ")) >= in_item)):
+                under, runs_on = (None if in_item == float("inf") else in_item), True
+            else:
+                under, in_item, runs_on = 0, None, False
         if level:
             # A heading ends what is not deeper than it: a ## section at # or ##, a block at #, ## or ###.
             if level <= 2:
@@ -1353,14 +1457,16 @@ def build(path, text, root, scopes, known):
         elif (plain_relative(given) is None or os.path.lexists(target)
               or not missing_under_root(root, plain_relative(given))):
             # Not a missing file. Its form is no plain path under the root (a drive, a network start, a leading
-            # slash, a '..' part, a name no Windows file can have such as 'a?.py' or 'NUL', on every system), or
+            # slash, a '..' part, a name no Windows file can have such as 'a?.py' or 'NUL', on every system, or
+            # white space at an end of the value, such as "missing.py " inside quotes), or
             # something is there that on_disk() refused (a folder, a link that leads out),
             # or the folder it would lie in is itself not under the root (a folder link that leads out). A mistake
             # in the property or in the source root.
             report["source_state"] = "rejected"
             report["problems"].append(f"property 'source' is '{given}': not the path of a file under the source root "
                                       f"(a drive or an absolute path, a path leading out of it, a name that is not a "
-                                      f"file path, such as one with ? | * < > \" or a device name, or no plain file). "
+                                      f"file path, such as one with ? | * < > \" or a device name, a value with a "
+                                      f"space or tab at its beginning or end, or no plain file). "
                                       f"This is a mistake in the "
                                       f"property or in --source, not a deleted file. Remove nothing; tell the person")
         elif others == 0:
@@ -1665,6 +1771,7 @@ def print_report(report):
                       f"the place and set the block's line numbers by hand")
         elif entry["state"] == "not compared":
             why = ("the note's code fences or headings can be read in two ways" if entry.get("note_form") else
+                   "its code fence is empty" if entry.get("empty_fence") else
                    "it has no code fence of its own to compare")
             print(f"NOT COMPARED {was}: {why} (see PROBLEM). Not a changed "
                   f"block, and nothing is said about its place: repair the note's form, then run again")

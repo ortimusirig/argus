@@ -188,10 +188,16 @@ def plain_relative(rel):
     it is no such path: empty, with a drive ('C:/x', also 'Z:x' without a slash), a network start ('//server'),
     a leading / or \\, a '..' part, or a part that no Windows file name can be ('a?.py', 'a|b.py', a name that
     ends in a dot or a space, 'NUL', 'com1.txt'). The last holds on every system: a set of notes moves between
-    systems, so such a 'source' is a mistake in the property wherever it is read. It does not look at the disk:
+    systems, so such a 'source' is a mistake in the property wherever it is read. A value with white space at
+    its beginning or end, or with a control character anywhere, is refused too, and it is tested as it was
+    given, before anything is taken away: 'missing.py ' (written inside quotes) is not the path 'missing.py'.
+    It does not look at the disk:
     on_disk() says whether a file is there. A path that this function refuses can never be 'a file that was
     deleted'; it is a mistake in a property."""
-    text = str(rel).strip().replace("\\", "/")
+    given = str(rel)
+    if given != given.strip() or re.search(r"[\x00-\x1f\x7f-\x9f]", given):
+        return None
+    text = given.replace("\\", "/")
     if not text or text.startswith("/") or PureWindowsPath(text).drive or ":" in text.split("/")[0]:
         return None
     parts = [part for part in text.split("/") if part not in ("", ".")]
