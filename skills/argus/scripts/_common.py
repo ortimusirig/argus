@@ -179,15 +179,19 @@ def on_disk(root, rel):
 
 
 # What no file or folder name on Windows can be: one that holds < > : " | ? * or a control character, one that
-# ends in a dot or a space, or the name of a device (CON, NUL, COM1 ..., with or without an extension).
-NO_FILE_NAME = re.compile(r'[<>:"|?*\x00-\x1f]|[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]) *(?:\.|$)', re.IGNORECASE)
+# ends in a dot or a space, or the name of a device (CON, NUL, COM1 ..., CONIN$, CONOUT$, and COM or LPT with a
+# superscript digit 1, 2 or 3, which Windows takes as a digit; with or without an extension, in any letter case).
+NO_FILE_NAME = re.compile(r'[<>:"|?*\x00-\x1f]|[. ]$'
+                          r'|^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])'
+                          r' *(?:\.|$)', re.IGNORECASE)
 
 
 def plain_relative(rel):
     """rel as a plain path under the source root, with / and without '.' parts, or None when its form alone says
     it is no such path: empty, with a drive ('C:/x', also 'Z:x' without a slash), a network start ('//server'),
     a leading / or \\, a '..' part, or a part that no Windows file name can be ('a?.py', 'a|b.py', a name that
-    ends in a dot or a space, 'NUL', 'com1.txt'). The last holds on every system: a set of notes moves between
+    ends in a dot or a space, 'NUL', 'com1.txt', 'CONIN$', COM or LPT with a superscript digit). The last holds
+    on every system: a set of notes moves between
     systems, so such a 'source' is a mistake in the property wherever it is read. A value with white space at
     its beginning or end, or with a control character anywhere, is refused too, and it is tested as it was
     given, before anything is taken away: 'missing.py ' (written inside quotes) is not the path 'missing.py'.
@@ -219,6 +223,24 @@ def missing_under_root(root, plain):
         return path.resolve().is_dir()
     except (OSError, ValueError):
         return False
+
+
+def real_parts(path):
+    """The parts of a path after every link and junction on the way is followed (Path.resolve(), as for the
+    source root), on Windows without regard to letter case."""
+    parts = Path(path).resolve().parts
+    return tuple(os.path.normcase(part) for part in parts) if WINDOWS else parts
+
+
+def lies_under(path, folder):
+    """Whether a file lies under a folder by its real path: both are resolved in the same way and compared part
+    by part. False for a file under a folder junction or folder link that leads out of the folder, and when
+    either cannot be resolved."""
+    try:
+        mine, base = real_parts(path), real_parts(folder)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return len(mine) > len(base) and mine[:len(base)] == base
 
 
 def all_files(root):
