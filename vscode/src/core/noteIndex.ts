@@ -269,7 +269,9 @@ export class NoteIndex {
           for (const [found, way] of held.from) { if (way.key !== found && found.startsWith(under)) { folder = true; break; } }
         }
       } else if (folder && parts.length > 0 && parts[parts.length - 1].startsWith(".")) {
-        return false;
+        // The folder itself has a name that starts with a dot (`.cache` replaced, and only its own event came):
+        // no note is found under it, but a link among the notes may lead into it, and is read again.
+        return this.throughLink(held, file);
       }
       if (folder) { return held.refreshed > asked ? false : this.refreshWork(held); }
       return isNoteFile(path.basename(file), this.rules.windows) ? this.rereadWork(held, this.wayOf(held, file)) : this.throughLink(held, file);
