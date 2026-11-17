@@ -350,6 +350,57 @@ def check_stale(name, props, root, kind, src=None):
     return "commit"
 
 
+# ---------------------------------------------------------------- Flow notes
+
+BLOCK_ID = r"\d\w*"
+ID_LIST = BLOCK_ID + r"(?:(?:\s*,\s*|\s+and\s+|\s+to\s+)" + BLOCK_ID + r")*"
+IDS_IN_NODE = re.compile(r"\((?:blocks?\s+)?(" + ID_LIST + r")\)")   # in the diagram: (53a), (53a, 53b), (32 to 34)
+IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
+
+
+def check_flow_note(name, lines, mask, file_blocks):
+    """A Flow note has an 'Every outcome' table with a row, and every block id its diagram or its Steps table
+    names is a block of a File note it links to. `file_blocks` is {File note name: its block ids}."""
+    outcome = [cells(row) for row in section(lines, mask, "Every outcome") or [] if is_row(row)]
+    if len([c for c in outcome if c and not set("".join(c)) <= set("-: ")]) < 2:   # the heading row and one more
+        fails.append(f"{name}: a flow note needs an '## Every outcome' table with at least one row")
+
+    def linked(text):
+        found = []
+        for target in LINK.findall(without_inline_code(text)):
+            target = target.rstrip("\\").strip().split("/")[-1]
+            target = target[:-3] if target.lower().endswith(".md") else target
+            if target in file_blocks and target not in found:
+                found.append(target)
+        return found
+
+    all_linked = linked("\n".join(line for i, line in enumerate(lines) if not mask[i]))
+    named = []                                       # (where, the ids as written, the File notes to look in)
+    inside = False
+    for i, line in enumerate(lines):
+        if mask[i] and re.match(r"^`{3,}mermaid\s*$", line):
+            inside = True
+        elif mask[i] and inside and FENCE.match(line):
+            inside = False
+        elif mask[i] and inside:
+            named += [("the diagram", m.group(1), all_linked) for m in IDS_IN_NODE.finditer(line)]
+    for row in section(lines, mask, "Steps") or []:
+        if is_row(row):
+            named += [("the Steps table", m.group(1), linked(row) or all_linked)
+                      for m in IDS_IN_ROW.finditer(without_inline_code(row))]
+    if named and not all_linked:
+        warns.append(f"{name}: it names blocks but links no File note, so the block ids cannot be checked")
+        return
+    unknown = {}
+    for where, written, notes in named:
+        known = set().union(*(file_blocks[n] for n in notes))
+        for block_id in re.findall(BLOCK_ID, written):
+            if block_id not in known:
+                unknown.setdefault((where, block_id), notes)
+    for (where, block_id), notes in sorted(unknown.items()):
+        fails.append(f"{name}: {where} names block {block_id}, which is no block of {', '.join(notes)}")
+
+
 # ---------------------------------------------------------------- the graph
 
 def check_graph(graph_path, own_words, files):
@@ -469,6 +520,7 @@ def main():
 
     explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
     judged_by = {}  # note name: 'hash' or 'commit', how its stale check was made
+    file_blocks, flows, projects = {}, {}, {}  # block ids of each File note; Flow notes to check; kinds per project
     for name, p in notes.items():
         text = read_text(p)[0].replace("\r\n", "\n").replace("\r", "\n")
         props = frontmatter(text)
@@ -476,6 +528,7 @@ def main():
             unowned.append(name)  # someone's own note: kept for link resolution, never checked
             continue
         kind = kinds[name] = props.get("type", "")
+        projects.setdefault(props.get("project", ""), []).append(kind)
         if not kind:
             warns.append(f"{name}: no 'type' property")
         lines = text.split("\n")
@@ -490,6 +543,7 @@ def main():
                 if src in explained:
                     fails.append(f"{name}: {src} is also explained by the note '{explained[src]}'")
                 explained[src] = name
+                file_blocks[name] = {block["id"] for block in note_blocks(lines, mask)}
                 # The note's own words: not the properties, the title or the Source line (they hold the file name).
                 own_words[src] = "\n".join(line for number, line in prose
                                            if number - 1 > props_end(lines)
@@ -507,6 +561,8 @@ def main():
                          for i in range(opens[0] + 2, min(opens[0] + 200, len(lines))) if mask[i]):
                 fails.append(f"{name}: the mermaid diagram is empty")
             judged_by[name] = check_stale(name, props, root, kind)
+            if kind == "flow":
+                flows[name] = (lines, mask)
         body_from = props_end(lines) + 1  # the first line after the properties, counted from 1
         tags = []
         for number, line in prose:
@@ -530,6 +586,12 @@ def main():
             shown = ", ".join(map(str, tags[:10])) + (" ..." if len(tags) > 10 else "")
             warns.append(f"{name}: <word> outside code on line {shown}: Obsidian reads it as HTML and does not show "
                          f"it; put it in backticks")
+    for name, (lines, mask) in flows.items():
+        check_flow_note(name, lines, mask, file_blocks)
+    for project, found_kinds in sorted(projects.items()):
+        if "file" in found_kinds and "flow" not in found_kinds:
+            warns.append(f"project '{project}' has {found_kinds.count('file')} File notes and no End-to-End Flow "
+                         f"note: write one for the main path through the code")
     for name in kinds:
         if kinds[name] != "start" and not name.endswith("Start Here") and not (linked_by.get(name, set()) - {name}):
             fails.append(f"{name}: no other note links to it")
