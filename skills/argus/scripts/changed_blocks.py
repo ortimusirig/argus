@@ -24,6 +24,9 @@ with the source file as it is on disk now and gives each block one state:
   ambiguous  the same code is at several places and the order of the blocks does not decide which
   undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
              limit. Its code may be in the source as it was
+  not compared  the block has no code of its own that the script can take: no code fence in its own section, or
+             two code fences directly under each other. A PROBLEM line says what to repair in the note. It is not
+             a changed block, and the result is not CURRENT while one exists
 
 It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
 covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
@@ -107,7 +110,7 @@ from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
-STATES = ("same", "moved", "changed", "displaced", "ambiguous", "undecided")
+STATES = ("same", "moved", "changed", "displaced", "ambiguous", "undecided", "not compared")
 SHOWN = 12              # places or ranges written out in one line of the plain report
 LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
@@ -453,6 +456,10 @@ def compare(note_lines, props, lines):
             entry["state"] = "undecided"
         else:
             entry["state"] = "changed"
+        if entry.get("no_code"):
+            # Nothing was compared: the note's form is at fault (see the PROBLEM line), not the block's code. Such
+            # a block is no changed block and never a reason to rewrite anything.
+            entry["state"] = "not compared"
         result.append(entry)
     # A block without a place whose whole code is in the source at lines no placed block holds: it moved past
     # other blocks. It becomes 'displaced'.
@@ -1357,6 +1364,7 @@ def finish(report, known):
         todo.append("the source file is gone: say which file, then move or remove the note as the vault's rules "
                     "say (Later runs, step 3)")
     if (counts["changed"] or counts["displaced"] or counts["ambiguous"] or counts["undecided"] or counts["moved"]
+            or counts["not compared"]
             or report["unexplained"]
             or report["problems"]):
         todo.append("blocks: act on the lines above (Later runs, step 3)")
@@ -1502,7 +1510,8 @@ def print_report(report):
         print(f"WROTE {name}: {item}")
     print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
           f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['displaced']} "
-          f"displaced, {counts['ambiguous']} ambiguous, {counts['undecided']} undecided; {len(report['unexplained'])} unexplained ranges; {hash_state}")
+          f"displaced, {counts['ambiguous']} ambiguous, {counts['undecided']} undecided, {counts['not compared']} "
+          f"not compared; {len(report['unexplained'])} unexplained ranges; {hash_state}")
     if report["source_state"] == "gone":
         print(f"GONE {name}: {report['gone']}")
     for item in report["problems"]:
@@ -1547,9 +1556,9 @@ def print_report(report):
                       f"of the blocks does not allow it there; there is more than one such place, or another block "
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
-        elif entry["state"] == "changed" and entry.get("no_code"):
-            print(f"CHANGED {was}: it has no code fence of its own to compare (see PROBLEM). Nothing is said about "
-                  f"its place: give the block its code fence first")
+        elif entry["state"] == "not compared":
+            print(f"NOT COMPARED {was}: it has no code fence of its own to compare (see PROBLEM). Not a changed "
+                  f"block, and nothing is said about its place: repair the note's form, then run again")
         elif entry["state"] == "changed":
             if entry.get("spaces_only"):
                 print(f"CHANGED {was}: not found as copied, but at {at(*entry['likely'])} it differs only in spaces "
@@ -1683,7 +1692,8 @@ def main():
     where = ", ".join(scopes) if scopes else "whole source root"
     print(f"RESULT scope {where}: {len(reports)} File notes, {sum(len(r['blocks']) for r in reports)} blocks: "
           f"{totals['same']} same, {totals['moved']} moved, {totals['changed']} changed, {totals['displaced']} "
-          f"displaced, {totals['ambiguous']} ambiguous, {totals['undecided']} undecided, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
+          f"displaced, {totals['ambiguous']} ambiguous, {totals['undecided']} undecided, {totals['not compared']} "
+          f"not compared, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
           f"{sum(len(r['wrote']) for r in reports)} written, {stale_dependents} of {len(dependents)} Mechanism "
           f"and Flow notes to look at: {verdict}")
     sys.exit(code)
