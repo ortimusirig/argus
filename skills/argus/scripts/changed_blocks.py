@@ -11,8 +11,9 @@ with the source file as it is on disk now and gives each block one state:
   same       the code is at the recorded lines
   moved      the code is the same, at other lines; the new lines are given
   changed    the code is no longer in the source. Given: the lines where it was expected, the unexplained lines
-             beside it that may be its new form, and whether it is gone. Or its whole code is in the source but
-             past other blocks (two functions changed places): then the lines where it is now are given
+             beside it that may be its new form, and whether it is gone
+  displaced  the code is unchanged and whole in the source, but past other blocks (two functions changed places):
+             the lines where it is now are given. It is not a changed block and nothing of it is rewritten
   ambiguous  the same code is at several places and the order of the blocks does not decide which
   undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
              limit. It is not a changed block: its code may be in the source as it was
@@ -97,7 +98,7 @@ PLACES = 200_000        # places all blocks of one note together may keep; each 
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
 HINT_WORK = 3_000_000       # lines of old code times lines beside it, for the "lines still there" hints of one note
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
-STATES = ("same", "moved", "changed", "ambiguous", "undecided")
+STATES = ("same", "moved", "changed", "displaced", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
 LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
@@ -422,7 +423,8 @@ def compare(note_lines, props, lines):
         else:
             entry["state"] = "changed"
         result.append(entry)
-    # A changed block whose whole code is in the source at lines no placed block holds: it moved past other blocks.
+    # A block without a place whose whole code is in the source at lines no placed block holds: it moved past
+    # other blocks. It becomes 'displaced'.
     # --fix-moved may write such a move only when it is the block's one free place and no other block without a
     # sure place could take any of those lines: not a changed block, not an ambiguous one, at none of its places.
     # When the search for places was cut short somewhere, places may be unseen, and no such move is offered.
@@ -430,6 +432,9 @@ def compare(note_lines, props, lines):
         length = entry["lines"]
         free = [s for s in found[index] if not any(covered[s:s + length])] if entry["state"] == "changed" else []
         if free:
+            # Its code is not changed: it is whole in the source, at lines no placed block holds, only not where
+            # the order of the blocks allows it. That is a block out of place, not a block to rewrite.
+            entry["state"] = "displaced"
             entry["elsewhere"] = [[s + 1, s + length] for s in free[:SHOWN]]
             entry["_free"] = free
     for index, entry in enumerate(result):
@@ -960,7 +965,8 @@ def finish(report, known):
     if report["source_state"] == "gone":
         todo.append("the source file is gone: say which file, then move or remove the note as the vault's rules "
                     "say (Later runs, step 3)")
-    if (counts["changed"] or counts["ambiguous"] or counts["undecided"] or counts["moved"] or report["unexplained"]
+    if (counts["changed"] or counts["displaced"] or counts["ambiguous"] or counts["undecided"] or counts["moved"]
+            or report["unexplained"]
             or report["problems"]):
         todo.append("blocks: act on the lines above (Later runs, step 3)")
     if hash_state == "differs" or (report["wrote"] and hash_state != "none"):
@@ -985,8 +991,7 @@ def finish(report, known):
                     + ". What runs first may have changed. Re-read what rests on these blocks: the Trace, 'Check your "
                     "understanding', and the Flow and Mechanism notes; then put the block sections and the Level 2 "
                     "rows of the note in file order, which ends this line (Later runs, steps 3 and 6)")
-    rewritten = [e for e in report["blocks"] if e["state"] == "changed" and "in_note" in e
-                 and "moved_to" not in e and "elsewhere" not in e]
+    rewritten = [e for e in report["blocks"] if e["state"] == "changed" and "in_note" in e]
     for entry in rewritten[:10]:
         here = entry["in_note"]
         parts = [f"its Level 2 row (note line {here['level2_row']})" if here["level2_row"] else "its Level 2 row",
@@ -1089,8 +1094,8 @@ def print_report(report):
     for item in report["wrote"]:
         print(f"WROTE {name}: {item}")
     print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
-          f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['ambiguous']} "
-          f"ambiguous, {counts['undecided']} undecided; {len(report['unexplained'])} unexplained ranges; {hash_state}")
+          f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['displaced']} "
+          f"displaced, {counts['ambiguous']} ambiguous, {counts['undecided']} undecided; {len(report['unexplained'])} unexplained ranges; {hash_state}")
     if report["source_state"] == "gone":
         print(f"GONE {name}: {report['gone']}")
     for item in report["problems"]:
@@ -1119,30 +1124,31 @@ def print_report(report):
                       f"fits there as well")
             else:
                 print(f"AMBIGUOUS {was}: the same code starts at lines {', '.join(map(str, starts[:SHOWN]))}{more}")
-        elif entry["state"] == "changed":
+        elif entry["state"] == "displaced":
             if "moved_to" in entry:
-                parts = [f"its whole code is at {at(*entry['moved_to'])}, past other blocks: the code is the same, --fix-moved "
-                         f"writes the new lines; check sentences that speak of where it stands"]
-            elif "elsewhere" in entry:
-                parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks; at more than "
-                         f"one place, or where another block could be too, or the search was cut short (BOUNDED): "
-                         f"the code is the same; choose the place, set the block's line numbers by hand and "
-                         f"check sentences that speak of where it stands"]
+                print(f"DISPLACED {was}: its code is unchanged at {at(*entry['moved_to'])}, but the order of the "
+                      f"blocks does not allow it there: it is past other blocks now. Not a changed block. "
+                      f"--fix-moved writes the new lines")
             else:
-                parts = [f"expected at {at(*entry['expected'])}"]
-                if entry.get("spaces_only"):
-                    parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
-                                 f"no explanation or value rests on them, then copy the code again")
-                elif entry["gone"]:
-                    parts.append("its code is gone: no unexplained line between the placed blocks around it. "
-                                 "When you remove the block, add its id to retired_blocks")
-                else:
-                    more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
-                    parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
-                    if "likely" in entry:
-                        still, of = entry["lines_still_there"]
-                        parts.append(f"{still} of its {of} non-blank lines are still there, in "
-                                     f"{at(*entry['likely'])}")
+                print(f"DISPLACED {was}: its code is unchanged at lines {spans(entry['elsewhere'])}, but the order "
+                      f"of the blocks does not allow it there; there is more than one such place, or another block "
+                      f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
+                      f"the place and set the block's line numbers by hand")
+        elif entry["state"] == "changed":
+            parts = [f"expected at {at(*entry['expected'])}"]
+            if entry.get("spaces_only"):
+                parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
+                             f"no explanation or value rests on them, then copy the code again")
+            elif entry["gone"]:
+                parts.append("its code is gone: no unexplained line between the placed blocks around it. "
+                             "When you remove the block, add its id to retired_blocks")
+            else:
+                more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
+                parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
+                if "likely" in entry:
+                    still, of = entry["lines_still_there"]
+                    parts.append(f"{still} of its {of} non-blank lines are still there, in "
+                                 f"{at(*entry['likely'])}")
             print(f"CHANGED {was}: " + "; ".join(parts))
     for u in report["unexplained"]:
         if u["code_of"]:
@@ -1251,8 +1257,8 @@ def main():
             print(f"TODO {dependent['note']}: {item}")
     where = ", ".join(scopes) if scopes else "whole source root"
     print(f"RESULT scope {where}: {len(reports)} File notes, {sum(len(r['blocks']) for r in reports)} blocks: "
-          f"{totals['same']} same, {totals['moved']} moved, {totals['changed']} changed, {totals['ambiguous']} "
-          f"ambiguous, {totals['undecided']} undecided, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
+          f"{totals['same']} same, {totals['moved']} moved, {totals['changed']} changed, {totals['displaced']} "
+          f"displaced, {totals['ambiguous']} ambiguous, {totals['undecided']} undecided, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
           f"{sum(len(r['wrote']) for r in reports)} written, {stale_dependents} of {len(dependents)} Mechanism "
           f"and Flow notes to look at: {verdict}")
     sys.exit(code)
