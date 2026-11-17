@@ -82,7 +82,7 @@ import shutil
 import sys
 import tempfile
 import time
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -95,6 +95,7 @@ from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
+HINT_WORK = 3_000_000       # lines of old code times lines beside it, for the "lines still there" hints of one note
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
 STATES = ("same", "moved", "changed", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
@@ -371,7 +372,8 @@ def compare(note_lines, props, lines):
                             f"(1-{total}) and outside every block")
     ids = [block["id"] for block in blocks]
     for block_id in sorted({i for i in ids if ids.count(i) > 1}):
-        problems.append(f"two '### Block {block_id}' sections")
+        problems.append(f"two '### Block {block_id}' sections: --fix-moved writes nothing for this note until each "
+                        f"block has its own id")
     for block in blocks:
         if block["first"] is None:
             problems.append(f"block {block['id']} has no code fence")
@@ -452,46 +454,77 @@ def compare(note_lines, props, lines):
 
     # For a block without a sure place: where it was expected, and the unexplained lines between the placed blocks
     # around it, which may hold its new form.
+    # Blocks without a sure place that follow each other share the same two placed neighbours and so the same gap:
+    # it is worked out once for the group, not once for each block. The hints of all blocks of the note share one
+    # budget of work, and one line says when hints were left out.
     order = sorted(range(len(blocks)), key=lambda i: blocks[i]["a"])
-    loose = None
-    for rank, index in enumerate(order):
-        entry = result[index]
-        if "at" in entry:
+    starts_of_ranges = [u["from"] for u in unexplained]
+    loose, hint_work, hints_left_out = None, HINT_WORK, 0
+    rank, before = 0, None
+    while rank < len(order):
+        if "at" in result[order[rank]]:
+            before = result[order[rank]]
+            rank += 1
             continue
-        before = next((result[i] for i in reversed(order[:rank]) if "at" in result[i]), None)
-        after = next((result[i] for i in order[rank + 1:] if "at" in result[i]), None)
+        stop = rank
+        while stop < len(order) and "at" not in result[order[stop]]:
+            stop += 1
+        group, after = order[rank:stop], (result[order[stop]] if stop < len(order) else None)
+        rank = stop
         low = before["at"][1] + 1 if before else 1
         high = after["at"][0] - 1 if after else total
         near = before or after
         shift = near["at"][0] - near["from"] if near else 0
-        first = min(max(entry["from"] + shift, 1), max(total, 1))
-        entry["expected"] = [first, min(max(entry["to"] + shift, first), max(total, 1))]
-        gap = [u for u in unexplained if u["from"] >= low and u["to"] <= high]
+        # An unexplained range never crosses a placed block, so the ranges that start in the gap lie in it.
+        gap = unexplained[bisect_left(starts_of_ranges, low):bisect_right(starts_of_ranges, high)]
+        ids = [result[i]["id"] for i in group]
         for u in gap:
-            u["beside"].append(entry["id"])
-        if entry["state"] != "changed":
-            continue
-        entry["new_form"] = [[u["from"], u["to"]] for u in gap]
-        entry["gone"] = not gap
-        entry["between"] = [before["id"] if before else None, after["id"] if after else None]
-        code = blocks[index]["code"]
-        gap_lines = [n for u in gap for n in range(u["from"], u["to"] + 1)]
-        if code and gap_lines and len(code) * len(gap_lines) <= 400_000:
-            # The lines of the old code that are still there, in order: they narrow down where the new form is.
-            matcher = difflib.SequenceMatcher(None, code, [lines[n - 1] for n in gap_lines], autojunk=False)
-            hits = [gap_lines[m.b + k] for m in matcher.get_matching_blocks() for k in range(m.size)
-                    if lines[gap_lines[m.b + k] - 1].strip()]
-            if hits:
-                entry["likely"] = [hits[0], hits[-1]]
-                entry["lines_still_there"] = [len(hits), sum(1 for line in code if line.strip())]
-        if not found[index] and code:
-            # The same code with other white space at the ends of lines.
-            if loose is None:
-                loose = Text([line.rstrip() for line in lines])
-            nearly = places(loose, [line.rstrip() for line in code], blocks[index]["a"], declared, 1, budget)[0]
-            if nearly:
-                entry["spaces_only"] = True
-                entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
+            u["beside"] = ids[:SHOWN]
+            if len(ids) > SHOWN:
+                u["beside_more"] = len(ids) - SHOWN
+        ranges, gap_starts = [[u["from"], u["to"]] for u in gap], [u["from"] for u in gap]
+        gap_size, gap_lines = sum(b - a + 1 for a, b in ranges), None
+        for index in group:
+            entry = result[index]
+            first = min(max(entry["from"] + shift, 1), max(total, 1))
+            entry["expected"] = [first, min(max(entry["to"] + shift, first), max(total, 1))]
+            if entry["state"] != "changed":
+                continue
+            # The ranges nearest to where the block was expected; how many more there are is said beside them.
+            at = max(0, min(bisect_left(gap_starts, first) - 1, len(ranges) - SHOWN))
+            entry["new_form"] = ranges[at:at + SHOWN]
+            if len(ranges) > SHOWN:
+                entry["new_form_more"] = len(ranges) - SHOWN
+            entry["gone"] = not gap
+            entry["between"] = [before["id"] if before else None, after["id"] if after else None]
+            code = blocks[index]["code"]
+            cost = len(code) * gap_size
+            if code and gap_size and cost <= 400_000:
+                if cost > hint_work:
+                    hints_left_out += 1
+                else:
+                    hint_work -= cost
+                    if gap_lines is None:
+                        gap_lines = [n for a, b in ranges for n in range(a, b + 1)]
+                    # The lines of the old code that are still there, in order: they narrow down where the new
+                    # form is.
+                    matcher = difflib.SequenceMatcher(None, code, [lines[n - 1] for n in gap_lines], autojunk=False)
+                    hits = [gap_lines[m.b + k] for m in matcher.get_matching_blocks() for k in range(m.size)
+                            if lines[gap_lines[m.b + k] - 1].strip()]
+                    if hits:
+                        entry["likely"] = [hits[0], hits[-1]]
+                        entry["lines_still_there"] = [len(hits), sum(1 for line in code if line.strip())]
+            if not found[index] and code:
+                # The same code with other white space at the ends of lines.
+                if loose is None:
+                    loose = Text([line.rstrip() for line in lines])
+                nearly = places(loose, [line.rstrip() for line in code], blocks[index]["a"], declared, 1, budget)[0]
+                if nearly:
+                    entry["spaces_only"] = True
+                    entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
+    if hints_left_out:
+        bounded.append(f"the hint 'lines still there' was left out for {hints_left_out} changed blocks: the note has "
+                       f"more changed code than the script allows itself work for. Read the lines named for them")
     # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
     # id the note uses or has retired.
     retired = retired_ids(props)
@@ -711,6 +744,10 @@ def moved_text(data, report):
     mask, blocks, declared = report["_mask"], report["_blocks"], report["_declared"]
     if len(lines) != len(mask):
         return None, [], "the note does not have the lines that were compared; nothing written", left
+    ids = [block["id"] for block in blocks]
+    if len(set(ids)) != len(ids):
+        # A row of a table is found by the block's id; with one id for two blocks a row would get the wrong lines.
+        return None, [], None, left                  # the PROBLEM line of the comparison says why
     wrote, masked_changed = [], False
     # First the line numbers the note cites in its own text, where they are sure: from the right end of each line,
     # so that the places of the others in that line stay true.
@@ -723,6 +760,12 @@ def moved_text(data, report):
     level2_end = len(lines) if level2 is None else next(
         (i for i in range(level2 + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
     masked_new = []                                  # the masked ranges of moved blocks, at their new lines
+    # The tables of the Level 2 section and their line cells, read once, before this run writes anything: each cell
+    # keeps the numbers it held then. A row that starts with the id of a block this run writes is that block's row.
+    level2_tables = [(table, line_cells(lines, table)) for table in
+                     (tables(lines, mask, level2 + 1, level2_end) if level2 is not None else ())]
+    written_ids = {block["id"] for block, entry in zip(blocks, report["blocks"])
+                   if entry["state"] == "moved" or "moved_to" in entry}
     for block, entry in zip(blocks, report["blocks"]):
         if entry["state"] != "moved" and "moved_to" not in entry:
             continue
@@ -761,8 +804,7 @@ def moved_text(data, report):
         # is not written: it is named for a person.
         old_range = [block["a"], block["a"] + len(block["code"]) - 1]
         level2_rows = 0
-        for table in tables(lines, mask, level2 + 1, level2_end) if level2 is not None else ():
-            found, has_column = line_cells(lines, table)
+        for table, (found, has_column) in level2_tables:
             mine = [i for i in table[1:] if (cells(lines[i]) or [""])[0] == block["id"]]
             if mine and not has_column:
                 left.append(f"note line {mine[0] + 1}: this table of Level 2 has no column headed Lines, so the row "
@@ -771,7 +813,8 @@ def moved_text(data, report):
                 if i in mine:
                     lines[i] = f"{lines[i][:a]}{m.group(1)}{new_range}{m.group(5)}{lines[i][b:]}"
                     level2_rows += 1
-                elif delta and [numbers_of(m)[0], numbers_of(m)[-1]] == old_range:
+                elif (delta and [numbers_of(m)[0], numbers_of(m)[-1]] == old_range
+                      and (cells(lines[i]) or [""])[0] not in written_ids):
                     left.append(f"note line {i + 1}: a row of Level 2 holds lines {m.group(0).strip()}, the old lines "
                                 f"of block {block['id']}, but does not start with its id, so it was not written. If "
                                 f"it is that block's row, its lines are now {new_range}")
@@ -1094,7 +1137,8 @@ def print_report(report):
                     parts.append("its code is gone: no unexplained line between the placed blocks around it. "
                                  "When you remove the block, add its id to retired_blocks")
                 else:
-                    parts.append(f"its new form may be in lines {spans(entry['new_form'])}")
+                    more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
+                    parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
                     if "likely" in entry:
                         still, of = entry["lines_still_there"]
                         parts.append(f"{still} of its {of} non-blank lines are still there, in "
@@ -1104,7 +1148,8 @@ def print_report(report):
         if u["code_of"]:
             why = f"holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks"
         elif u["beside"]:
-            why = f"beside block {', '.join(u['beside'])}, which has no sure place: may be its new form"
+            more = f" and {u['beside_more']} more" if "beside_more" in u else ""
+            why = f"beside block {', '.join(u['beside'])}{more}, which has no sure place: may be its new form"
         else:
             why = "new code: no changed block beside it"
         print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
