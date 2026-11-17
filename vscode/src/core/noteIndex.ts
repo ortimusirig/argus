@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { LinkMap, linkMap } from "./links";
 import { FileNote, OtherNote, isArgus, parseFileNote, parseOtherNote, parseProps } from "./notes";
-import { PathRules, Project, relativeIn, sourceInRoot, systemRules } from "./projects";
+import { PathRules, Project, actualFolder, relativeIn, sourceInRoot, systemRules } from "./projects";
 import { decode } from "./readText";
 import { projectKey } from "./settings";
 
@@ -194,7 +194,7 @@ export class NoteIndex {
       const folders: [Place, string][] = [["notes", project.notesFolder]];
       if (project.vaultFolder) { folders.push(["vault", project.vaultFolder]); }
       for (const [, folder] of folders) {
-        for (const file of await mdFiles(folder, this.rules.windows, this.pause, () => this.live(held), unread)) {
+        for (const file of await mdFiles(actualFolder(folder, this.rules), this.rules.windows, this.pause, () => this.live(held), unread)) {
           if (!this.live(held)) { return false; }
           let key: string;
           try { key = this.keyOf(file); } catch { continue; }
@@ -345,7 +345,7 @@ export class NoteIndex {
       // the reading of the folders: a link `Name.md` in a plain folder may lead into such a folder.
       const found = (folder: string | undefined): string[] | undefined => {
         if (folder === undefined) { return undefined; }
-        const rel = path.relative(path.resolve(folder), path.resolve(file));
+        const rel = path.relative(actualFolder(folder, this.rules), path.resolve(file));
         return rel === "" || rel.startsWith("..") || path.isAbsolute(rel) ? undefined : rel.split(path.sep);
       };
       const parts = found(project.notesFolder) ?? found(project.vaultFolder);

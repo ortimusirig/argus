@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { Choices } from "./core/choices";
 import { Entry, NoteIndex } from "./core/noteIndex";
-import { Project, projectFor, realRoot, relativeIn } from "./core/projects";
+import { Project, actualFolder, projectFor, realRoot, relativeIn } from "./core/projects";
 import { projectKey, projectsFrom } from "./core/settings";
 
 const QUIET_MS = 300;
@@ -62,7 +62,7 @@ export class Index implements vscode.Disposable {
   }
 
   private watch(project: Project, folder: string): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(folder)), "**/*"));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(actualFolder(folder)), "**/*"));
     const seen = (uri: vscode.Uri): void => { this.event(project, folder, uri.fsPath); };
     this.watchers.push(watcher, watcher.onDidCreate(seen), watcher.onDidChange(seen), watcher.onDidDelete(seen));
   }
@@ -70,7 +70,7 @@ export class Index implements vscode.Disposable {
   /** A file or a folder under the source root appeared or went (a move is both): which source each File note
    *  names is asked again after 300 ms of quiet, whether or not a check is stored. A changed text moves no file. */
   private watchSource(project: Project): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(project.sourceRoot)), "**/*"));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(actualFolder(project.sourceRoot)), "**/*"));
     const git = `${path.sep}.git${path.sep}`;
     const key = projectKey(project) + "\nsource";
     const seen = (uri: vscode.Uri): void => {
@@ -98,7 +98,7 @@ export class Index implements vscode.Disposable {
   private event(project: Project, folder: string, file: string): void {
     // What lies under a folder whose name starts with a dot is neither the index's nor the checker's, but for a
     // file that a link among the notes leads to: its change is the change of that note.
-    if (path.relative(folder, file).split(path.sep).slice(0, -1).some((part) => part.startsWith("."))
+    if (path.relative(actualFolder(folder), file).split(path.sep).slice(0, -1).some((part) => part.startsWith("."))
       && !this.notes.leadsTo(project, file)) { return; }
     this.touched.fire(project);
     const key = projectKey(project) + "\n" + file;

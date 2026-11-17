@@ -12,7 +12,7 @@ import { GitWatch } from "./core/gitWatch";
 import { graphPlaces, isPlace } from "./core/graphWatch";
 import { Entry } from "./core/noteIndex";
 import { Badge } from "./core/panelHtml";
-import { Project, systemRules } from "./core/projects";
+import { Project, actualFolder } from "./core/projects";
 import { Ran, RunOptions, checkerArgs, mayRun } from "./core/run";
 import { projectKey, userPython } from "./core/settings";
 import { Checks, Memory, Stored, memoryOf } from "./core/validity";
@@ -105,8 +105,8 @@ export class Check implements vscode.Disposable {
     // The graph's path as the checker reads it: links and ".." in its folder by the file system's own rule, then
     // the file's name. The file itself may be a link; that is asked next.
     const given = per.project.graph;
-    let home: string;
-    try { home = systemRules.real(path.dirname(path.resolve(given))); } catch { home = path.dirname(path.resolve(given)); }
+    // The folder is given to the file system as it is written: a ".." after a link must not be taken out first.
+    const home = actualFolder(path.dirname(given));
     const graph = path.join(home, path.basename(given));
     const asked = ++per.graphAsked;
     const real = await fs.promises.realpath(graph).catch(() => undefined);
@@ -134,9 +134,10 @@ export class Check implements vscode.Disposable {
   /** `source`: the watcher on the whole source root. What git keeps under it is followed by the git watchers,
    *  through HEAD and the refs only; while there are none, an event there has git asked again (core/gitWatch.ts). */
   private watch(per: Per, folder: string, pattern: string, source = false, into: vscode.Disposable[] = per.watchers): void {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.resolve(folder)), pattern));
+    const at = actualFolder(folder);     // the folder as the file system finds it: its events name paths under it
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(at), pattern));
     const seen = (kind: "create" | "change" | "delete") => (uri: vscode.Uri): void => {
-      const what = source ? per.git.seen(path.relative(folder, uri.fsPath), kind) : { touch: true, discover: false };
+      const what = source ? per.git.seen(path.relative(at, uri.fsPath), kind) : { touch: true, discover: false };
       if (what.discover) { this.gitSoon(per); }
       if (what.touch) { this.touch(per); }
     };

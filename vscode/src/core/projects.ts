@@ -326,6 +326,13 @@ export function relativeIn(root: string, filePath: string, rules: PathRules = sy
   }
 }
 
+/** A configured folder as the file system finds it: links and ".." by the system's own rule (a ".." after a link
+ *  leaves the link's target, not the link's place). The folder's listing, its watcher and the paths of its files
+ *  all start from this one answer. When the system cannot say, the path as written, made full. */
+export function actualFolder(folder: string, rules: PathRules = systemRules): string {
+  try { return rules.real(folder); } catch { return path.resolve(folder); }
+}
+
 /** The real path of a source root; undefined when the system cannot read it. `known` keeps the answers, so that
  *  many projects are asked of the disk once and not at every lookup; the caller empties it when the disk may
  *  have changed. */
