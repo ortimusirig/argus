@@ -5,7 +5,7 @@ from bisect import bisect_left
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # Files that hold code a reader must have explained.
 CODE_EXT = {
@@ -171,6 +171,18 @@ def on_disk(root, rel):
         found = None
     witness("on disk", root, rel, found)
     return found
+
+
+def plain_relative(rel):
+    """rel as a plain path under the source root, with / and without '.' parts, or None when its form alone says
+    it is no such path: empty, with a drive ('C:/x', also 'Z:x' without a slash), a network start ('//server'),
+    a leading / or \\, or a '..' part. It does not look at the disk: on_disk() says whether a file is there. A
+    path that this function refuses can never be 'a file that was deleted'; it is a mistake in a property."""
+    text = str(rel).strip().replace("\\", "/")
+    if not text or text.startswith("/") or PureWindowsPath(text).drive or ":" in text.split("/")[0]:
+        return None
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    return None if not parts or ".." in parts else "/".join(parts)
 
 
 def all_files(root):
