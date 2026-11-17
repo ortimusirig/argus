@@ -10,7 +10,8 @@ Installs by itself (with --install):
 Cannot install by itself (a system installer is needed): Python, git, VS Code. For those it prints the command.
 
 Remembers where graphify is in ~/.argus/config.json; the last line of the report gives the path to use.
-Exit code 0: everything argus requires is present (Python, git, graphify). 1: something required is missing.
+Exit code 0: everything argus requires is present (Python, graphify). 1: something required is missing.
+git is optional: with it argus reads the history of the code; without it the notes carry hashes of the source only.
 """
 import argparse
 import json
@@ -127,7 +128,7 @@ def main():
                         "fix": None if ok else hint("python")}
 
     git = shutil.which("git")
-    report["git"] = {"required": True, "ok": bool(git), "found": run([git, "--version"], 30)[1] if git else None,
+    report["git"] = {"required": False, "ok": bool(git), "found": run([git, "--version"], 30)[1] if git else None,
                      "path": git, "fix": None if git else hint("git")}
 
     path, version = find_graphify(args.graphify)
