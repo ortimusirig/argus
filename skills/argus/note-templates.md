@@ -26,7 +26,7 @@ Concept and Library notes are shared by every project in the vault. Before writi
 
 ## Properties
 
-Every note starts with properties. The check reads `written_by`, `type`, `source`, `source_hash`, `commit`, `depth`, `masked_lines` and, on Mechanism and Flow notes, `sources`.
+Every note starts with properties. The check reads `written_by`, `type`, `source`, `source_hash`, `commit`, `depth`, `masked_lines`, `retired_blocks` and, on Mechanism and Flow notes, `sources`.
 
 ```markdown
 ---
@@ -37,6 +37,7 @@ source: <path of the source file, relative to the source root, with />
 source_hash: <sha256: and 64 hex digits, the first word printed by: python -B <this skill's folder>/scripts/changed_blocks.py --source <source root> --hash <source>>
 commit: <output of: git log -1 --format=%h -- <source file>>
 depth: <map or full>
+retired_blocks: <ids of blocks removed in later runs, with commas; leave the line out when there are none>
 status: current
 written: <YYYY-MM-DD>
 ---
@@ -45,9 +46,10 @@ written: <YYYY-MM-DD>
 | Property | Rule |
 | --- | --- |
 | `source_hash` | The hash of the source file's bytes as they were on disk when the note was written or last updated. Take it after the last read of the file. The check marks the note STALE when the file's hash differs later, with or without git, committed or not |
+| `retired_blocks` | The ids of blocks that were removed from this note, for example `retired_blocks: 7a, 12`. An id in this list is never given to a block again, because other notes may still cite it. The check fails when a block uses one. Keep the list through a whole rewrite |
 | `commit` | Information for the reader, and the stale test of notes that have no `source_hash`. When `git status --porcelain -- <source file>` prints a line (the work tree is dirty: the file has changes that are not committed), write the commit followed by `+uncommitted`, for example `0348189+uncommitted`. Without git, leave the line out |
 
-Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas), `source_hash` (one hash for all of them: the first word of the last line of `changed_blocks.py --source <source root> --hash <file> <file> ...`) and, with git, `commit` (the output of `git rev-parse --short HEAD`, with `+uncommitted` when one of the files has changes that are not committed): the check marks the note STALE when one of those files changes later.
+Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas), `source_hash` (one source file: that file's own value, the same as in its File note; several: one hash for all of them, the first word of the last line of `changed_blocks.py --source <source root> --hash <file> <file> ...`) and, with git, `commit` (the output of `git rev-parse --short HEAD`, with `+uncommitted` when one of the files has changes that are not committed): the check marks the note STALE when one of those files changes later.
 
 ## File note
 
