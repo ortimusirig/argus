@@ -88,6 +88,13 @@ export class Create implements vscode.Disposable {
     return { notes: at.notes.filter(holds).length, note: at.note && at.note.file && holds(at.note) ? at.note : undefined };
   }
 
+  /** Whether Update may go on for a document, by the notes as the index holds them now, and the note it is for. */
+  private judge(document: vscode.TextDocument): { no: string | undefined; note: Entry | undefined } {
+    const { notes, note } = this.noteOf(document);
+    return { note, no: updateRefusal({ notes, note: !note?.file ? "none" : note.file.problems.length > 0 ? "unreadable" : "readable",
+      need: note ? this.need(document, note) : undefined }) };
+  }
+
   /** "Argus: Create explanation" and "Argus: Update explanation" for a document. A second call while a run of
    *  either kind goes starts nothing. */
   async run(kind: Kind, document: vscode.TextDocument | undefined): Promise<void> {
@@ -95,11 +102,9 @@ export class Create implements vscode.Disposable {
     const at = this.index.locate(document);
     let no = refusal({ trusted: vscode.workspace.isTrusted, onDisk: !document.isUntitled && document.uri.scheme === "file",
       file: at.project ? at.sourceRel : undefined });
-    if (no === undefined && kind === "update") {
-      const { notes, note } = this.noteOf(document);
-      no = updateRefusal({ notes, note: !note?.file ? "none" : note.file.problems.length > 0 ? "unreadable" : "readable",
-        need: note ? this.need(document, note) : undefined });
-    }
+    // A first answer for Update from the notes as they are remembered, before anything is asked or saved. The
+    // answer that counts is given in `start`, after the notes were read from disk again.
+    if (no === undefined && kind === "update") { no = this.judge(document).no; }
     if (no !== undefined) { this.say(no); return; }
     const project = at.project as Project, file = at.sourceRel as string;
     const run = this.runs.begin(projectKey(project), file, kind);
@@ -137,9 +142,17 @@ export class Create implements vscode.Disposable {
     const config = vscode.workspace.getConfiguration("argus");
     // The folders are handed over as full paths: the agent runs in the source root, and a folder written
     // relative in the settings would mean another place there than it means to the extension.
+    // The project's notes are read from disk now, once, after the save and before the note is judged: a note
+    // changed outside VS Code a moment ago (the watcher has not told of it yet) is judged as it is on disk. The
+    // hashes of the notes from before the start come from this reading too.
+    await this.index.refreshNow(project).catch(() => undefined);
+    // Update: whether it may go on is decided from the note as it was just read (a note that is broken now is not
+    // handed to the agent), and the depth is that note's.
+    const judged = kind === "update" ? this.judge(document) : undefined;
+    if (judged?.no !== undefined) { return judged.no; }
     // The depth: for Create the setting; for Update the depth of the file's note (its `depth` property; a note
-    // without one counts as full), read now, after the save.
-    const note = kind === "update" ? this.noteOf(document).note : undefined;
+    // without one counts as full).
+    const note = judged?.note;
     if (kind === "update" && !note) { return NOTE_GONE; }
     // The folders as the index itself resolves them (links and ".." by the file system's own rule), so the agent
     // works in the very folders the extension reads.
@@ -157,8 +170,7 @@ export class Create implements vscode.Disposable {
     const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram,
       read: (file) => fs.promises.readFile(file, "utf8"), real: (file) => fs.promises.realpath(file), setting });
     if ("problem" in program) { return program.problem; }
-    // The hashes from before the start: the file as saved, and the file's notes as they are on disk now.
-    await this.index.refreshNow(project).catch(() => undefined);
+    // The hashes from before the start: the file as saved, and the file's notes as they were read above.
     // Where the file really lies is asked of the disk now, not of what was remembered: a file that was replaced
     // by a link leading out of the source root is not hashed and not handed to the agent. Asked before the
     // hash and after it.
@@ -173,6 +185,12 @@ export class Create implements vscode.Disposable {
     const started: Started = { run, project, file, path: document.uri.fsPath, program: program.path,
       notes: noteMark(this.index.notes.fileNotesFor(project, file)), source };
     if (kind === "update" && started.notes === "") { return NOTE_GONE; }
+    // Update was judged, and its depth taken, from one reading of one note: when the index holds another note or
+    // another text for the file by now, the command would not fit it.
+    if (kind === "update") {
+      const still = this.noteOf(document).note;
+      if (!note || still?.id !== note.id || still.revision !== note.revision) { return changedMeanwhile(kind); }
+    }
 
     // A program and its argument list, started without a shell, in a terminal that takes the person's typing and
     // stays open after the program ends.
