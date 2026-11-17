@@ -49,3 +49,8 @@ Skill 2.10, branch `skill-2.10`, head `06b28f8`. NOT merged, NOT installed. The 
   (c) install 2.10 as it is for the owner's own use only (pilot), knowing the two open P1.
   The review rule (cross-model-review, the gate) allows a merge only with P0 = P1 = 0, so (c) is the owner's exception to make, not the agent's.
 - The extension (`vscode-extension`, head `54565d0`) is reviewed and waits for the skill: after a merge run `npm run build` there, align `withoutInlineCode` in `vscode/src/core/notes.ts`, rebuild the package.
+
+## 2026-11-17: owner's words
+
+- "Keep fixing": the skill review goes on until P1 is zero (option (a) above).
+- "Bump the usage to 99%": the stop line is now 99% of the weekly plan usage (was 80%). Usage was 74% when this was said.
