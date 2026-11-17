@@ -26,7 +26,7 @@ Concept and Library notes are shared by every project in the vault. Before writi
 
 ## Properties
 
-Every note starts with properties. The check reads `written_by`, `type`, `source`, `commit`, `depth`, `masked_lines` and, on Mechanism and Flow notes, `sources`.
+Every note starts with properties. The check reads `written_by`, `type`, `source`, `source_hash`, `commit`, `depth`, `masked_lines` and, on Mechanism and Flow notes, `sources`.
 
 ```markdown
 ---
@@ -34,6 +34,7 @@ type: file
 written_by: argus
 project: <Project>
 source: <path of the source file, relative to the source root, with />
+source_hash: <sha256: and 64 hex digits, the first word printed by: python -B <this skill's folder>/scripts/changed_blocks.py --source <source root> --hash <source>>
 commit: <output of: git log -1 --format=%h -- <source file>>
 depth: <map or full>
 status: current
@@ -41,7 +42,12 @@ written: <YYYY-MM-DD>
 ---
 ```
 
-Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source`, `commit` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas) and `commit` (the output of `git rev-parse --short HEAD` in the source when the note was written): the check marks the note STALE when one of those files changes later.
+| Property | Rule |
+| --- | --- |
+| `source_hash` | The hash of the source file's bytes as they were on disk when the note was written or last updated. Take it after the last read of the file. The check marks the note STALE when the file's hash differs later, with or without git, committed or not |
+| `commit` | Information for the reader, and the stale test of notes that have no `source_hash`. When `git status --porcelain -- <source file>` prints a line (the work tree is dirty: the file has changes that are not committed), write the commit followed by `+uncommitted`, for example `0348189+uncommitted`. Without git, leave the line out |
+
+Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas), `source_hash` (one hash for all of them: the first word of the last line of `changed_blocks.py --source <source root> --hash <file> <file> ...`) and, with git, `commit` (the output of `git rev-parse --short HEAD`, with `+uncommitted` when one of the files has changes that are not committed): the check marks the note STALE when one of those files changes later.
 
 ## File note
 
@@ -118,7 +124,7 @@ Rules the check enforces on a File note:
 
 | Rule | Detail |
 | --- | --- |
-| Block heading | `### Block <id>: <purpose> (lines a-b)` or `(line a)`. The id is a number, or a number and a letter for sub-blocks |
+| Block heading | `### Block <id>: <purpose> (lines a-b)` or `(line a)`. The id is a number, or a number and letters: sub-blocks (`3a`), and blocks added in a later run (`7a`, `45ia`; see "Later runs" in `SKILL.md`) |
 | Code fence | The first fence after the heading holds exactly source lines a to b |
 | Coverage | The block ranges together contain every non-blank line once |
 | Line tables (`depth: full`) | Inside each block, the rows whose first cell is a line number or range cover every non-blank line of that block once. Each has four cells; "What happens" and "Real value" are not empty. The Code cell quotes the row's first non-blank line: whole, or its start followed by `…` |
@@ -129,7 +135,8 @@ Rules the check enforces on a File note:
 | Masked secrets | Every line with `[masked]` is listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`). Around each mask the line equals the source; a line may be `[masked]` alone. What a mask hides appears nowhere else in the note. At most a quarter of the file's non-blank lines are masked (two always allowed) |
 | Empty file | A source with no non-blank line: lens table, "The file is empty." under Level 2, no block |
 | Ownership | Only notes with `written_by: argus` are read by the check |
-| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. No note holds an Obsidian comment (`%%`). Every note is linked from another note |
+| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. No note holds an Obsidian comment (`%%`) outside code. The check warns about `<word>` outside code, which Obsidian hides. Every note is linked from another note |
+| Stale | A note with `source_hash` is STALE when the hash of its source (its `sources`) differs now. A note without it is judged by `commit` and git |
 | Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
 ## Concept note

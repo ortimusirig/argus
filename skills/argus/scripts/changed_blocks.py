@@ -539,7 +539,8 @@ def print_report(report):
             else:
                 parts = [f"expected at {at(*entry['expected'])}"]
                 if entry.get("spaces_only"):
-                    parts.append(f"at {at(*entry['likely'])} only white space at line ends differs")
+                    parts.append(f"at {at(*entry['likely'])} only white space at line ends differs: copy the code "
+                                 f"again, the explanation holds")
                 elif entry["gone"]:
                     parts.append("its code is gone: no unexplained line between the placed blocks around it")
                 else:
