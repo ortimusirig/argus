@@ -54,3 +54,22 @@ Skill 2.10, branch `skill-2.10`, head `06b28f8`. NOT merged, NOT installed. The 
 
 - "Keep fixing": the skill review goes on until P1 is zero (option (a) above).
 - "Bump the usage to 99%": the stop line is now 99% of the weekly plan usage (was 80%). Usage was 74% when this was said.
+
+## 2026-11-17, midday: skill review stopped after round 22 (usage 91% of the 99% stop line)
+
+Skill 2.10: branch `skill-2.10`, worktree `C:/dev/argus-skill`, head `d7e02e5`. NOT merged, NOT installed. The existing 72 tests pass. `SKILL.md` has 5,400 words.
+
+- Twenty-two Codex stress rounds. P1 per round: 5, 4, 2, 3, 2, 3, 1, 1, 1, 2, 2, 2, 2, 1, 0, 1, 3, 1, 1, 1, 1, 1. Rounds 1 to 21 are fixed.
+- Round 22 is OPEN (review file `code-d7e02e59dbe8-20261117-112900-2fe382-focus.md` in `C:/dev/argus/.git/cross-review/skill-2.10/`; the context file for the next round is made from `context-skill-210-22.md` beside it):
+  1. P1 `changed_blocks.py:949`: a heading line (`## Appendix`) directly followed by `---` is taken for an underlined heading, so every block of a valid note is "not compared". Fix direction: an underline counts only under a line of paragraph text, not under a heading line, a table row, a list item or a fence line.
+  2. P2 `_common.py:194`: `plain_relative` strips the value before it tests it, so `source: "missing.py "` (trailing space or tab) is reported GONE. Fix direction: test for trailing white space and control characters before any strip.
+  3. P2 `changed_blocks.py:461`: a block whose code fence is empty counts as changed. Fix direction: "not compared", with a PROBLEM line, not counted towards a whole rewrite.
+- How the script changed during the rounds (read this before the code):
+  - The script claims three things only: this block's code is at these lines; this block's code as copied is not in the file; these lines are in no block. It never says code is gone, lines are new, or an explanation is right.
+  - `--fix-moved` writes four places only: the block heading, `masked_lines`, the Lines cell of the Level 2 table (template's exact heading row, directly under its section heading), and at depth full the Line cell of the block's own line table (template's exact heading row, directly after the block's code fence). The Trace table is not written.
+  - Two readings must agree before anything is trusted: the checker's `fence_mask` and `commonmark_fences`; the shared block reader and the strict section boundary; the writer and `own_check()`.
+  - The guard has two kinds (`STOPS_COMPARING`: what is code or a heading is in doubt, every block "not compared"; `STOPS_WRITING`: compared as usual, moved numbers set by hand).
+  - The last rounds each found one case where the guard was too strict or not strict enough about one Markdown shape. No case of a damaged real note was found; the real case (`xreview.sh` notes, 3 lines inserted, 1 changed) gives "112 written, 1 changed" in every round.
+- One real agent run of "Later runs" worked (Sonnet, 125,910 tokens). A second run on the final text is still owed.
+- Cost lesson for the next agent: do not resume a long-running builder agent again and again (its history grew to 850,000 tokens and each resume paid for it); give each fix round to a fresh agent with a short brief, as was done for rounds 20 and 21 (about 125,000 to 155,000 tokens each).
+- Next steps, unchanged: fix round 22 (three small fixes), run the review again; when a round shows no P0 and no P1: merge `skill-2.10` into `main` (keep `main`'s text of `docs/HANDOFF.md`; take the branch's "P2 backlog of skill 2.10" section of `docs/NEXT-block-updates.md`), then in the extension `npm run build`, align `withoutInlineCode` in `vscode/src/core/notes.ts` with the checker, rebuild the package, install the skill (copy `skills/argus` to the owner's `.claude/skills/argus`), a second real agent run, the owner's hand test of Create and Update.
