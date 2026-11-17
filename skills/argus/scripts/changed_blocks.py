@@ -386,6 +386,24 @@ def compare(note_lines, props, lines):
             problems.append(f"block {block['id']} has no code fence in its own section; the fence that was read "
                             f"stands after the heading at note line {strict_end + 1}. Nothing is compared for this "
                             f"block, and --fix-moved writes nothing for this note")
+    # The check's reader takes a run of fence lines as one fence: two code fences directly under each other (the
+    # closing line of one followed at once by the opening line of the next) become one code with two fence lines
+    # inside it. The second reading: the block's code is what stands between the opening line of its first fence
+    # and that fence's own closing line, as CommonMark closes it. Where the two differ, nothing is compared for
+    # the block, no place is stated for it, and --fix-moved writes nothing for the note.
+    for block in blocks:
+        if block["first"] is None:
+            continue
+        opener = note_lines[block["first"]]
+        run = len(opener) - len(opener.lstrip("`"))
+        close = next((i for i in range(block["first"] + 1, block["end"])
+                      if len(note_lines[i]) - len(note_lines[i].lstrip("`")) >= run and not note_lines[i].strip("`").strip()),
+                     block["end"])
+        if note_lines[block["first"] + 1:close] != block["code"]:
+            block.update(stray=block["first"] + 1, code=[], first=None, last=block["end"])
+            problems.append(f"block {block['id']}: two code fences stand directly under each other (note line "
+                            f"{close + 1}); put a line of text between them, then run again. Nothing is compared for "
+                            f"this block, and --fix-moved writes nothing for this note")
     for block in blocks:
         if block["first"] is None and "stray" not in block:
             problems.append(f"block {block['id']} has no code fence")
@@ -449,6 +467,7 @@ def compare(note_lines, props, lines):
             # the order of the blocks allows it. That is a block out of place, not a block to rewrite.
             entry["state"] = "displaced"
             entry["elsewhere"] = [[s + 1, s + length] for s in free[:SHOWN]]
+            entry["elsewhere_count"] = len(free)     # all of them count in what follows; the list is for showing
             entry["_free"] = free
         elif entry["state"] == "changed" and found[index]:
             # Its whole code is in the source too, but only at lines that another block holds. One of the two
@@ -456,6 +475,7 @@ def compare(note_lines, props, lines):
             # block either, and nobody is sent to rewrite it.
             entry["state"] = "displaced"
             entry["elsewhere"] = [[s + 1, s + length] for s in found[index][:SHOWN]]
+            entry["elsewhere_count"] = len(found[index])
             entry["held"] = True
     for index, entry in enumerate(result):
         if len(entry.get("_free", ())) != 1 or bounded:
@@ -543,21 +563,24 @@ def compare(note_lines, props, lines):
                 yield unexplained[k]
             k += 1
 
-    for entry in result:
-        length = entry["lines"]
-        if entry["state"] == "ambiguous":
-            spots = [(start, start + length - 1) for start in entry["candidates"]]
-        elif entry["state"] == "displaced" and "moved_to" not in entry and not entry.get("held"):
-            spots = [tuple(place) for place in entry["elsewhere"]]
-        elif entry["state"] == "undecided":
-            spots = [tuple(entry["proposed"])] if "proposed" in entry else [(1, total)]   # no place known: anywhere
-        else:
+    # Every place where the whole code of such a block is found counts, also one that only partly lies in the
+    # range and one that another block holds in part: all of them, not only the ones the report shows.
+    for index, entry in enumerate(result):
+        if "at" in entry or "moved_to" in entry or entry["state"] == "changed":
             continue
+        length = entry["lines"]
+        spots = [(start + 1, start + length) for start in found[index]]
+        if entry["state"] == "undecided" and (not spots or index in cut_short):
+            spots = [(1, total)]                     # its search was cut short: it may be anywhere
         for a, b in spots:
             for u in ranges_over(a, b):
-                here = u.setdefault("unplaced_here", [])
-                if entry["id"] not in here and len(here) < SHOWN:
-                    here.append(entry["id"])
+                if u.get("_last_unplaced") != index:
+                    u["_last_unplaced"] = index
+                    u["unplaced_count"] = u.get("unplaced_count", 0) + 1
+                    if len(u.setdefault("unplaced_here", [])) < SHOWN:
+                        u["unplaced_here"].append(entry["id"])
+    for u in unexplained:
+        u.pop("_last_unplaced", None)
     # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
     # id the note uses or has retired.
     retired = retired_ids(props)
@@ -922,6 +945,7 @@ def own_check(old, new):
     code_seen = False                                # the block's code fence is behind us
     place = ""                                       # which template table may begin on the next row: level2 or line
     moved_head = 0                                   # the line of a changed block heading whose code fence is not seen yet
+    closed_at, watched = -1, 0                       # where a block's code fence closed; that block's changed heading
     text_above = False                               # the line before holds text (for an underlined heading)
     kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
@@ -938,6 +962,10 @@ def own_check(old, new):
         run = len(text) - len(text.lstrip(mark)) if mark else 0
         if fence is None and mark == "`" and "`" in text[run:]:
             mark, run = "", 0
+        if watched and n == closed_at + 1 and fence is None and run >= 3 and not in_props:
+            return watched                           # a second fence directly under the block's code fence
+        if n > closed_at + 1:
+            watched = 0
         inside = fence is not None
         if fence is None and run >= 3 and not in_props:
             fence, inside = (mark, run), True
@@ -945,7 +973,7 @@ def own_check(old, new):
             fence = None
             if in_block and not code_seen:
                 code_seen, place = True, "line"      # the block's code fence has just closed: its line table may follow
-                moved_head = 0
+                closed_at, watched, moved_head = n, moved_head, 0
             else:
                 place = ""
         elif inside:
@@ -1504,16 +1532,18 @@ def print_report(report):
             else:
                 print(f"AMBIGUOUS {was}: the same code starts at lines {', '.join(map(str, starts[:SHOWN]))}{more}")
         elif entry["state"] == "displaced":
+            more = (f" and {entry['elsewhere_count'] - len(entry['elsewhere'])} more places"
+                    if entry["elsewhere_count"] > len(entry["elsewhere"]) else "")
             if "moved_to" in entry:
                 print(f"DISPLACED {was}: its code is unchanged at {at(*entry['moved_to'])}, but the order of the "
                       f"blocks does not allow it there: it is past other blocks now. Not a changed block. "
                       f"--fix-moved writes the new lines")
             elif entry.get("held"):
                 print(f"DISPLACED {was}: its code is unchanged in the source, but only at lines another block holds "
-                      f"(lines {spans(entry['elsewhere'])}). Not a changed block. Look at the file: when one of the "
-                      f"two blocks is gone, remove that one; else set the line numbers by hand")
+                      f"(lines {spans(entry['elsewhere'])}{more}). Not a changed block. Read the file before you "
+                      f"remove either block; else set the line numbers by hand")
             else:
-                print(f"DISPLACED {was}: its code is unchanged at lines {spans(entry['elsewhere'])}, but the order "
+                print(f"DISPLACED {was}: its code is unchanged at lines {spans(entry['elsewhere'])}{more}, but the order "
                       f"of the blocks does not allow it there; there is more than one such place, or another block "
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
@@ -1538,8 +1568,10 @@ def print_report(report):
             print(f"{here}: holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks: "
                   f"these lines are that block's, no new block")
         elif u.get("unplaced_here"):
+            more = (f" and {u['unplaced_count'] - len(u['unplaced_here'])} more"
+                    if u["unplaced_count"] > len(u["unplaced_here"]) else "")
             print(f"{here}: lines no block covers. They hold a possible place of block "
-                  f"{', '.join(u['unplaced_here'])}, whose place is not chosen yet: choose that block's place first, "
+                  f"{', '.join(u['unplaced_here'])}{more}, whose place is not chosen yet: choose that block's place first, "
                   f"then divide the lines that are left. No id for a new block until then")
         elif u["possible_owners"]:
             more = f" and {u['possible_owners_more']} more" if "possible_owners_more" in u else ""
