@@ -5,21 +5,30 @@
   python -B changed_blocks.py --notes <notes folder> --source <source root> [--scope <path>] --fix-moved
   python -B changed_blocks.py --source <source root> --hash <source file> [<source file> ...]
 
+What the script claims, and what it never claims:
+  It claims three things: this block's code is at these lines; this block's code as copied is not in the file;
+  these lines are in no block.
+  It never claims that code is gone, that lines are new code, or that an explanation is right. Whether a block
+  that was not found was rewritten, moved and edited, or deleted is for a person to read in the file.
+
 For each File note (written_by: argus) whose source file is in scope, it compares the code copied into each block
 with the source file as it is on disk now and gives each block one state:
 
   same       the code is at the recorded lines
   moved      the code is the same, at other lines; the new lines are given
-  changed    the code is no longer in the source. Given: the lines where it was expected, the unexplained lines
-             beside it that may be its new form, and whether it is gone
-  displaced  the code is unchanged and whole in the source, but past other blocks (two functions changed places):
-             the lines where it is now are given. It is not a changed block and nothing of it is rewritten
+  changed    not found: the code as copied is not in the file. Given: the lines where the block was expected, and
+             the lines no block covers, nearest first, as places to read. In --json 'gone' is kept for programs
+             and is always false; 'no_claim' says why nothing more is claimed
+  displaced  the code is unchanged and whole in the source, but past other blocks (two functions changed places),
+             or only at lines another block holds: the lines are given. Nothing of it is rewritten
   ambiguous  the same code is at several places and the order of the blocks does not decide which
   undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
-             limit. It is not a changed block: its code may be in the source as it was
+             limit. Its code may be in the source as it was
 
-It also gives the ranges of non-blank source lines that no placed block covers (unexplained), and whether the
-note's source_hash still equals the file.
+It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
+covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
+a new block there would get (the id of the block above plus a letter, never an id in use or in retired_blocks):
+a new block only when the lines belong to none of those blocks.
 
 The placing rule is the one the VS Code extension uses. Blocks keep the order of their recorded first lines. Among
 all ways to put blocks, in that order and without overlap, at places where their whole code matches, the script
@@ -28,58 +37,53 @@ A block that an equally good way places elsewhere, or leaves out, is ambiguous. 
 check_notes.py. On a file where one block's code is at very many places the work is bounded: the places nearest to
 the recorded line are looked at, and the report says so in a BOUNDED line.
 
-Without --fix-moved nothing is written. With it, for each block that only moved, the script writes the new line
-numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
-its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
-when its whole code is at one free place that no other block without a sure place could take. 
-The tables are the three of note-templates.md, each at the template's place and with the template's exact heading
-row. The Level 2 table stands directly under the heading '## Level 2: blocks': only blank lines between. At depth
-full, a block's line table stands directly after the block's code fence: only blank lines between; and the Trace
-table is the first table of the Trace section, with only blank lines and sentences above it. A block's section
-ends at the next #, ## or ### heading, a ## section at the next # or ## heading. A table anywhere else, or with
-another heading row, is never written, and at depth map no table inside a block. Where a block at depth full has
-no line table at that place, or the note no Level 2 table, a TODO line says so. Every 'line N' in the note's text that a move touches
-("Check your understanding", "Part of line N", a sentence) is named in a TODO line, with its place and the likely
-new number, for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
-note at the same time. A note that changed after it was compared is not written: its bytes are read again as the
-last thing before the new text takes its place. What remains is a save by another program in the instant between
-that reading and the replace. The report that follows
-shows the state after the writing.
+Without --fix-moved nothing is written. With it, for each block that only moved (also past other blocks, when its
+whole code is at one free place no other block could take), the script writes that block's new line numbers in
+exactly four places and nowhere else:
+  (a) the block heading;
+  (b) the property masked_lines: a number moves only when exactly one block's recorded lines hold it;
+  (c) the Lines cell of the block's row in the Level 2 table: the table directly under the heading
+      '## Level 2: blocks' (only blank lines between), with the template's exact heading row;
+  (d) at depth full, the Line cell of the rows of the block's own line table: the table directly after the code
+      fence of that block (only blank lines between), inside that block's section, with the template's exact
+      heading row. Only rows that name lines of that block.
+The heading rows are those of note-templates.md. A block's section ends at the next #, ## or ### heading. No other
+table is written, whatever its headings: not the Trace table, and at depth map no table inside a block. Line
+numbers that a move touches anywhere else (Trace rows, "Check your understanding", "Part of line N", a sentence)
+are named in TODO lines for a person. A note that holds something the writer does not handle is not written at
+all (one PROBLEM line names it), and the writer's result is checked by a second reading of the note before it
+reaches the disk. The script never renames or deletes a note and says what it wrote in WROTE lines. Two runs
+cannot write one note at the same time. A note that changed after it was compared is not written: its bytes are
+read again as the last thing before the new text takes its place. What remains is a save by another program in
+the instant between that reading and the replace. The report shows the state after the writing.
 
 --hash prints the value for the source_hash property: one line per file. A note with one source file (a File note,
 or a Mechanism or Flow note with one file in its sources) takes that file's value. For several files there is one
-more line, with the value for a Mechanism or Flow note that has all these files as its sources.
+more line, with the value for a Mechanism or Flow note that has all these files as its sources. It prints nothing
+and ends with exit code 1 when a file cannot be read.
 
-Each UNEXPLAINED line also gives the id a new block at those lines would get: the id of the block above plus a
-letter, never an id in use and never one the note's property retired_blocks lists.
-
-Mechanism and Flow notes whose 'sources' name a file in scope are looked at too: one whose source_hash no longer
-equals its sources, or that has none, gets a TODO line (in --json: "dependent_notes").
+Mechanism and Flow notes whose 'sources' name a file in scope are looked at too (in --json: "dependent_notes"): one
+whose source_hash no longer equals its sources, or that has none, gets a TODO line. The script can know only that
+the hash of all its sources together differs, not which source changed: it lists the sources, and those outside
+the scope of this run.
 
 Blocks whose order changed get a TODO line too (in --json: "reordered"): a block found past other blocks, or
-block sections that stand in the note in another order than their lines in the file. The same code in another
-order can do another thing. The line stays until the sections of the note are in file order.
+block sections that stand in the note in another order than their lines in the file. The line stays until the
+sections of the note are in file order.
 
-What is still to do for a note is said in TODO lines (in --json: "todo"): act on the blocks, close the note
-(line count, commit, source_hash, written), correct line numbers that other notes cite. The last line says CURRENT
-only when no note has a TODO line. A note without source_hash has one: it gets the property.
+What is still to do for a note is said in TODO lines (in --json: "todo"). The last line says CURRENT only when no
+note has a TODO line. A note without source_hash has one: it gets the property. CURRENT means: the code copied
+into every block equals the source, and every source_hash equals its file.
 
 A note whose 'source' names no file is told apart: GONE (the file is not there, but the sources of other notes
 are: it was deleted or renamed) or PROBLEM (the path is no path of a file under the source root, or no note's
 source is found there: the property or --source is wrong, and nothing is to be removed).
 
---hash prints nothing and ends with exit code 1 when a file cannot be read.
-
-CURRENT means: the code copied into every block equals the source, and every source_hash equals its file. The
-script cannot know whether an explanation is right; it compares code and hashes only.
-
-Exit code 0: CURRENT, the script found nothing to do for any note. 1: no File note of this skill is in scope (NO FILE NOTE IN
-SCOPE: check --notes and --scope), or at least one note has a TODO line (a block is moved,
-changed, ambiguous or undecided, a line is unexplained, a source_hash differs or is missing, something was just
-written, a source file is gone, or there is a PROBLEM). 2: wrong arguments, or a folder that does not exist.
+Exit code 0: CURRENT, the script found nothing to do for any note. 1: no File note of this skill is in scope (NO
+FILE NOTE IN SCOPE: check --notes and --scope), or at least one note has a TODO line. 2: wrong arguments, or a
+folder that does not exist.
 """
 import argparse
-import difflib
 import hashlib
 import json
 import os
@@ -102,7 +106,6 @@ from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
-HINT_WORK = 3_000_000       # lines of old code times lines beside it, for the "lines still there" hints of one note
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
 STATES = ("same", "moved", "changed", "displaced", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
@@ -460,113 +463,58 @@ def compare(note_lines, props, lines):
                 if u["from"] <= b and a <= u["to"]:
                     u["code_of"].append(entry["id"])
 
-    # For a block without a sure place: where it was expected, and the unexplained lines between the placed blocks
-    # around it, which may hold its new form.
-    # Blocks without a sure place that follow each other share the same two placed neighbours and so the same gap:
-    # it is worked out once for the group, not once for each block. The hints of all blocks of the note share one
-    # budget of work, and one line says when hints were left out.
-    #
-    # The blocks are taken in the order of their sections in the note, which is the order of the file. The
-    # recorded line numbers are no good for this once --fix-moved has written some of them: a moved block then
-    # carries its new line, a changed block beside it still its old one, and sorted by those numbers a changed
-    # block could land between the wrong neighbours.
-    order = list(range(len(blocks)))
+    # A block without a sure place gets no guess about where it went. The script says where it was expected (its
+    # recorded lines, moved as the placed block before it in the note moved) and, for a block that was not found,
+    # the lines no block covers, nearest first. Whether its code was rewritten, moved and edited, or deleted is
+    # for a person to read. In the same way an unexplained range gets no "new code": it gets the blocks that were
+    # not found, nearest first, as its possible owners.
+    def nearest(keys, target, count):
+        """The indices of the `count` keys nearest to target; `keys` are in rising order."""
+        right = bisect_left(keys, target)
+        left, picked = right - 1, []
+        while len(picked) < count and (left >= 0 or right < len(keys)):
+            if right >= len(keys) or (left >= 0 and target - keys[left] <= keys[right] - target):
+                picked.append(left)
+                left -= 1
+            else:
+                picked.append(right)
+                right += 1
+        return picked
+
     starts_of_ranges = [u["from"] for u in unexplained]
-    loose, hint_work, hints_left_out = None, HINT_WORK, 0
-    rank, before = 0, None
-    while rank < len(order):
-        if "at" in result[order[rank]]:
-            before = result[order[rank]]
-            rank += 1
+    loose, shift = None, 0
+    for index, entry in enumerate(result):           # in the order of the note's sections
+        if "at" in entry:
+            shift = entry["at"][0] - entry["from"]
             continue
-        stop = rank
-        while stop < len(order) and "at" not in result[order[stop]]:
-            stop += 1
-        group, after = order[rank:stop], (result[order[stop]] if stop < len(order) else None)
-        rank = stop
-        low = before["at"][1] + 1 if before else 1
-        high = after["at"][0] - 1 if after else total
-        near = before or after
-        shift = near["at"][0] - near["from"] if near else 0
-        # An unexplained range never crosses a placed block, so the ranges that start in the gap lie in it.
-        gap = unexplained[bisect_left(starts_of_ranges, low):bisect_right(starts_of_ranges, high)]
-        ids = [result[i]["id"] for i in group]
-        changed_here = [result[i]["id"] for i in group if result[i]["state"] == "changed"]
-        for u in gap:
-            u["changed_beside"] = changed_here[:SHOWN]
-            u["beside"] = ids[:SHOWN]
-            if len(ids) > SHOWN:
-                u["beside_more"] = len(ids) - SHOWN
-        ranges, gap_starts = [[u["from"], u["to"]] for u in gap], [u["from"] for u in gap]
-        gap_size, gap_lines = sum(b - a + 1 for a, b in ranges), None
-        # Several changed blocks before one gap lie together in its lines: the script does not divide the lines
-        # between them and calls none of them gone. A block is gone only when its gap holds no unexplained line
-        # at all. What it may add as a hint is sure: the lines of a block's old code that are still there.
-        several = [result[i]["id"] for i in group if result[i]["state"] == "changed"]
-        too_few = len(several) > 1 and gap_size < len(several)   # fewer lines than blocks: one of them must be gone
-        low_line = max(1, min(low, max(total, 1)))
-        high_line = max(low_line, min(high, max(total, 1)))
-        for index in group:
-            entry = result[index]
-            # Where the block is expected: its recorded lines, moved as its placed neighbour moved, and never
-            # outside the lines between its placed neighbours.
-            first = min(max(entry["from"] + shift, low_line), high_line)
-            entry["expected"] = [first, min(max(entry["to"] + shift, first), high_line)]
-            if entry["state"] != "changed":
-                continue
-            # The ranges nearest to where the block was expected; how many more there are is said beside them.
-            at = max(0, min(bisect_left(gap_starts, first) - 1, len(ranges) - SHOWN))
-            entry["new_form"] = ranges[at:at + SHOWN]
-            if len(ranges) > SHOWN:
-                entry["new_form_more"] = len(ranges) - SHOWN
-            entry["gone"] = not gap                  # only an empty gap says gone, never a comparison of likeness
-            if gap and len(several) > 1:
-                entry["together"] = [block_id for block_id in several if block_id != entry["id"]][:SHOWN]
-                entry["fewer_lines_than_blocks"] = too_few
-            entry["between"] = [before["id"] if before else None, after["id"] if after else None]
-            code = blocks[index]["code"]
-            cost = len(code) * gap_size
-            if code and gap_size and cost <= 400_000:
-                if cost > hint_work:
-                    hints_left_out += 1
-                else:
-                    hint_work -= cost
-                    if gap_lines is None:
-                        gap_lines = [n for a, b in ranges for n in range(a, b + 1)]
-                    # The lines of the old code that are still there, in order: they narrow down where the new
-                    # form is.
-                    matcher = difflib.SequenceMatcher(None, code, [lines[n - 1] for n in gap_lines], autojunk=False)
-                    hits = [gap_lines[m.b + k] for m in matcher.get_matching_blocks() for k in range(m.size)
-                            if lines[gap_lines[m.b + k] - 1].strip()]
-                    if hits:
-                        entry["likely"] = [hits[0], hits[-1]]
-                        entry["lines_still_there"] = [len(hits), sum(1 for line in code if line.strip())]
-            if not found[index] and code:
-                # The same code with other white space at the ends of lines.
-                if loose is None:
-                    loose = Text([line.rstrip() for line in lines])
-                nearly = places(loose, [line.rstrip() for line in code], blocks[index]["a"], declared, 1, budget)[0]
-                if nearly:
-                    entry["spaces_only"] = True
-                    entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
-    # Where the order of the blocks changed (a block is displaced, or placed blocks stand in another order in the
-    # file than in the note), the lines 'between the neighbours' of a changed block mean nothing: its neighbours
-    # are no longer where the note has them. Such a block is not called gone. It is undecided, and unexplained
-    # lines that no other block claims may be its new form, so no id for a new block is proposed for them.
-    in_note_order = [e for e in result if "at" in e]
-    if any(e["state"] == "displaced" for e in result) or any(
-            later["at"][0] < earlier["at"][0] for earlier, later in zip(in_note_order, in_note_order[1:])):
-        lost = [e for e in result if e["state"] == "changed" and e.get("gone")]
-        for entry in lost:
-            entry["state"], entry["why"] = "undecided", "order"
-            for key in ("gone", "new_form", "between"):
-                entry.pop(key, None)
-        for u in unexplained if lost else ():
-            if not u["code_of"] and not u.get("changed_beside"):
-                u["maybe_of"] = [e["id"] for e in lost][:SHOWN]
-    if hints_left_out:
-        bounded.append(f"the hint 'lines still there' was left out for {hints_left_out} changed blocks: the note has "
-                       f"more changed code than the script allows itself work for. Read the lines named for them")
+        first = min(max(entry["from"] + shift, 1), max(total, 1))
+        entry["expected"] = [first, min(max(entry["to"] + shift, first), max(total, 1))]
+        if entry["state"] != "changed":
+            continue
+        entry["gone"] = False                        # kept for programs; the script never says that code is gone
+        entry["no_claim"] = ("the code as copied is not in the file; whether it was rewritten, moved and edited, or "
+                             "deleted is not decided by the script")
+        near = nearest(starts_of_ranges, first, SHOWN)
+        entry["may_be_at"] = [[unexplained[k]["from"], unexplained[k]["to"]] for k in near]
+        entry["new_form"] = entry["may_be_at"]       # the earlier name of this field
+        if len(unexplained) > SHOWN:
+            entry["may_be_at_more"] = len(unexplained) - SHOWN
+        code = blocks[index]["code"]
+        if not found[index] and code:
+            # A fact, not a guess: the same code with other white space at the ends of lines.
+            if loose is None:
+                loose = Text([line.rstrip() for line in lines])
+            nearly = places(loose, [line.rstrip() for line in code], blocks[index]["a"], declared, 1, budget)[0]
+            if nearly:
+                entry["spaces_only"] = True
+                entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
+    not_found = sorted((e["expected"][0], e["id"]) for e in result if e["state"] == "changed")
+    expected_lines = [line for line, _ in not_found]
+    for u in unexplained:
+        owners = [not_found[k][1] for k in nearest(expected_lines, u["from"], SHOWN)]
+        u["possible_owners"] = u["beside"] = owners  # 'beside' is the earlier name of this field
+        if len(not_found) > SHOWN:
+            u["possible_owners_more"] = len(not_found) - SHOWN
     # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
     # id the note uses or has retired.
     retired = retired_ids(props)
@@ -574,8 +522,6 @@ def compare(note_lines, props, lines):
     placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
     ends = [end for end, _ in placed]
     for u in unexplained:
-        if u.get("maybe_of"):
-            continue                                 # it may be a block whose place is undecided: no new id for it
         k = bisect_left(ends, u["from"])             # the placed blocks that end above this range
         above = placed[k - 1][1] if k else "0"
         u["new_id"] = next_id(above, taken)
@@ -616,17 +562,17 @@ CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?"
 
 def cited_lines(note, mask, blocks, entries, depth):
     """The places where the File note cites a line number of its source outside the numbers of the blocks
-    themselves: 'line 12' or 'lines 12-14' in its text, and the Line column of the Trace table. Each is a dict:
-    at (index of the note line), start and end (where the numbers stand in that line), old (the numbers), new (the
-    numbers after the blocks' moves, or None when a block of them has no sure place) and sure. A citation is sure,
-    and --fix-moved writes it, only when it is a cell of the Trace table's Line column: a cell that holds nothing
-    but a line number. 'line N' in a sentence is never written: it may stand in quoted code, or mean a line of
-    another file. It is given to a person to look at, with the likely new number. Text inside code spans is not
-    read at all. Citations of lines in blocks that are the same are left out."""
+    themselves: 'line 12' or 'lines 12-14' in its text, and the Line column of the Trace table. None of them is
+    ever written: 'line N' in a sentence may stand in quoted code or mean a line of another file, and after a
+    partial update the recorded lines of two blocks can overlap, so that a Trace row cannot be given to one block
+    for sure. Each is given to a person to look at. Each is a dict: at (index of the note line), old (the
+    numbers), new (the numbers after the blocks' moves, or None when that cannot be said: a block of them has no
+    sure place, or more than one block's recorded lines hold a number), text, trace and blocks. Text inside code
+    spans is not read. Citations of lines in blocks that are the same are left out."""
     spans = sorted((b["a"], b["a"] + max(len(b["code"]), 1) - 1, k) for k, b in enumerate(blocks))
 
-    def owner(n):
-        return next((k for a, b, k in spans if a <= n <= b), None)
+    def owners_of(n):
+        return [k for a, b, k in spans if a <= n <= b]
 
     def delta(k):
         entry = entries[k]
@@ -639,19 +585,17 @@ def cited_lines(note, mask, blocks, entries, depth):
     found = []
 
     def cite(i, start, end, numbers, joins, in_trace):
-        owners = [owner(n) for n in numbers]
-        if all(k is None for k in owners):
+        holders = [owners_of(n) for n in numbers]
+        if not any(holders):
             return                                   # lines of no block: blank lines, or not lines of this file
-        deltas = [None if k is None else delta(k) for k in owners]
-        if all(d == 0 for d in deltas):
+        one_each = all(len(h) == 1 for h in holders)
+        deltas = [delta(h[0]) for h in holders] if one_each else [None]
+        if one_each and all(d == 0 for d in deltas):
             return
-        known = all(d is not None for d in deltas)
-        new = [n + d for n, d in zip(numbers, deltas)] if known else None
-        sure = known and len(set(owners)) == 1 and in_trace
+        new = [n + d for n, d in zip(numbers, deltas)] if all(d is not None for d in deltas) else None
         text = None if new is None else joins[0].join(map(str, new)) if len(new) > 1 else str(new[0])
-        found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": sure, "text": text,
-                      "trace": in_trace,
-                      "blocks": [blocks[k]["id"] for k in owners if k is not None]})
+        found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": False, "text": text,
+                      "trace": in_trace, "blocks": sorted({blocks[k]["id"] for h in holders for k in h})})
 
     for i, line in enumerate(note):
         if mask[i] or i <= props_end or i in headings:
@@ -659,7 +603,7 @@ def cited_lines(note, mask, blocks, entries, depth):
         for m in CITE.finditer(without_inline_code(line)):       # places in this text are not used: never written
             numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
             cite(i, m.start(2), m.end(4) if m.group(4) else m.end(2), numbers, [m.group(3) or ""], False)
-    # The Line column of the Trace table: at depth full, the table at the template's place in the Trace section.
+    # The Line column of the Trace table, at depth full: read here so that its rows can be named, never written.
     for i in ((trace_table(note, mask) or [0])[1:] if depth == "full" else ()):
         spans_of_row = pipe_cells(note[i])
         if len(spans_of_row) > 1:
@@ -816,7 +760,7 @@ def unhandled(lines):
     text: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
     without text. The properties block at the top is left out. Before all that, the note is refused when the
     check's reading of its fences (fence_mask) and CommonMark's (commonmark_fences) do not give the same lines as
-    code, and when a line begins with ``` and holds another backtick."""
+    code, and when a line outside a fence begins with ``` and holds another backtick after that run."""
     # First of all: the check's reading of the fences and CommonMark's must give the same lines as code. Where
     # they differ, the note holds a fence that can be read in two ways, and the writer keeps out of it.
     for n, (one, other) in enumerate(zip(fence_mask(lines), commonmark_fences(lines)), 1):
@@ -830,8 +774,6 @@ def unhandled(lines):
             props = n == 1 or line.strip() != "---"
             continue
         text = line.lstrip(" \t")
-        if re.match(r" {0,3}`{3,}[^`]*`", line):
-            return n, "a line that begins with ``` and holds another backtick (inline code that looks like a fence)"
         indent = len(line) - len(text)
         ticks = len(text) - len(text.lstrip("`"))
         if fence is not None:
@@ -839,6 +781,10 @@ def unhandled(lines):
                 fence = None
             text_above = marker_above = False
             continue
+        if ticks >= 3 and "`" in text[ticks:]:
+            # Outside a fence, three or more backticks and another backtick after the whole run: inline code that
+            # the check's fence reader takes for a fence.
+            return n, "a line that begins with ``` and holds another backtick (inline code that looks like a fence)"
         if indent == 0 and ticks >= 3:
             fence, fence_at, rows = ticks, n, 0
             text_above = marker_above = False
@@ -894,22 +840,20 @@ def unhandled(lines):
 
 def own_check(old, new):
     """Looks at what the writer made, by itself: `old` and `new` are the note's lines before and after. Returns
-    None when every line that differs is one of the five places the templates define, and on such a line nothing
+    None when every line that differs is one of the four places the writer may touch, and on such a line nothing
     differs but the numbers of the line range:
       (a) a block heading;
       (b) the masked_lines property;
       (c) a row of the Level 2 table: the table directly under the heading '## Level 2: blocks' (only blank
           lines between), with the template's heading row, in its Lines cell;
       (d) at depth full, a row of a block's line table: the table directly after the block's code fence (only
-          blank lines between), inside the block's section, with the template's heading row, in its Line cell;
-      (e) at depth full, a row of the Trace table: the first table of the Trace section, with only blank lines
-          and sentences above it, with the template's heading row, in its Line cell.
+          blank lines between), inside the block's section, with the template's heading row, in its Line cell.
+    A row of the Trace table, or of any other table, is never one of them.
     A section ends at the next heading that is not deeper than its own: a block at any #, ## or ### line.
     Else the number of the first line that breaks this (0: the number of lines changed). It reads the note in its
     own way, with its own copy of the heading rows, and uses nothing of the writer's."""
     level2_header = ["#", "Lines", "Purpose", "Why this way", "Concepts"]
     line_header = ["Line", "Code", "What happens", "Real value"]
-    trace_header = ["Step", "Line", "Variable", "Value"]
     if len(old) != len(new):
         return 0
     # The block headings of the new text, read here once more: id -> its lines. Every number the writer put into
@@ -931,7 +875,7 @@ def own_check(old, new):
     fence = None                                     # the open fence, as (its character, its length)
     section, in_block = "", False                    # the last '## ' heading; inside a block's own section
     code_seen = False                                # the block's code fence is behind us
-    place = ""                                       # which template table may begin on the next row: level2, line, trace
+    place = ""                                       # which template table may begin on the next row: level2 or line
     text_above = False                               # the line before holds text (for an underlined heading)
     kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
@@ -978,13 +922,12 @@ def own_check(old, new):
             if level <= 3:
                 in_block, code_seen = level == 3 and plain and OWN_HEADING.fullmatch(was) is not None, False
                 block_id = was.split()[2].rstrip(":") if in_block else ""
-            place = ("level2" if section == "## Level 2: blocks" else "trace" if section.startswith("## Trace")
-                     else "") if level == 2 else ""
+            place = "level2" if level == 2 and section == "## Level 2: blocks" else ""
         first_row = False
         if inside or not was.startswith("|"):
             header, kind = None, ""
-            if not inside and not level and was.strip() and place != "trace":
-                place = ""                           # text before the table: only the Trace section may have it
+            if not inside and not level and was.strip():
+                place = ""                           # text before the table: no template table at this place
         elif header is None:
             header, first_row = [cell.strip() for cell in re.split(r"(?<!\\)\|", was)[1:-1]], True
             kind, place = place, ""                  # the table that begins here takes the place, or has none
@@ -1007,8 +950,6 @@ def own_check(old, new):
             column = 2                               # counted in the split below, where the first part is empty
         elif kind == "line" and depth_full and in_block and header == line_header:
             column = 1
-        elif kind == "trace" and depth_full and header == trace_header:
-            column = 2
         else:
             return n
         before, after = re.split(r"(?<!\\)\|", was), re.split(r"(?<!\\)\|", now)
@@ -1018,15 +959,13 @@ def own_check(old, new):
                 or re.sub(r"\s*-\s*|\d", "", before[column]) != re.sub(r"\s*-\s*|\d", "", after[column])):
             return n
         # The numbers themselves, against the block headings of the new text: a Level 2 row holds exactly the
-        # lines of the block it names; a line row lies inside its block; a Trace row inside some block.
+        # lines of the block it names; a line row lies inside the block whose section it stands in.
         numbers = [int(x) for x in re.findall(r"\d+", after[column])]
         first, last = numbers[0], numbers[-1]
         if kind == "level2":
             fits = heads.get(before[1].strip()) == (first, last)
-        elif kind == "line":
-            fits = block_id in heads and heads[block_id][0] <= first <= last <= heads[block_id][1]
         else:
-            fits = any(a <= first <= last <= b for a, b in heads.values())
+            fits = block_id in heads and heads[block_id][0] <= first <= last <= heads[block_id][1]
         if not fits:
             return n
     return None
@@ -1092,10 +1031,10 @@ def line_cell(lines, i, column, table):
 
 def moved_text(data, report):
     """The note's bytes with the new line numbers of every moved block. `data` are the bytes `report` was made
-    from. A number is written in exactly five places and nowhere else: (a) the block heading, (b) the
-    property masked_lines, (c) the Lines cell of the Level 2 table, and at depth full (d) the Line cell of a
-    block's line table and (e) the Line cell of the Trace table. The three tables are those of note-templates.md,
-    found by their exact heading rows. Returns (new bytes or None when nothing changes, what changed, error or None, what was left for
+    from. A number is written in exactly four places and nowhere else: (a) the block heading, (b) the
+    property masked_lines, (c) the Lines cell of the Level 2 table, and at depth full (d) the Line cell of the
+    block's own line table. The two tables are those of note-templates.md, found by their exact heading rows and
+    places. The Trace table is not written. Returns (new bytes or None when nothing changes, what changed, error or None, what was left for
     a person: rows that look like line rows in a table without such a heading)."""
     left = []
     decoded = decode_note(data)
@@ -1116,13 +1055,6 @@ def moved_text(data, report):
         return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
                           f"which the writer does not handle. Set the line numbers of the moved blocks by hand"), left
     wrote, masked_changed = [], False
-    # First the line numbers the note cites in its own text, where they are sure: from the right end of each line,
-    # so that the places of the others in that line stay true.
-    sure = [c for c in report["_cites"] if c["sure"]]
-    for c in sorted(sure, key=lambda c: (c["at"], -c["start"])):
-        lines[c["at"]] = lines[c["at"]][:c["start"]] + c["text"] + lines[c["at"]][c["end"]:]
-    if sure:
-        wrote.append(f"{len(sure)} line numbers in the Line column of the Trace table moved with their blocks")  # (e)
     masked_new = []                                  # the masked ranges of moved blocks, at their new lines
     full = report["_depth"] == "full"                # a line table and a Trace table exist at depth full only
     level2 = level2_table(lines, mask)               # (c): None when the note has no such table at the template's place
@@ -1169,8 +1101,17 @@ def moved_text(data, report):
                 lines[i] = lines[i][:a] + new_numbers(m, [new_a, new_b]) + lines[i][b:]
                 done.append("Level 2 row")
         level2_missing = level2_missing or level2 is None
-        old, rest = cut_ranges(declared, block["a"], block["a"] + len(block["code"]) - 1)
-        if old and delta:
+        # (b) masked_lines: a number moves with this block only when no other block's recorded lines hold it
+        # too. After a partial update the recorded lines of two blocks can overlap; then nothing is moved.
+        old, rest = cut_ranges(declared, low, high)
+        shared = [other["id"] for other in blocks if other is not block and old
+                  and other["a"] <= high and low <= other["a"] + len(other["code"]) - 1
+                  and any(other["a"] <= b and a <= other["a"] + len(other["code"]) - 1 for a, b in old)]
+        if old and delta and shared:
+            left.append(f"masked_lines {', '.join(span(a, b) for a, b in old)}: these lines are in the recorded lines "
+                        f"of block {block['id']} and of block {', '.join(shared)}, so they were not moved. Set them by "
+                        f"hand (block {block['id']} moved by {delta:+d})")
+        elif old and delta:
             declared = rest
             masked_new += [[a + delta, b + delta] for a, b in old]
             masked_changed = True
@@ -1252,13 +1193,24 @@ def build(path, text, root, scopes, known):
 
 
 def check_lines(cites):
-    """The line numbers a File note cites that --fix-moved does not write, as texts for a person."""
-    out = []
-    for c in cites:
+    """The line numbers a File note cites, which --fix-moved never writes, as texts for a person: one for each
+    sentence, and one for all rows of the Trace table together."""
+    def what(c):
         old = "-".join(map(str, c["old"]))
-        what = (f"{c['text']} now, if it means this source file" if c["new"] is not None
-                else "its block has no sure place yet")
-        out.append(f"note line {c['at'] + 1} cites line {old} (block {', '.join(c['blocks'])}): {what}")
+        new = f"{c['text']} now" if c["new"] is not None else "cannot be said (its block has no one sure place)"
+        return old, new
+
+    out, rows = [], []
+    for c in cites:
+        old, new = what(c)
+        if c["trace"]:
+            rows.append(f"note line {c['at'] + 1}: line {old}, {new}")
+        else:
+            out.append(f"note line {c['at'] + 1} cites line {old} (block {', '.join(c['blocks'])}): {new}, if it "
+                       f"means this source file")
+    if rows:
+        out.append("the Trace table names lines that moved; the script does not write the Trace: " + "; ".join(rows[:SHOWN])
+                   + (f"; and {len(rows) - SHOWN} more rows" if len(rows) > SHOWN else ""))
     return out
 
 
@@ -1440,8 +1392,17 @@ def dependent_notes(known, root, scopes):
                                      f"the property; remove nothing")
             elif now != note["source_hash"]:
                 entry["state"] = "stale"
-                entry["todo"].append("its sources changed since it was written: re-read it against the code, correct "
-                                     "what no longer holds, then set its commit and source_hash (Later runs, step 6)")
+                names = [found or given for given, found, _ in declared]
+                outside = [name for name in names if scopes and not in_scope(name, scopes)]
+                entry["sources"], entry["sources_out_of_scope"] = names, outside
+                which = names[0] if len(names) == 1 else "one or more of: " + ", ".join(names)
+                entry["todo"].append(
+                    f"its sources changed since it was written ({which}; the script knows only that their hash "
+                    f"differs). Re-read the note against every source that changed, and set its commit and "
+                    f"source_hash only when each of them was re-read in this run (Later runs, step 6)"
+                    + (f". Not in this run's scope: {', '.join(outside)}. When one of these changed, leave the hash "
+                       f"as it is and name the note in the report as 'out of date, outside what was asked'"
+                       if outside else ""))
         out.append(entry)
     return out
 
@@ -1475,10 +1436,6 @@ def print_report(report):
         was = f"block {entry['id']} ({at(entry['from'], entry['to'])})"
         if entry["state"] == "moved":
             print(f"MOVED {was}: now {at(*entry['at'])}")
-        elif entry["state"] == "undecided" and entry.get("why") == "order":
-            print(f"UNDECIDED {was}: its code is not found, and the blocks around it changed order, so the lines "
-                  f"where its new form would be cannot be named. It is not called gone. Look at the file: rewrite "
-                  f"it from its new form, or remove it when its code is gone")
         elif entry["state"] == "undecided":
             where = (f"its code is at {at(*entry['proposed'])}, but the search for places was cut short (see "
                      f"BOUNDED), so a full search could place it elsewhere" if "proposed" in entry else
@@ -1509,53 +1466,30 @@ def print_report(report):
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
         elif entry["state"] == "changed":
-            parts = [f"expected at {at(*entry['expected'])}"]
             if entry.get("spaces_only"):
-                parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
-                             f"no explanation or value rests on them, then copy the code again")
-            elif entry["gone"]:
-                parts.append("its code is gone: no unexplained line between the placed blocks around it. "
-                             "When you remove the block, add its id to retired_blocks")
-            else:
-                more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
-                parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
-                if entry.get("together"):
-                    parts.append(f"it lies together with changed block {', '.join(entry['together'])} in these "
-                                 f"lines: divide the lines between them by reading the code"
-                                 + ("; there are fewer lines than blocks, so at least one of them is gone"
-                                    if entry["fewer_lines_than_blocks"] else ""))
-                if "likely" in entry:
-                    still, of = entry["lines_still_there"]
-                    parts.append(f"{still} of its {of} non-blank lines are still there, in "
-                                 f"{at(*entry['likely'])}")
-            print(f"CHANGED {was}: " + "; ".join(parts))
+                print(f"CHANGED {was}: not found as copied, but at {at(*entry['likely'])} it differs only in spaces "
+                      f"at line ends: check that no explanation or value rests on them, then copy the code again")
+                continue
+            places_to_read = (f"Lines no block covers, nearest first: {spans(entry['may_be_at'])}"
+                              + (f" (and {entry['may_be_at_more']} more ranges)" if "may_be_at_more" in entry else "")
+                              if entry["may_be_at"] else "There are no lines that no block covers")
+            print(f"CHANGED {was}: not found: its code as copied is not in the file. It was expected at "
+                  f"{at(*entry['expected'])}. {places_to_read}. Read the file: when the block's code is there in a "
+                  f"new form, keep the block's id and rewrite it; only when it is nowhere, remove the block and add "
+                  f"its id to retired_blocks")
     for u in report["unexplained"]:
+        here = f"UNEXPLAINED {at(u['from'], u['to'])}"
         if u["code_of"]:
-            why = f"holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks"
-        elif u["beside"]:
-            more = f" and {u['beside_more']} more" if "beside_more" in u else ""
-            why = f"beside block {', '.join(u['beside'])}{more}, which has no sure place: may be its new form"
+            print(f"{here}: holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks: "
+                  f"these lines are that block's, no new block")
+        elif u["possible_owners"]:
+            more = f" and {u['possible_owners_more']} more" if "possible_owners_more" in u else ""
+            print(f"{here}: lines no block covers. Blocks that were not found and may be here, nearest first: "
+                  f"{', '.join(u['possible_owners'])}{more}. A new block, with the id {u['new_id']}, only when the "
+                  f"lines belong to none of them")
         else:
-            why = "new code: no changed block beside it"
-        if u.get("maybe_of"):
-            print(f"UNEXPLAINED {at(u['from'], u['to'])}: may be the new form of block {', '.join(u['maybe_of'])}, "
-                  f"which is undecided because the blocks around it changed order: look at the file before "
-                  f"you write a new block")
-        elif not u["code_of"] and len(u.get("changed_beside", ())) > 1:
-            together = u["changed_beside"]
-            print(f"UNEXPLAINED {at(u['from'], u['to'])}: blocks {', '.join(together[:-1])} and {together[-1]} changed "
-                  f"and lie together in these lines: divide the lines between them by reading the code (lines none "
-                  f"of them takes would be a new block with the id {u['new_id']})")
-        elif not u["code_of"] and len(u.get("changed_beside", ())) == 1:
-            # The lines lie where one changed block is expected: they are most likely that block, not a new one.
-            block_id = u["changed_beside"][0]
-            print(f"UNEXPLAINED {at(u['from'], u['to'])}: probably the new form of block {block_id}: take these "
-                  f"lines into block {block_id} when you rewrite it (lines it does not take would be a new block "
-                  f"with the id {u['new_id']})")
-        elif u["code_of"]:
-            print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}: these lines are that block's, no new block")
-        else:
-            print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
+            print(f"{here}: lines no block covers, and every block of the note has its place: a new block here gets "
+                  f"the id {u['new_id']}")
     for item in report["todo"]:
         print(f"TODO {name}: {item}")
 
