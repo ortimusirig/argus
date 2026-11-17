@@ -316,15 +316,14 @@ def check_stale(name, props, root, kind, src=None):
 
 BLOCK_ID = r"\d\w*"
 ID_LIST = BLOCK_ID + r"(?:(?:\s*,\s*|\s+and\s+|\s+to\s+)" + BLOCK_ID + r")*"
-# In the diagram: the last round bracket of a node's text, right before the text ends: "... (53a, 53b)"] or
-# ... (32 to 34)"}. A number in brackets anywhere else in the text, such as "error (404) and stop", is text.
-IDS_IN_NODE = re.compile(r"\((?:blocks?\s+)?(" + ID_LIST + r")\)\s*\"?\s*[\]})]")
 IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
 
 
 def check_flow_note(name, lines, mask, file_blocks):
-    """A Flow note has an 'Every outcome' table with a row, and every block id its diagram or its Steps table
-    names is a block of a File note it links to. `file_blocks` is {File note name: its block ids}."""
+    """A Flow note has an 'Every outcome' table with a row, and every block id that the 'File, block' cell of
+    its Steps table names is a block of a File note it links to. `file_blocks` is {File note name: its block ids}.
+    The diagram is not read for block ids: its text is free text, for the reader. That it is there and not empty
+    is checked elsewhere."""
     outcome = [cells(row) for row in section(lines, mask, "Every outcome") or [] if is_row(row)]
     if len([c for c in outcome if c and not set("".join(c)) <= set("-: ")]) < 2:   # the heading row and one more
         fails.append(f"{name}: a flow note needs an '## Every outcome' table with at least one row")
@@ -340,14 +339,6 @@ def check_flow_note(name, lines, mask, file_blocks):
 
     all_linked = linked("\n".join(line for i, line in enumerate(lines) if not mask[i]))
     named = []                                       # (where, the ids as written, the File notes to look in)
-    inside = False
-    for i, line in enumerate(lines):
-        if mask[i] and re.match(r"^`{3,}mermaid\s*$", line):
-            inside = True
-        elif mask[i] and inside and FENCE.match(line):
-            inside = False
-        elif mask[i] and inside:
-            named += [("the diagram", m.group(1), all_linked) for m in IDS_IN_NODE.finditer(line)]
     # In the Steps table only the cell that names the blocks is read (the column whose heading says "block",
     # else the second): "block 29" in the words of another cell is text.
     column = None
