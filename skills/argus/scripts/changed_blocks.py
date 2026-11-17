@@ -465,7 +465,12 @@ def compare(note_lines, props, lines):
     # Blocks without a sure place that follow each other share the same two placed neighbours and so the same gap:
     # it is worked out once for the group, not once for each block. The hints of all blocks of the note share one
     # budget of work, and one line says when hints were left out.
-    order = sorted(range(len(blocks)), key=lambda i: blocks[i]["a"])
+    #
+    # The blocks are taken in the order of their sections in the note, which is the order of the file. The
+    # recorded line numbers are no good for this once --fix-moved has written some of them: a moved block then
+    # carries its new line, a changed block beside it still its old one, and sorted by those numbers a changed
+    # block could land between the wrong neighbours.
+    order = list(range(len(blocks)))
     starts_of_ranges = [u["from"] for u in unexplained]
     loose, hint_work, hints_left_out = None, HINT_WORK, 0
     rank, before = 0, None
@@ -494,22 +499,55 @@ def compare(note_lines, props, lines):
                 u["beside_more"] = len(ids) - SHOWN
         ranges, gap_starts = [[u["from"], u["to"]] for u in gap], [u["from"] for u in gap]
         gap_size, gap_lines = sum(b - a + 1 for a, b in ranges), None
+        # Several changed blocks before one gap: which lines of the gap are whose? Each range goes to the block
+        # whose old code it looks most like, when it looks like one at all. A block that gets no range, while no
+        # range is left over, is gone. Ranges that look like no block stay with the blocks that got none.
+        several = [i for i in group if result[i]["state"] == "changed"]
+        own, spare = None, []
+        if len(several) > 1 and ranges and len(several) * len(ranges) <= 400:
+            own = {}
+            old_text = {i: "\n".join(blocks[i]["code"])[:4000] for i in several}
+            for u in gap:
+                piece = "\n".join(lines[u["from"] - 1:u["to"]])[:4000]
+                cost = sum(len(old_text[i]) for i in several) * len(piece) // 50 + 1
+                if cost > hint_work:
+                    own = None                       # no work left for this: all of them share the gap, as before
+                    break
+                hint_work -= cost
+                likeness = {i: difflib.SequenceMatcher(None, old_text[i], piece, autojunk=False).ratio() for i in several}
+                best = max(several, key=lambda i: likeness[i])
+                if likeness[best] >= 0.5:
+                    own.setdefault(best, []).append([u["from"], u["to"]])
+                    u["changed_beside"] = [result[best]["id"]]
+                else:
+                    spare.append(u)
+            if own is not None:
+                without = [result[i]["id"] for i in several if i not in own]
+                for u in spare:
+                    u["changed_beside"] = without[:SHOWN]
+        low_line = max(1, min(low, max(total, 1)))
+        high_line = max(low_line, min(high, max(total, 1)))
         for index in group:
             entry = result[index]
-            first = min(max(entry["from"] + shift, 1), max(total, 1))
-            entry["expected"] = [first, min(max(entry["to"] + shift, first), max(total, 1))]
+            # Where the block is expected: its recorded lines, moved as its placed neighbour moved, and never
+            # outside the lines between its placed neighbours.
+            first = min(max(entry["from"] + shift, low_line), high_line)
+            entry["expected"] = [first, min(max(entry["to"] + shift, first), high_line)]
             if entry["state"] != "changed":
                 continue
+            mine = ranges if own is None else own.get(index) or [[u["from"], u["to"]] for u in spare]
             # The ranges nearest to where the block was expected; how many more there are is said beside them.
-            at = max(0, min(bisect_left(gap_starts, first) - 1, len(ranges) - SHOWN))
-            entry["new_form"] = ranges[at:at + SHOWN]
-            if len(ranges) > SHOWN:
-                entry["new_form_more"] = len(ranges) - SHOWN
-            entry["gone"] = not gap
+            at = max(0, min(bisect_left([a for a, _ in mine], first) - 1, len(mine) - SHOWN))
+            entry["new_form"] = mine[at:at + SHOWN]
+            if len(mine) > SHOWN:
+                entry["new_form_more"] = len(mine) - SHOWN
+            entry["gone"] = not mine
             entry["between"] = [before["id"] if before else None, after["id"] if after else None]
             code = blocks[index]["code"]
-            cost = len(code) * gap_size
-            if code and gap_size and cost <= 400_000:
+            if own is not None:
+                gap_lines = [n for a, b in mine for n in range(a, b + 1)]
+            cost = len(code) * (gap_size if own is None else len(gap_lines))
+            if code and mine and cost <= 400_000:
                 if cost > hint_work:
                     hints_left_out += 1
                 else:
@@ -755,27 +793,55 @@ def unhandled(lines):
     rows start at the beginning of a line, with one heading row and one separator row under it. Anything else
     that could hold or hide a table or a fence is named here: a fence of ~, a fence that is indented or stands in
     a quote or a list item, a fence that is never closed, an HTML block, an Obsidian comment, a table that is
-    indented, has no separator row, or stands directly under another table, and '<?' or '<!' outside code."""
+    indented, has no separator row, or stands directly under another table or under a quote or list item, '<?' or
+    '<!' outside code, and every heading that is not '#' marks at the beginning of a line followed by a space and
+    text: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
+    without text. The properties block at the top is left out."""
     fence, fence_at, rows = None, 0, 0
+    props = bool(lines) and lines[0].strip() == "---"        # the properties block: its lines are no Markdown
+    text_above = marker_above = False                # the line before holds text; it begins with a quote or list mark
     for n, line in enumerate(lines, 1):
+        if props:
+            props = n == 1 or line.strip() != "---"
+            continue
         text = line.lstrip(" \t")
         indent = len(line) - len(text)
         ticks = len(text) - len(text.lstrip("`"))
         if fence is not None:
             if indent == 0 and ticks >= fence and text.strip("`").strip() == "":
                 fence = None
+            text_above = marker_above = False
             continue
         if indent == 0 and ticks >= 3:
             fence, fence_at, rows = ticks, n, 0
+            text_above = marker_above = False
             continue
+        # Headings end sections. The readers know one form: # marks at the beginning of the line, then a space and
+        # text. Every other form of heading is refused, not read.
+        if re.match(r"#{1,6}(?:[ \t]|$)", text):
+            if indent:
+                return n, "a heading that does not start at the beginning of its line"
+            if "\t" in line[:8].lstrip("#")[:1] or not line.strip("# \t"):
+                return n, "a heading with a tab after its # marks, or without text"
+        if text_above and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", line):
+            return n, "an underlined heading (a line of = or - directly under a line of text)"
+        if not text.startswith("|") and re.fullmatch(r":?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*", text):
+            return n, "a table whose rows do not start with |"
+        was_marker = marker_above
+        text_above = bool(line.strip())
         if text.startswith("~~~"):
             return n, "a code fence made of ~"
         if ticks >= 3:
             return n, "a code fence that does not start at the beginning of its line"
         marker = re.match(r"(?:>\s?|[-*+]\s+|\d+[.)]\s+)+", text)
         inner = text[marker.end():] if marker else ""
+        marker_above = bool(marker)
         if marker and (inner.startswith("|") or inner.startswith("```") or inner.startswith("~~~")):
             return n, "a table or a code fence inside a quote or a list item"
+        if marker and re.match(r"#{1,6}(?:[ \t]|$)", inner):
+            return n, "a heading inside a quote or a list item"
+        if text.startswith("|") and rows == 0 and was_marker:
+            return n, "a table directly under a quote or a list item"
         if re.match(r"<[A-Za-z/]", text) and not re.match(r"<[A-Za-z][A-Za-z0-9+.-]*:", text):
             return n, "an HTML block"
         outside_code = without_inline_code(line)     # the shared reader of code spans: `` ${x%% *} `` is code
@@ -825,6 +891,7 @@ def own_check(old, new):
     section, in_block = "", False                    # the last '## ' heading; inside a block's own section
     code_seen = False                                # the block's code fence is behind us
     place = ""                                       # which template table may begin on the next row: level2, line, trace
+    text_above = False                               # the line before holds text (for an underlined heading)
     kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
         props_line = in_props and n > 1
@@ -848,13 +915,24 @@ def own_check(old, new):
                 place = ""
         elif inside:
             place = ""                               # a fence between a heading and a table: no template table there
-        level = len(was) - len(was.lstrip("#")) if not inside and not in_props and re.match(r"#{1,6} ", was) else 0
+        # A heading in any form ends a section here: # marks behind spaces, quote marks or list marks, with a tab
+        # or with nothing after them, and a line of = or - under a line of text. Only the plain form, # marks at
+        # the beginning of the line and a space, can open a section that holds a template table.
+        level, plain = 0, False
+        if not inside and not in_props:
+            bare = re.sub(r"^(?:[ \t]*(?:>|[-*+](?=[ \t])|\d+[.)](?=[ \t])))*[ \t]*", "", was)
+            marks = re.match(r"(#{1,6})(?:[ \t]|$)", bare)
+            if marks:
+                level, plain = len(marks.group(1)), bare == was and was[len(marks.group(1)):][:1] == " "
+            elif text_above and re.fullmatch(r"[ \t]*(?:=+|-+)[ \t]*", was):
+                level = 1 if "=" in was else 2
+        text_above = not inside and not in_props and bool(was.strip())
         if level:
             # A heading ends what is not deeper than it: a ## section at # or ##, a block at #, ## or ###.
             if level <= 2:
-                section = was.strip() if level == 2 else ""
+                section = was.strip() if level == 2 and plain else ""
             if level <= 3:
-                in_block, code_seen = level == 3 and OWN_HEADING.fullmatch(was) is not None, False
+                in_block, code_seen = level == 3 and plain and OWN_HEADING.fullmatch(was) is not None, False
             place = ("level2" if section == "## Level 2: blocks" else "trace" if section.startswith("## Trace")
                      else "") if level == 2 else ""
         first_row = False
@@ -1375,8 +1453,8 @@ def print_report(report):
                 parts.append(f"at {at(*entry['likely'])} it differs only in spaces at line ends: check that "
                              f"no explanation or value rests on them, then copy the code again")
             elif entry["gone"]:
-                parts.append("its code is gone: no unexplained line between the placed blocks around it. "
-                             "When you remove the block, add its id to retired_blocks")
+                parts.append("its code is gone: no unexplained line between the placed blocks around it, or "
+                             "none that looks like it. When you remove the block, add its id to retired_blocks")
             else:
                 more = f" (and {entry['new_form_more']} more ranges beside it)" if "new_form_more" in entry else ""
                 parts.append(f"its new form may be in lines {spans(entry['new_form'])}{more}")
