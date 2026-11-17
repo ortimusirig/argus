@@ -73,3 +73,16 @@ Skill 2.10: branch `skill-2.10`, worktree `C:/dev/argus-skill`, head `d7e02e5`. 
 - One real agent run of "Later runs" worked (Sonnet, 125,910 tokens). A second run on the final text is still owed.
 - Cost lesson for the next agent: do not resume a long-running builder agent again and again (its history grew to 850,000 tokens and each resume paid for it); give each fix round to a fresh agent with a short brief, as was done for rounds 20 and 21 (about 125,000 to 155,000 tokens each).
 - Next steps, unchanged: fix round 22 (three small fixes), run the review again; when a round shows no P0 and no P1: merge `skill-2.10` into `main` (keep `main`'s text of `docs/HANDOFF.md`; take the branch's "P2 backlog of skill 2.10" section of `docs/NEXT-block-updates.md`), then in the extension `npm run build`, align `withoutInlineCode` in `vscode/src/core/notes.ts` with the checker, rebuild the package, install the skill (copy `skills/argus` to the owner's `.claude/skills/argus`), a second real agent run, the owner's hand test of Create and Update.
+
+## 2026-11-17, after round 23 (the last round of this session; usage about 93% of the 99% stop line)
+
+Skill 2.10: head `d0bf101` on `skill-2.10`. NOT merged, NOT installed. Round 22's three findings are fixed in `d0bf101`.
+
+Round 23 is OPEN (review file `code-d0bf101dc6cd-20261117-120450-834ed0-focus.md`; next context: start from `context-skill-210-23.md` in the same folder):
+1. P1 `changed_blocks.py:1420`: with two `masked_lines` properties in a note the writer changes the first, the reader (`frontmatter()`) uses the last; after a move the effective mask is at the old line and the block turns from moved to changed. Fix direction: a note with a repeated property is not written (kind `STOPS_WRITING`, or `STOPS_COMPARING` if the reader's choice can change what is compared); after the text is built, compare it once more and require that every block the run moved is `same` in the result, else write nothing.
+2. P1 `changed_blocks.py:817`: only "the note itself is a link" is checked; a note that lies under a folder junction inside `--notes` resolves outside the notes folder and is written there. Fix direction: resolve every note path and require that it lies under the resolved notes folder, in the listing and again under the lock before the replace (the VS Code extension has the same rule: `placeOf` in `vscode/src/core/noteIndex.ts`).
+3. P2 `_common.py:183`: the device names `CONIN$`, `CONOUT$` and names with superscript digits (`COM¹`, `LPT²`) are not refused by `plain_relative`.
+Also on the P2 backlog since round 22 (told to Codex): the source lines of a "not compared" block are offered a new block id; a source value with a trailing space or dot whose file exists is accepted on Windows; "expected at" names old lines after a write; a quoted underlined heading is named by no test.
+
+P1 per round, all 23 rounds: 5, 4, 2, 3, 2, 3, 1, 1, 1, 2, 2, 2, 2, 1, 0, 1, 3, 1, 1, 1, 1, 1, 2.
+The idea "after the text is built, run the comparison again on the result and require the moved blocks to be `same`" (fix direction 1) is a general last check that the writer still lacks; it would have caught several earlier findings. Build it first.
