@@ -549,6 +549,21 @@ def compare(note_lines, props, lines):
                 if nearly:
                     entry["spaces_only"] = True
                     entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
+    # Where the order of the blocks changed (a block is displaced, or placed blocks stand in another order in the
+    # file than in the note), the lines 'between the neighbours' of a changed block mean nothing: its neighbours
+    # are no longer where the note has them. Such a block is not called gone. It is undecided, and unexplained
+    # lines that no other block claims may be its new form, so no id for a new block is proposed for them.
+    in_note_order = [e for e in result if "at" in e]
+    if any(e["state"] == "displaced" for e in result) or any(
+            later["at"][0] < earlier["at"][0] for earlier, later in zip(in_note_order, in_note_order[1:])):
+        lost = [e for e in result if e["state"] == "changed" and e.get("gone")]
+        for entry in lost:
+            entry["state"], entry["why"] = "undecided", "order"
+            for key in ("gone", "new_form", "between"):
+                entry.pop(key, None)
+        for u in unexplained if lost else ():
+            if not u["code_of"] and not u.get("changed_beside"):
+                u["maybe_of"] = [e["id"] for e in lost][:SHOWN]
     if hints_left_out:
         bounded.append(f"the hint 'lines still there' was left out for {hints_left_out} changed blocks: the note has "
                        f"more changed code than the script allows itself work for. Read the lines named for them")
@@ -559,6 +574,8 @@ def compare(note_lines, props, lines):
     placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
     ends = [end for end, _ in placed]
     for u in unexplained:
+        if u.get("maybe_of"):
+            continue                                 # it may be a block whose place is undecided: no new id for it
         k = bisect_left(ends, u["from"])             # the placed blocks that end above this range
         above = placed[k - 1][1] if k else "0"
         u["new_id"] = next_id(above, taken)
@@ -766,6 +783,28 @@ OWN_HEADING = re.compile(r"### Block \w+\b.*\(lines? \d+(\s*-\s*\d+)?\)\s*")
 OWN_LINE_CELL = re.compile(r"\s*\d+(\s*-\s*\d+)?\s*")
 
 
+def commonmark_fences(lines):
+    """For each line: whether it is a fence line or inside a fence, by CommonMark's rule for backtick fences. A
+    fence opens on a line of three or more backticks (after at most three spaces) with no backtick in the rest of
+    the line; it closes on a line of at least as many backticks with nothing but spaces after them. This is a
+    second reading of 'what is code', written apart from the check's fence_mask: the writer writes only where the
+    two agree. ```example``` on one line is inline code here, and a fence opener for fence_mask."""
+    inside, opener = [], None
+    for line in lines:
+        text = line.lstrip(" ")
+        indent = len(line) - len(text)
+        run = len(text) - len(text.lstrip("`"))
+        if opener is None:
+            opens = indent <= 3 and run >= 3 and "`" not in text[run:]
+            opener = run if opens else None
+            inside.append(opens)
+        else:
+            inside.append(True)
+            if indent <= 3 and run >= opener and text[run:].strip() == "":
+                opener = None
+    return inside
+
+
 def unhandled(lines):
     """The first thing in a note that the writer of --fix-moved does not handle, as (line number, what it is), or
     None. The writer handles: code fences of backticks that start at the beginning of a line, and tables whose
@@ -775,7 +814,14 @@ def unhandled(lines):
     indented, has no separator row, or stands directly under another table or under a quote or list item, '<?' or
     '<!' outside code, and every heading that is not '#' marks at the beginning of a line followed by a space and
     text: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
-    without text. The properties block at the top is left out."""
+    without text. The properties block at the top is left out. Before all that, the note is refused when the
+    check's reading of its fences (fence_mask) and CommonMark's (commonmark_fences) do not give the same lines as
+    code, and when a line begins with ``` and holds another backtick."""
+    # First of all: the check's reading of the fences and CommonMark's must give the same lines as code. Where
+    # they differ, the note holds a fence that can be read in two ways, and the writer keeps out of it.
+    for n, (one, other) in enumerate(zip(fence_mask(lines), commonmark_fences(lines)), 1):
+        if one != other:
+            return n, "a line that is code by one reading of the note's fences and text by another"
     fence, fence_at, rows = None, 0, 0
     props = bool(lines) and lines[0].strip() == "---"        # the properties block: its lines are no Markdown
     text_above = marker_above = False                # the line before holds text; it begins with a quote or list mark
@@ -784,6 +830,8 @@ def unhandled(lines):
             props = n == 1 or line.strip() != "---"
             continue
         text = line.lstrip(" \t")
+        if re.match(r" {0,3}`{3,}[^`]*`", line):
+            return n, "a line that begins with ``` and holds another backtick (inline code that looks like a fence)"
         indent = len(line) - len(text)
         ticks = len(text) - len(text.lstrip("`"))
         if fence is not None:
@@ -864,6 +912,20 @@ def own_check(old, new):
     trace_header = ["Step", "Line", "Variable", "Value"]
     if len(old) != len(new):
         return 0
+    # The block headings of the new text, read here once more: id -> its lines. Every number the writer put into
+    # a table must agree with them.
+    heads, open_run = {}, 0
+    for line in new:
+        run = len(line) - len(line.lstrip("`"))
+        if open_run:
+            open_run = 0 if run >= open_run and not line.strip("`").strip() else open_run
+        elif run >= 3 and "`" not in line[run:]:
+            open_run = run
+        else:
+            found = re.fullmatch(r"### Block (\w+)\b.*\(lines? (\d+)(?:\s*-\s*(\d+))?\)\s*", line)
+            if found:
+                heads[found.group(1)] = (int(found.group(2)), int(found.group(3) or found.group(2)))
+    block_id = ""                                    # the id of the block whose section we are in
     in_props = bool(old) and old[0].strip() == "---"
     depth_full = False
     fence = None                                     # the open fence, as (its character, its length)
@@ -878,11 +940,14 @@ def own_check(old, new):
             in_props = props_line = False
         if props_line and was.split(":", 1)[0].strip() == "depth":
             depth_full = was.split(":", 1)[-1].strip().strip("\"'") == "full"
-        # A fence here is any run of three or more ` or ~ at the start of a line, indented or not: wider than what
-        # the writer knows, so that a table inside any kind of fence is never let through.
+        # A fence here is a run of three or more ` or ~ at the start of a line, indented or not, also behind a
+        # quote mark. For backticks CommonMark's rule holds: a line with another backtick after the run opens
+        # nothing (it is inline code).
         text = was.lstrip(" \t>")
         mark = text[:1] if text[:3] in ("```", "~~~") else ""
         run = len(text) - len(text.lstrip(mark)) if mark else 0
+        if fence is None and mark == "`" and "`" in text[run:]:
+            mark, run = "", 0
         inside = fence is not None
         if fence is None and run >= 3 and not in_props:
             fence, inside = (mark, run), True
@@ -912,6 +977,7 @@ def own_check(old, new):
                 section = was.strip() if level == 2 and plain else ""
             if level <= 3:
                 in_block, code_seen = level == 3 and plain and OWN_HEADING.fullmatch(was) is not None, False
+                block_id = was.split()[2].rstrip(":") if in_block else ""
             place = ("level2" if section == "## Level 2: blocks" else "trace" if section.startswith("## Trace")
                      else "") if level == 2 else ""
         first_row = False
@@ -950,6 +1016,18 @@ def own_check(old, new):
                 or any(x != y for k, (x, y) in enumerate(zip(before, after)) if k != column)
                 or not OWN_LINE_CELL.fullmatch(before[column]) or not OWN_LINE_CELL.fullmatch(after[column])
                 or re.sub(r"\s*-\s*|\d", "", before[column]) != re.sub(r"\s*-\s*|\d", "", after[column])):
+            return n
+        # The numbers themselves, against the block headings of the new text: a Level 2 row holds exactly the
+        # lines of the block it names; a line row lies inside its block; a Trace row inside some block.
+        numbers = [int(x) for x in re.findall(r"\d+", after[column])]
+        first, last = numbers[0], numbers[-1]
+        if kind == "level2":
+            fits = heads.get(before[1].strip()) == (first, last)
+        elif kind == "line":
+            fits = block_id in heads and heads[block_id][0] <= first <= last <= heads[block_id][1]
+        else:
+            fits = any(a <= first <= last <= b for a, b in heads.values())
+        if not fits:
             return n
     return None
 
@@ -1397,6 +1475,10 @@ def print_report(report):
         was = f"block {entry['id']} ({at(entry['from'], entry['to'])})"
         if entry["state"] == "moved":
             print(f"MOVED {was}: now {at(*entry['at'])}")
+        elif entry["state"] == "undecided" and entry.get("why") == "order":
+            print(f"UNDECIDED {was}: its code is not found, and the blocks around it changed order, so the lines "
+                  f"where its new form would be cannot be named. It is not called gone. Look at the file: rewrite "
+                  f"it from its new form, or remove it when its code is gone")
         elif entry["state"] == "undecided":
             where = (f"its code is at {at(*entry['proposed'])}, but the search for places was cut short (see "
                      f"BOUNDED), so a full search could place it elsewhere" if "proposed" in entry else
@@ -1455,7 +1537,11 @@ def print_report(report):
             why = f"beside block {', '.join(u['beside'])}{more}, which has no sure place: may be its new form"
         else:
             why = "new code: no changed block beside it"
-        if not u["code_of"] and len(u.get("changed_beside", ())) > 1:
+        if u.get("maybe_of"):
+            print(f"UNEXPLAINED {at(u['from'], u['to'])}: may be the new form of block {', '.join(u['maybe_of'])}, "
+                  f"which is undecided because the blocks around it changed order: look at the file before "
+                  f"you write a new block")
+        elif not u["code_of"] and len(u.get("changed_beside", ())) > 1:
             together = u["changed_beside"]
             print(f"UNEXPLAINED {at(u['from'], u['to'])}: blocks {', '.join(together[:-1])} and {together[-1]} changed "
                   f"and lie together in these lines: divide the lines between them by reading the code (lines none "
@@ -1466,6 +1552,8 @@ def print_report(report):
             print(f"UNEXPLAINED {at(u['from'], u['to'])}: probably the new form of block {block_id}: take these "
                   f"lines into block {block_id} when you rewrite it (lines it does not take would be a new block "
                   f"with the id {u['new_id']})")
+        elif u["code_of"]:
+            print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}: these lines are that block's, no new block")
         else:
             print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
     for item in report["todo"]:
