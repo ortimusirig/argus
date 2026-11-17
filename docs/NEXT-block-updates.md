@@ -51,3 +51,14 @@ revision where they touch the same text (dirty work tree, `%%` in inline code, a
    not check that Obsidian is there, and the extension's "Choose the notes folder" asks for the notes folder only.
 7. The guided walk when the source may not be written to: `make_tour.py` gets a place outside the project, and the
    notes say how to open it (`CodeTour: Open Tour File...`).
+
+## Added on 2026-11-16 (owner: "I don't see the graphify link, also the archify diagram")
+
+8. The graph is shown, not only used: after a run the skill keeps graphify's `graph.html` at a place that lasts
+   (beside the notes or in a folder the owner names) and the Start Here note links to it. Today it stays in a
+   temporary folder and no note names it.
+9. A diagram of how the code runs, per project or per main flow, as part of the notes: the owner expects the
+   "archify" kind (entry to result, every end state, who decides, what each part cannot do). Today the skill writes
+   a Mermaid sequence diagram in Mechanism notes only. First one made by hand on 2026-11-16 for `xreview.sh code`
+   (artifact https://claude.ai/artifact/3bNRQqb7rp5wMTvVYPfYKa); decide whether the skill makes such a page or a
+   Mermaid flowchart inside the File note.
