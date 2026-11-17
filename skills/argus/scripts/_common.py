@@ -158,6 +158,11 @@ def normalize_scopes(root, scopes):
 
 
 def in_scope(rel, scopes):
+    """Whether the path lies in one of the scopes ([] is everything). On Windows letter case does not tell two
+    paths apart, so it does not here either: the scope gone.py holds the source Gone.py of a file that is no
+    longer there to give its spelling."""
+    if WINDOWS:
+        rel, scopes = rel.lower(), [s.lower() for s in scopes]
     return not scopes or any(rel == s or rel.startswith(s + "/") for s in scopes)
 
 
