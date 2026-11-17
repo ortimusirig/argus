@@ -30,6 +30,8 @@ with the source file as it is on disk now and gives each block one state:
              exists. The note's form is checked in every
              run, with or without --fix-moved, before any block is compared. Only what makes a block's code,
              heading or section unsure stops the comparison, and then every block of the note is not compared:
+             a property that stands twice in the properties block (the script reads the last, so which source,
+             depth, masked_lines or written_by counts is not sure; the PROBLEM names the key and both lines),
              code fences that two readings of the note take differently (a line that begins with ``` and holds
              another backtick, a fence never closed, a fence of ~, an indented fence, a fence in a quote or a
              list item) and a heading in any form but # marks at the beginning of a line, a space and text.
@@ -40,7 +42,15 @@ with the source file as it is on disk now and gives each block one state:
 It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
 covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
 a new block there would get (the id of the block above plus a letter, never an id in use or in retired_blocks):
-a new block only when the lines belong to none of those blocks.
+a new block only when the lines belong to none of those blocks. The lines of a block that is not compared are
+not such lines: a range that holds its recorded lines (moved as the placed block before it moved) is given as
+"lines of block N, which is not compared", with no id for a new block.
+
+A note is listed, compared and written only when its real path lies under the real path of --notes. A note file
+under a folder junction or folder link that leads out of the notes folder gets one PROBLEM line ("lies outside
+the notes folder by its real path: not read") and is never opened or written; the result is then not CURRENT.
+This is looked at when the notes are listed and again, under the note's lock, directly before the new text takes
+the note's place.
 
 The placing rule is the one the VS Code extension uses. Blocks keep the order of their recorded first lines. Among
 all ways to put blocks, in that order and without overlap, at places where their whole code matches, the script
@@ -67,8 +77,15 @@ the comparison as it is (an HTML block such as a line that is only <br>, '<?' or
 table in another form than the templates'), is compared as usual and can be CURRENT. Only when it has moved
 blocks it is not written at all: one PROBLEM line names the construct and its line, with or without --fix-moved,
 the MOVED lines give the new lines, the moved line numbers of that note are set by hand, and the result is not
-CURRENT until they are. The writer's result is checked by a second reading of the note before it reaches the
-disk. The script never renames or deletes a note and says what it wrote in WROTE lines. Two runs
+CURRENT until they are. The writer's result is checked twice before it reaches the disk. First by a second
+reading of the note: only line numbers in the four places may differ. Then, last of all, by the comparison itself:
+the new text is compared once more with the same source lines, in memory, and it is written only when every block
+that was moved is 'same' at its new lines, every block that was 'same' still is, no other block has a worse
+state, and the note has no more PROBLEM lines than before. Else nothing is written for the note, one PROBLEM line
+says so ("the result of the move did not compare as expected (block N: was moved, would be changed)"), the blocks
+stay reported as they were, and the line numbers are set by hand. This check knows no shapes of note: whatever
+the writer and the reader take differently shows in it.
+The script never renames or deletes a note and says what it wrote in WROTE lines. Two runs
 cannot write one note at the same time. A note that changed after it was compared is not written: its bytes are
 read again as the last thing before the new text takes its place. What remains is a save by another program in
 the instant between that reading and the replace. The report shows the state after the writing.
@@ -115,7 +132,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
-                     frontmatter, in_ranges, in_scope, is_row, line_ranges, link_names, mask_fits, merge_ranges,
+                     frontmatter, in_ranges, in_scope, is_row, lies_under, line_ranges, link_names, mask_fits, merge_ranges,
                      missing_under_root,
                      normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, source_lines, source_set, utf8_output,
                      without_inline_code)
@@ -392,10 +409,13 @@ def compare(note_lines, props, lines):
     if strange:
         result = [{"id": block["id"], "from": block["a"], "to": block["b"], "lines": 0, "no_code": True,
                    "note_form": True, "state": "not compared"} for block in blocks]
+        for entry in result if len(strange) > 2 else ():
+            entry["property_twice"] = True
         counts = {state: len(result) if state == "not compared" else 0 for state in STATES}
-        problems.append(f"note line {strange[0]} holds {strange[1]}: what is a block's code, heading or section is "
-                        f"not sure there. No block of this note is compared and nothing is written for it: repair "
-                        f"the note's form at that line, then run again. Rewrite no block for this reason")
+        why = strange[2] if len(strange) > 2 else "what is a block's code, heading or section is not sure there"
+        problems.append(f"note line {strange[0]} holds {strange[1]}: {why}. No block of this note is compared and "
+                        f"nothing is written for it: repair the note's form at that line, then run again. Rewrite "
+                        f"no block for this reason")
         return {"blocks": result, "counts": counts, "unexplained": [], "bounded": bounded, "problems": problems,
                 "lines": total, "retired_blocks": retired_ids(props), "reordered": [], "_blocks": blocks,
                 "_mask": mask, "_declared": declared, "_cites": [], "_depth": props.get("depth", ""),
@@ -630,6 +650,15 @@ def compare(note_lines, props, lines):
                         u["unplaced_here"].append(entry["id"])
     for u in unexplained:
         u.pop("_last_unplaced", None)
+    # A block that is not compared (no code fence of its own, an empty one) has lines in the source all the same.
+    # They are not "lines no block covers": they are that block's, and nobody is to write a new block for them.
+    # Its recorded lines, moved as the placed block before it in the note moved, are all that is known of where
+    # it is; with no placed block before it, the recorded lines as they are. Every range that holds one of those
+    # lines names the block and gets no id for a new block until the note's form is repaired.
+    for entry in result:
+        if entry["state"] == "not compared":
+            for u in ranges_over(*entry["expected"]):
+                u.setdefault("not_compared", []).append(entry["id"])
     # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
     # id the note uses or has retired.
     retired = retired_ids(props)
@@ -637,7 +666,7 @@ def compare(note_lines, props, lines):
     placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
     ends = [end for end, _ in placed]
     for u in unexplained:
-        if u.get("unplaced_here") or u["code_of"]:
+        if u.get("unplaced_here") or u["code_of"] or u.get("not_compared"):
             continue                                 # not lines for a new block, or not yet
         k = bisect_left(ends, u["from"])             # the placed blocks that end above this range
         above = placed[k - 1][1] if k else "0"
@@ -806,16 +835,24 @@ def decode_note(data):
         return None
 
 
-def write_note(path, compared, new):
+OUTSIDE = "lies outside the notes folder by its real path"
+
+
+def write_note(path, compared, new, notes_dir):
     """Puts `new` in place of the note, when the note's bytes are still `compared`, the bytes the report was made
     from. First the new text is written to a file of this run's own (a new name, made so that nothing existing is
     opened and no link is followed). Then, as the last thing before the replace, the note is read again: only when
     it still holds the compared bytes does the new file take its place, in one step. Else the new file is removed
     and nothing is written. What remains: a save by another program in the instant between that last reading and
-    the replace. Returns an error text or None."""
+    the replace. The note must lie under the notes folder by its real path (a folder junction or folder link
+    inside the notes folder can lead out of it): that is looked at before this run's own file is made beside the
+    note, and once more directly before the replace, because a folder can be pointed elsewhere in between.
+    Returns an error text or None."""
     path = Path(path)
     if path.is_symlink():
         return "the note is a link; nothing written"
+    if not lies_under(path, notes_dir):
+        return f"the note {OUTSIDE}; nothing written"
     temp = None
     try:
         handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".argus-", suffix=".tmp")
@@ -827,6 +864,8 @@ def write_note(path, compared, new):
             pass
         if path.read_bytes() != compared:
             return "the note changed since it was compared; nothing written. Run again"
+        if path.is_symlink() or not lies_under(path, notes_dir) or not lies_under(temp, notes_dir):
+            return f"the note {OUTSIDE} now, or became a link; nothing written"
         os.replace(temp, path)
         temp = None
     except OSError as error:
@@ -855,6 +894,10 @@ def write_note(path, compared, new):
 
 # Kind A. What is a block's code, heading or section cannot be trusted. No block of the note is compared.
 STOPS_COMPARING = {
+    # The reader of the properties (frontmatter()) takes the last line of a key, the writer of masked_lines and
+    # other programs may take the first. The reader's choice decides what is compared: source, depth,
+    # masked_lines, written_by. With any key twice, what the note means is not sure.
+    "property twice": "a property that stands twice in the properties block",
     "fence two readings": "a line that is code by one reading of the note's fences and text by another",
     "fence inline": "a line that begins with ``` and holds another backtick (inline code that looks like a fence)",
     "fence of ~": "a code fence made of ~",
@@ -915,6 +958,25 @@ def commonmark_fences(lines):
     return inside
 
 
+def repeated_property(lines):
+    """The first property that the properties block holds twice, as (key, note line of its first line, note line
+    of its second), or None. The block and its keys are taken exactly as frontmatter() takes them, so that 'twice'
+    means: the reader has two values for one key and keeps the last."""
+    text = "\n".join(lines)
+    end = text.find("\n---", 3) if text.startswith("---") else -1
+    if end < 0:
+        return None
+    seen = {}
+    for n in range(1, text.count("\n", 0, end) + 2):
+        for piece in (lines[n - 1][3:] if n == 1 else lines[n - 1]).splitlines():
+            if ":" in piece:
+                key = piece.split(":", 1)[0].strip()
+                if key in seen:
+                    return key, seen[key], n
+                seen[key] = n
+    return None
+
+
 def form_tests(lines):
     """Every thing in a note that the script was not made for, in the order of the lines, as (line number, name
     of the test). The names are the keys of STOPS_COMPARING and STOPS_WRITING. The script handles: code fences of
@@ -927,11 +989,14 @@ def form_tests(lines):
     of heading: an indented heading, an underlined heading, a heading in a quote or list item, one with a tab or
     without text. A line of only = or only - is an underlined heading only when the line directly above it is
     paragraph text and the line stands in that paragraph's container (see `above` below); in every other place
-    a line --- is a rule and is not named. The properties block at the top is left out. Before all that, the
-    check's reading of the note's fences (fence_mask) and CommonMark's (commonmark_fences) must give the same
-    lines as code.
+    a line --- is a rule and is not named. The properties block at the top is left out, but for one thing: a
+    property that stands twice in it (repeated_property) is named first of all. Then the check's reading of the
+    note's fences (fence_mask) and CommonMark's (commonmark_fences) must give the same lines as code.
     After a test of STOPS_COMPARING nothing more needs to be read; after one of STOPS_WRITING the reading goes
     on as if the line were plain text."""
+    twice = repeated_property(lines)
+    if twice:
+        yield twice[2], "property twice"
     # First of all: the check's reading of the fences and CommonMark's must give the same lines as code. Where
     # they differ, the note holds a fence that can be read in two ways.
     for n, (one, other) in enumerate(zip(fence_mask(lines), commonmark_fences(lines)), 1):
@@ -1058,6 +1123,11 @@ def note_form(lines):
     nothing is written."""
     writer_only = None
     for n, name in form_tests(lines):
+        if name == "property twice":
+            key, first, _ = repeated_property(lines)
+            return (n, f"the property '{key}' a second time (the first is at note line {first})",
+                    "the script reads the last of the two, another reader may take the first, so what the note is "
+                    "compared with is not sure. Keep one of the two"), writer_only
         if name in STOPS_COMPARING:
             return (n, STOPS_COMPARING[name]), writer_only
         what = STOPS_WRITING[name]                   # KeyError: a test that was put in neither list
@@ -1255,6 +1325,41 @@ def own_check(old, new):
         if not fits:
             return n
     return moved_head or None                        # a changed heading at the end of the note, with no code under it
+
+
+def move_check(before, note_lines, props, lines):
+    """The last check before a note is written, and the general one: the script's own comparison, run once more
+    on the new text of the note (`note_lines`, `props`) against the same source lines, in memory. `before` is
+    the comparison the writer worked from. A move is right only when the result says so:
+      every block that this run moved is 'same', at the lines that were written;
+      every block that was 'same' is 'same', at the same lines;
+      no other block has a worse state than before (the order of STATES);
+      the note has no more PROBLEM lines than before.
+    Returns None, or what did not hold. The guards before this one name shapes of note that are known to go
+    wrong; this one asks nothing about shapes. Whatever the writer and the reader take differently, in a way
+    that matters, shows here as a block that would not be 'same' after the write."""
+    after = compare(note_lines, props, lines)
+    was, now = before["blocks"], after["blocks"]
+    if [e["id"] for e in was] != [e["id"] for e in now]:
+        return f"the note had {len(was)} blocks and would have {len(now)}, or other ids"
+
+    def state(e):
+        return e["state"] + (f" at {'line' if e['at'][0] == e['at'][1] else 'lines'} {span(*e['at'])}" if "at" in e else "")
+
+    for old, new in zip(was, now):
+        if old["state"] == "moved" or "moved_to" in old:
+            target = old["at"] if old["state"] == "moved" else old["moved_to"]
+            if new["state"] != "same" or new["at"] != target:
+                return f"block {old['id']}: was moved, would be {state(new)}"
+        elif old["state"] == "same":
+            if new["state"] != "same" or new["at"] != old["at"]:
+                return f"block {old['id']}: was same, would be {state(new)}"
+        elif STATES.index(new["state"]) > STATES.index(old["state"]):
+            return f"block {old['id']}: was {old['state']}, would be {new['state']}"
+    if len(after["problems"]) > before["_own_problems"]:
+        return (f"the note had {before['_own_problems']} PROBLEM lines of its own and would have "
+                f"{len(after['problems'])}")
+    return None
 
 
 class Refuse(Exception):
@@ -1481,6 +1586,7 @@ def build(path, text, root, scopes, known):
         return report
     lines, _ = source_lines(Path(root) / src)
     found = compare(text.split("\n"), props, lines)
+    found["_source"], found["_own_problems"] = lines, len(found["problems"])     # for move_check()
     recorded, now = props.get("source_hash", ""), file_hash(Path(root) / src)
     state = "none" if not recorded else "same" if recorded == now else "differs"
     if recorded and not SOURCE_HASH.fullmatch(recorded):
@@ -1518,7 +1624,7 @@ def note_text(data):
     return data.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def note_report(path, root, scopes, fix, known):
+def note_report(path, root, scopes, fix, known, notes_dir):
     """The report of one note, or None when it is not a File note of this skill or its source is out of scope."""
     report = build(path, note_text(read_text(path)[0]), root, scopes, known)
     if report is None:
@@ -1531,10 +1637,13 @@ def note_report(path, root, scopes, fix, known):
         error = None
         try:
             with NoteLock(path):
-                data = Path(path).read_bytes()
+                inside = lies_under(path, notes_dir)             # a folder on its way may lead elsewhere by now
+                data = Path(path).read_bytes() if inside else b""
                 decoded = decode_note(data)
-                locked = build(path, note_text(decoded[1]), root, scopes, known) if decoded else None
-                if decoded is None:
+                locked = build(path, note_text(decoded[1]), root, scopes, known) if decoded and inside else None
+                if not inside:
+                    error = f"the note {OUTSIDE} now: not read again, nothing written"
+                elif decoded is None:
                     error = "the note is not UTF-8; nothing written"
                 elif locked is None or locked["_found"] is None:
                     error = ("read again under the lock, the note is no longer a File note of this skill with a "
@@ -1555,7 +1664,16 @@ def note_report(path, root, scopes, fix, known):
                                      f"line number in a block heading, in masked_lines or in a Line column. Nothing "
                                      f"written; set the line numbers of the moved blocks by hand")
                     if new is not None and not error:
-                        error = write_note(path, data, new)
+                        # The general check, last of all: the new text is compared once more, in memory, with
+                        # the same source lines. Nothing is written unless the moved blocks are 'same' in it.
+                        text = note_text(decode_note(new)[1])
+                        bad = move_check(locked["_found"], text.split("\n"), frontmatter(text),
+                                         locked["_found"]["_source"])
+                        if bad:
+                            error = (f"the result of the move did not compare as expected ({bad}); nothing "
+                                     f"written; set the line numbers by hand")
+                    if new is not None and not error:
+                        error = write_note(path, data, new, notes_dir)
                     if new is not None and not error:
                         report = build(path, note_text(decode_note(new)[1]), root, scopes, known)
                         report["wrote"] = wrote
@@ -1630,12 +1748,13 @@ def finish(report, known):
     return report
 
 
-def survey(notes_dir, root):
-    """What the notes folder holds, read once before any note is judged: for each note of this skill its type, the
+def survey(paths, root):
+    """What the notes folder holds (`paths`: its notes), read once before any note is judged: for each note of
+    this skill its type, the
     source files it names that are under the source root, and the notes it links to. From this a missing source
     file can be told from a wrong source root, and the notes that cite a file are known."""
     notes = []
-    for path in note_paths(notes_dir):
+    for path in paths:
         try:
             text = note_text(read_text(path)[0])
         except OSError:
@@ -1709,8 +1828,23 @@ def dependent_notes(known, root, scopes):
 
 
 def note_paths(notes_dir):
-    return [path for path in sorted(Path(notes_dir).rglob("*.md"))
-            if not any(part.startswith(".") for part in path.relative_to(notes_dir).parts[:-1])]
+    """(the notes of the folder, the .md files that are listed in it and lie outside it). A note is read,
+    compared and written only when its real path lies under the real path of the notes folder: a file under a
+    folder junction or a folder link that leads out of the notes folder is none of its notes."""
+    inside, outside = [], []
+    for path in sorted(Path(notes_dir).rglob("*.md")):
+        if not any(part.startswith(".") for part in path.relative_to(notes_dir).parts[:-1]):
+            (inside if lies_under(path, notes_dir) else outside).append(path)
+    return inside, outside
+
+
+def unread_report(path, problem):
+    """The report of a note that was not read, or on which the script failed. Made new for each note: no list or
+    dict of one note's report is shared with another's."""
+    return {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
+            "unexplained": [], "bounded": [], "lines": 0, "source_state": "not read", "source_gone": False,
+            "reordered": [], "problems": [problem], "counts": {state: 0 for state in STATES},
+            "source_hash": {"recorded": None, "now": None, "state": "none"}}
 
 
 def print_report(report):
@@ -1721,10 +1855,13 @@ def print_report(report):
                   "none": f"the note has no source_hash; the value to write is {now}"}[report["source_hash"]["state"]]
     for item in report["wrote"]:
         print(f"WROTE {name}: {item}")
-    print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
-          f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['displaced']} "
-          f"displaced, {counts['ambiguous']} ambiguous, {counts['undecided']} undecided, {counts['not compared']} "
-          f"not compared; {len(report['unexplained'])} unexplained ranges; {hash_state}")
+    if report["source_state"] == "not read":
+        print(f"NOTE {name}: not read")                # nothing is known of it: no source, no blocks, no hash
+    else:
+        print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
+              f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['displaced']} "
+              f"displaced, {counts['ambiguous']} ambiguous, {counts['undecided']} undecided, {counts['not compared']} "
+              f"not compared; {len(report['unexplained'])} unexplained ranges; {hash_state}")
     if report["source_state"] == "gone":
         print(f"GONE {name}: {report['gone']}")
     for item in report["problems"]:
@@ -1770,7 +1907,8 @@ def print_report(report):
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
         elif entry["state"] == "not compared":
-            why = ("the note's code fences or headings can be read in two ways" if entry.get("note_form") else
+            why = ("a property of the note stands twice in its properties block" if entry.get("property_twice") else
+                   "the note's code fences or headings can be read in two ways" if entry.get("note_form") else
                    "its code fence is empty" if entry.get("empty_fence") else
                    "it has no code fence of its own to compare")
             print(f"NOT COMPARED {was}: {why} (see PROBLEM). Not a changed "
@@ -1792,6 +1930,9 @@ def print_report(report):
         if u["code_of"]:
             print(f"{here}: holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks: "
                   f"these lines are that block's, no new block")
+        elif u.get("not_compared"):
+            print(f"{here}: lines of block {', '.join(u['not_compared'][:SHOWN])}, which is not compared: repair the "
+                  f"note's form first (see PROBLEM), then run again. No id for a new block until then")
         elif u.get("unplaced_here"):
             more = (f" and {u['unplaced_count'] - len(u['unplaced_here'])} more"
                     if u["unplaced_count"] > len(u["unplaced_here"]) else "")
@@ -1869,21 +2010,20 @@ def main():
     if not args.notes or not Path(args.notes).is_dir():
         ap.error(f"--notes must name a folder: {args.notes}")
     notes_dir = Path(args.notes)
-    known = survey(notes_dir, root)
+    inside, outside = note_paths(notes_dir)
+    known = survey(inside, root)
     reports = []
-    for path in note_paths(notes_dir):
+    for path in sorted(inside + outside):
+        if path in outside:
+            # Not opened, so it is not known whether it is a File note or in scope: it is named in every run.
+            reports.append(finish(unread_report(path, f"{OUTSIDE}: not read"), known))
+            continue
         try:
-            report = note_report(path, root, scopes, args.fix_moved, known)
+            report = note_report(path, root, scopes, args.fix_moved, known, notes_dir)
         except Exception as error:                   # noqa: BLE001  one note must not end the run or hide the others
-            # Made new for each note: no list or dict of one note's report is shared with another's.
-            report = {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
-                      "unexplained": [], "bounded": [], "lines": 0, "source_state": "not read",
-                      "source_gone": False, "reordered": [],
-                      "problems": [f"could not be read: {error}" if isinstance(error, OSError) else
+            report = unread_report(path, f"could not be read: {error}" if isinstance(error, OSError) else
                                    f"the script failed on this note ({type(error).__name__}: {error}); nothing was "
-                                   f"written for it. The other notes are reported as usual"],
-                      "counts": {state: 0 for state in STATES},
-                      "source_hash": {"recorded": None, "now": None, "state": "none"}}
+                                   f"written for it. The other notes are reported as usual")
         if report:
             reports.append(finish(report, known))
     dependents = dependent_notes(known, root, scopes)
