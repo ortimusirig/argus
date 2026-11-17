@@ -31,7 +31,7 @@ Open a source file. The Argus panel is in the activity bar. When no project is s
 | --- | --- | --- |
 | `argus.projects` | A list. Each entry has `sourceRoot` (the folder the notes' `source` paths are relative to) and `notesFolder` (the folder with the Argus notes). Optional: `vaultFolder` (the root of the Obsidian vault, for shared Concept and Library notes) and `graph` (the path of a graphify `graph.json` for the check) | Empty |
 | `argus.createCommand` | The agent program and its arguments, as a list. The placeholders `${file}`, `${notesFolder}`, `${sourceRoot}` and `${depth}` are filled in each argument | `["claude", "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."]` |
-| `argus.updateCommand` | The same for "Update explanation". Here `${depth}` is the depth of the file's note | `["claude", "Use the argus skill. Update the explanation of ${file}: correct the line numbers of moved blocks, rewrite only the changed blocks, add blocks for unexplained lines (needs the Argus skill 2.10 or later). Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."]` |
+| `argus.updateCommand` | The same for "Update explanation". Here `${depth}` is the depth of the file's note | `["claude", "Use the argus skill, version 2.10 or later. Update the explanation of ${file} as the section Later runs of the skill says: correct the line numbers of moved blocks, rewrite only the changed blocks, add blocks for unexplained lines. Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."]` |
 | `argus.createModel` | The model the agent uses, for Create and for Update. When it is not empty, the two arguments `--model` and this value are placed right after the program, before the other arguments of the command | Empty |
 | `argus.createDepth` | The depth asked for on create: `map` or `full` | `full` |
 | `argus.python` | The Python program for the check | `python` |
@@ -102,9 +102,14 @@ A fault in another note of the same folder keeps this note from showing "checked
 - One agent runs at a time, for Create and Update together.
 - When the agent ends without an error and has changed the note, the panel says "the note was updated", and the extension runs the check and shows the badge. When the note is the same as before, the panel says "the agent ended without changing the note".
 
+Update needs the Argus skill 2.10 or later. Create works with an older skill too.
+
+- The main branch of the Argus repository holds the skill 2.9.2 for now. Until 2.10 is on the main branch, it is on the branch `skill-2.10` of the same repository, in the folder `skills/argus`. Install the skill from that branch (see "The skill").
+- With an older skill, use Create. Or set `argus.updateCommand` to a prompt of your own that your skill can follow.
+
 ## The skill
 
-The agent needs the argus skill. Copy `skills/argus` from the Argus repository into `~/.claude/skills/`, or add the repository as a Claude Code plugin. Then run once:
+The agent needs the argus skill. Copy `skills/argus` from the Argus repository into `~/.claude/skills/`, or add the repository as a Claude Code plugin. The main branch gives the skill 2.9.2, which is enough for Create. Update needs 2.10 or later: until 2.10 is on the main branch, take `skills/argus` from the branch `skill-2.10`. Then run once:
 
 ```
 python -B skills/argus/scripts/setup_tools.py --install
