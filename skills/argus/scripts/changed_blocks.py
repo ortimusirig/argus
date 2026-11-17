@@ -374,8 +374,20 @@ def compare(note_lines, props, lines):
         if times > 1:
             problems.append(f"two '### Block {block_id}' sections: --fix-moved writes nothing for this note until "
                             f"each block has its own id")
+    # The check's block reader ends a block at '##' or at the next block heading, not at '# Appendix' or at an
+    # ordinary '###' heading, so it can take the first fence of a later section for the code of a block that has
+    # none. The second reading: a block's section ends at the next #, ## or ### heading. A fence that the reader
+    # took from beyond that is not the block's code. Nothing is compared for such a block, no place is stated for
+    # it, and --fix-moved writes nothing for the note.
     for block in blocks:
-        if block["first"] is None:
+        strict_end = next_heading(note_lines, mask, block["start"], 3)
+        if block["first"] is not None and block["first"] >= strict_end:
+            block.update(stray=strict_end + 1, code=[], first=None, last=block["end"])
+            problems.append(f"block {block['id']} has no code fence in its own section; the fence that was read "
+                            f"stands after the heading at note line {strict_end + 1}. Nothing is compared for this "
+                            f"block, and --fix-moved writes nothing for this note")
+    for block in blocks:
+        if block["first"] is None and "stray" not in block:
             problems.append(f"block {block['id']} has no code fence")
         starts, possible, cut = places(text, block["code"], block["a"], declared, keep, budget)
         if cut:
@@ -397,6 +409,8 @@ def compare(note_lines, props, lines):
     for index, block in enumerate(blocks):
         length, a, b = len(block["code"]), block["a"], block["b"]
         entry = {"id": block["id"], "from": a, "to": b, "lines": length}
+        if block["first"] is None:
+            entry["no_code"] = True                  # no code of its own to compare: no place is stated for it
         best = best_starts[index]
         if len(best) == 1 and not left_out[index] and cut_short and not (best[0] + 1 == a and b == a + length - 1):
             # The block is not at its recorded lines, and places of some block of this note were left out of the
@@ -455,13 +469,17 @@ def compare(note_lines, props, lines):
         entry.pop("_free", None)
 
     # Unexplained: non-blank lines outside every block that has one sure place.
+    # The lines of a displaced block whose one place is sure are that block's: they form ranges of their own, so
+    # that the lines beside them stay "lines no block covers".
     bare = [i + 1 for i in range(total) if not covered[i] and lines[i].strip()]
-    unexplained = [{"from": a, "to": b, "beside": [], "code_of": []} for a, b in ranges_of(bare)]
-    for entry in result:
-        for a, b in entry.get("elsewhere", ()):
-            for u in unexplained:
-                if u["from"] <= b and a <= u["to"]:
-                    u["code_of"].append(entry["id"])
+    owned = {n: e["id"] for e in result if "moved_to" in e for n in range(e["moved_to"][0], e["moved_to"][1] + 1)}
+    unexplained = []
+    for n in bare:
+        owner = owned.get(n)
+        if unexplained and unexplained[-1]["to"] == n - 1 and unexplained[-1]["code_of"] == ([owner] if owner else []):
+            unexplained[-1]["to"] = n
+        else:
+            unexplained.append({"from": n, "to": n, "beside": [], "code_of": [owner] if owner else []})
 
     # A block without a sure place gets no guess about where it went. The script says where it was expected (its
     # recorded lines, moved as the placed block before it in the note moved) and, for a block that was not found,
@@ -515,6 +533,31 @@ def compare(note_lines, props, lines):
         u["possible_owners"] = u["beside"] = owners  # 'beside' is the earlier name of this field
         if len(not_found) > SHOWN:
             u["possible_owners_more"] = len(not_found) - SHOWN
+    # Blocks without a sure place whose code is whole in the file: ambiguous ones, displaced ones with more than
+    # one place, undecided ones. An unexplained range that holds one of their possible places may be theirs in
+    # part. It names them, and no id for a new block is given until their place is chosen.
+    def ranges_over(a, b):
+        k = max(bisect_right(starts_of_ranges, a) - 1, 0)
+        while k < len(unexplained) and unexplained[k]["from"] <= b:
+            if unexplained[k]["to"] >= a:
+                yield unexplained[k]
+            k += 1
+
+    for entry in result:
+        length = entry["lines"]
+        if entry["state"] == "ambiguous":
+            spots = [(start, start + length - 1) for start in entry["candidates"]]
+        elif entry["state"] == "displaced" and "moved_to" not in entry and not entry.get("held"):
+            spots = [tuple(place) for place in entry["elsewhere"]]
+        elif entry["state"] == "undecided":
+            spots = [tuple(entry["proposed"])] if "proposed" in entry else [(1, total)]   # no place known: anywhere
+        else:
+            continue
+        for a, b in spots:
+            for u in ranges_over(a, b):
+                here = u.setdefault("unplaced_here", [])
+                if entry["id"] not in here and len(here) < SHOWN:
+                    here.append(entry["id"])
     # The id a new block would get at each unexplained range: the id of the block above it plus a letter, never an
     # id the note uses or has retired.
     retired = retired_ids(props)
@@ -522,6 +565,8 @@ def compare(note_lines, props, lines):
     placed = sorted((e["at"][1], e["id"]) for e in result if "at" in e)
     ends = [end for end, _ in placed]
     for u in unexplained:
+        if u.get("unplaced_here") or u["code_of"]:
+            continue                                 # not lines for a new block, or not yet
         k = bisect_left(ends, u["from"])             # the placed blocks that end above this range
         above = placed[k - 1][1] if k else "0"
         u["new_id"] = next_id(above, taken)
@@ -876,6 +921,7 @@ def own_check(old, new):
     section, in_block = "", False                    # the last '## ' heading; inside a block's own section
     code_seen = False                                # the block's code fence is behind us
     place = ""                                       # which template table may begin on the next row: level2 or line
+    moved_head = 0                                   # the line of a changed block heading whose code fence is not seen yet
     text_above = False                               # the line before holds text (for an underlined heading)
     kind, header = "", None                          # what the table we are in is; its heading cells
     for n, (was, now) in enumerate(zip(old, new), 1):
@@ -899,6 +945,7 @@ def own_check(old, new):
             fence = None
             if in_block and not code_seen:
                 code_seen, place = True, "line"      # the block's code fence has just closed: its line table may follow
+                moved_head = 0
             else:
                 place = ""
         elif inside:
@@ -920,6 +967,8 @@ def own_check(old, new):
             if level <= 2:
                 section = was.strip() if level == 2 and plain else ""
             if level <= 3:
+                if moved_head:
+                    return moved_head                # that block's section ended and held no code fence
                 in_block, code_seen = level == 3 and plain and OWN_HEADING.fullmatch(was) is not None, False
                 block_id = was.split()[2].rstrip(":") if in_block else ""
             place = "level2" if level == 2 and section == "## Level 2: blocks" else ""
@@ -942,6 +991,7 @@ def own_check(old, new):
             return n
         if OWN_HEADING.fullmatch(was) and OWN_HEADING.fullmatch(now):
             if was[:was.rindex("(line")] == now[:now.rindex("(line")]:
+                moved_head = n                       # allowed once this block's own code fence has been seen
                 continue
             return n
         if header is None or first_row:
@@ -968,7 +1018,7 @@ def own_check(old, new):
             fits = block_id in heads and heads[block_id][0] <= first <= last <= heads[block_id][1]
         if not fits:
             return n
-    return None
+    return moved_head or None                        # a changed heading at the end of the note, with no code under it
 
 
 class Refuse(Exception):
@@ -1050,6 +1100,8 @@ def moved_text(data, report):
     if len(set(ids)) != len(ids):
         # A row of a table is found by the block's id; with one id for two blocks a row would get the wrong lines.
         return None, [], None, left                  # the PROBLEM line of the comparison says why
+    if any("stray" in block for block in blocks):
+        return None, [], None, left                  # the PROBLEM line of the comparison names the block
     strange = unhandled(lines)
     if strange:
         return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
@@ -1465,6 +1517,9 @@ def print_report(report):
                       f"of the blocks does not allow it there; there is more than one such place, or another block "
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
+        elif entry["state"] == "changed" and entry.get("no_code"):
+            print(f"CHANGED {was}: it has no code fence of its own to compare (see PROBLEM). Nothing is said about "
+                  f"its place: give the block its code fence first")
         elif entry["state"] == "changed":
             if entry.get("spaces_only"):
                 print(f"CHANGED {was}: not found as copied, but at {at(*entry['likely'])} it differs only in spaces "
@@ -1482,6 +1537,10 @@ def print_report(report):
         if u["code_of"]:
             print(f"{here}: holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks: "
                   f"these lines are that block's, no new block")
+        elif u.get("unplaced_here"):
+            print(f"{here}: lines no block covers. They hold a possible place of block "
+                  f"{', '.join(u['unplaced_here'])}, whose place is not chosen yet: choose that block's place first, "
+                  f"then divide the lines that are left. No id for a new block until then")
         elif u["possible_owners"]:
             more = f" and {u['possible_owners_more']} more" if "possible_owners_more" in u else ""
             print(f"{here}: lines no block covers. Blocks that were not found and may be here, nearest first: "
