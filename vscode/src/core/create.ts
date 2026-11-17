@@ -267,11 +267,20 @@ export async function fileHash(file: string): Promise<string | undefined> {
   }
 }
 
+/** What the reading of the notes after the end of a run could not read. `failed`: the reading failed as a whole.
+ *  `kept`: a note of the file is held from an earlier reading, because this one could not read it. `incomplete`: a
+ *  folder or a note file of the project could not be read, so a note of the file may lie where nothing was read. */
+export interface EndReading { failed?: boolean; kept?: boolean; incomplete?: boolean; }
+
 /** What the end of a run means, in the design's order. `before` and `after` are the note marks of the file from
  *  before the start and from the index read again after the end. `check`: the check is run and its state shown.
- *  The rules are the same for both kinds of run; the sentences fit the kind: Create writes a note, Update changes one. */
-export function afterRun(ended: Ended, program: string, before: string, after: string, sourceChanged: boolean,
-  kind: Kind = "create"): { say?: string; check: boolean } {
+ *  The rules are the same for both kinds of run; the sentences fit the kind: Create writes a note, Update changes one.
+ *  The marks are compared only when the reading after the end did read what they stand for (`reading`): what the
+ *  index keeps from an earlier reading says nothing of what the agent wrote. Then the sentence says that the
+ *  result is not known and that the check did not run, never that the agent wrote or changed nothing.
+ *  `sourceChanged` is undefined when the source file could not be read before the start or after the end. */
+export function afterRun(ended: Ended, program: string, before: string, after: string, sourceChanged: boolean | undefined,
+  kind: Kind = "create", reading: EndReading = {}): { say?: string; check: boolean } {
   if (ended.how === "no-process") {
     return { check: false, say: `the agent did not run: the task ended without starting the program '${program}'; see the setting ${COMMAND[kind]}` };
   }
@@ -279,14 +288,25 @@ export function afterRun(ended: Ended, program: string, before: string, after: s
     return { check: false, say: `the agent stopped with an error${ended.code === undefined ? "" : ` (exit code ${ended.code})`}; `
       + `its output is in the terminal '${TASK[kind]}'` };
   }
-  const moved = "the file changed on disk while the agent ran; the note describes the text the agent read";
+  // Not known: the reading failed; or a note of the file is the one of an earlier reading; or no note was found
+  // (for Create also: none but those of before) while a part of the project's notes could not be read. Update
+  // changes the file's one note: when that note was read and is the same, nothing was changed, whatever else
+  // could not be read.
+  if (reading.failed || reading.kept || (reading.incomplete && (after === "" || (kind === "create" && after === before)))) {
+    return { check: false, say: kind === "update"
+      ? "the agent ended, but the note of this file could not be read just now, so it is not known whether the note was changed; the check did not run"
+      : "the agent ended, but the notes could not be read just now, so it is not known whether the note was written; the check did not run" };
+  }
+  const moved = sourceChanged === undefined
+    ? "the file could not be read, so it is not known whether it changed on disk while the agent ran"
+    : sourceChanged ? "the file changed on disk while the agent ran; the note describes the text the agent read" : undefined;
   if (kind === "update") {
     if (after === "") { return { check: false, say: "the agent ended, and the note of this file is not there any more" }; }
     if (after === before) { return { check: false, say: "the agent ended without changing the note" }; }
-    return { check: true, say: sourceChanged ? `the note was updated; ${moved}` : "the note was updated" };
+    return { check: true, say: moved !== undefined ? `the note was updated; ${moved}` : "the note was updated" };
   }
   if (after === "" || after === before) { return { check: false, say: "the agent finished without writing the note" }; }
-  return sourceChanged ? { check: true, say: moved } : { check: true };
+  return moved !== undefined ? { check: true, say: moved } : { check: true };
 }
 
 export type Phase = "starting" | "running" | "ending";

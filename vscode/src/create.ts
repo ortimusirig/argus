@@ -232,11 +232,18 @@ export class Create implements vscode.Disposable {
       this.changed();
       // The notes the agent wrote in its last moment are read before anything is judged.
       await this.wait(SETTLE_MS);
-      await this.index.refreshNow(project).catch(() => undefined);
+      let failed = false;
+      await this.index.refreshNow(project).catch(() => { failed = true; });
       if (!this.live(run)) { this.late(run); return; }
       this.check.inputChanged(project);                      // a finished run is an input event of the check
-      const result = afterRun(ended, started.program, started.notes, noteMark(this.index.notes.fileNotesFor(project, file)),
-        await fileHash(started.path) !== started.source, run.kind);
+      // What the index holds of the file's notes is compared with the start only as far as this reading read it:
+      // a note kept from an earlier reading, or a part of the notes that could not be read, makes the result
+      // unknown (core/create.ts, afterRun). The same for the source file: a hash that could not be taken is no hash.
+      const notes = this.index.notes.fileNotesFor(project, file);
+      const reading = { failed, kept: notes.some((note) => !this.index.notes.fresh(note)), incomplete: this.index.notes.incomplete(project) };
+      const source = await fileHash(started.path);
+      const result = afterRun(ended, started.program, started.notes, noteMark(notes),
+        source === undefined || started.source === undefined ? undefined : source !== started.source, run.kind, reading);
       if (result.check) {
         // The check's own generation rule decides whether its result may be shown; a result that was not used
         // because the notes still moved is asked for once more.
