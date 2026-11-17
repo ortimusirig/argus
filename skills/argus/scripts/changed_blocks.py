@@ -1462,7 +1462,14 @@ def moved_text(data, report):
     for i in (level2 or [0])[1:]:
         rows_of.setdefault((cells(lines[i]) or [""])[0], []).append(i)
     level2_missing = False
-    for block, entry in zip(blocks, report["blocks"]):
+    # For (b): the blocks by the first of their recorded lines, and for each place in that order the highest last
+    # line so far, so that the blocks whose recorded lines meet a range are found without going over every block
+    # for every moved block. Made only for a note that has masked_lines; without them (b) has nothing to do.
+    by_first = sorted((b["a"], b["a"] + len(b["code"]) - 1, n) for n, b in enumerate(blocks)) if declared else []
+    firsts, reach = [first for first, _, _ in by_first], []
+    for _, last, _ in by_first:
+        reach.append(max(last, reach[-1]) if reach else last)
+    for at, (block, entry) in enumerate(zip(blocks, report["blocks"])):
         if entry["state"] != "moved" and "moved_to" not in entry:
             continue
         new_a, new_b = entry["at"] if entry["state"] == "moved" else entry["moved_to"]
@@ -1503,10 +1510,16 @@ def moved_text(data, report):
         level2_missing = level2_missing or level2 is None
         # (b) masked_lines: a number moves with this block only when no other block's recorded lines hold it
         # too. After a partial update the recorded lines of two blocks can overlap; then nothing is moved.
-        old, rest = cut_ranges(declared, low, high)
-        shared = [other["id"] for other in blocks if other is not block and old
-                  and other["a"] <= high and low <= other["a"] + len(other["code"]) - 1
-                  and any(other["a"] <= b and a <= other["a"] + len(other["code"]) - 1 for a, b in old)]
+        old, rest = cut_ranges(declared, low, high) if declared else ([], declared)
+        shared = []
+        if old:
+            k = bisect_right(firsts, high) - 1       # the last block that starts at or before the range's end
+            while k >= 0 and reach[k] >= low:        # before k no block reaches the range once reach[k] < low
+                first, last, n = by_first[k]
+                if n != at and last >= low and any(first <= b and a <= last for a, b in old):
+                    shared.append(n)
+                k -= 1
+            shared = [blocks[n]["id"] for n in sorted(shared)]
         if old and delta and shared:
             left.append(f"masked_lines {', '.join(span(a, b) for a, b in old)}: these lines are in the recorded lines "
                         f"of block {block['id']} and of block {', '.join(shared)}, so they were not moved. Set them by "
