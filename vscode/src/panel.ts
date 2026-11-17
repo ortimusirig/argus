@@ -35,6 +35,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   private quiet?: NodeJS.Timeout;
   private readonly latest = new Latest();                     // what was asked for after the selection moved stays (core/latest.ts)
   private again?: NodeJS.Timeout;
+  private soon?: NodeJS.Timeout;                              // the shown document was edited: the page is drawn again after the quiet
   private drawn?: vscode.TextDocument;                        // the document whose explanation the page shows: its buttons act on it
   private viewed?: vscode.TextDocument;                       // the document fileView() last looked at; it becomes `drawn` when its page is shown
   private innerOf = "";                                       // the file and project the loaded page stands for
@@ -66,6 +67,7 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
   dispose(): void {
     if (this.quiet) { clearTimeout(this.quiet); this.quiet = undefined; }
     if (this.again) { clearTimeout(this.again); this.again = undefined; }
+    if (this.soon) { clearTimeout(this.soon); this.soon = undefined; }
     this.view = undefined;
   }
 
@@ -115,6 +117,21 @@ export class Panel implements vscode.WebviewViewProvider, vscode.Disposable {
       this.expire();
       this.render();
     }, QUIET_MS);
+  }
+
+  /** Whether the file view speaks of this document (by its URI): the one it was last made for, which may be
+   *  another than the active editor's (pinned lines, "Explain this file" for a split editor). */
+  shows(uri: string): boolean {
+    return this.viewed?.uri.toString() === uri;
+  }
+
+  /** The document the panel shows was edited while another editor is the active one: the page is drawn again
+   *  after 200 ms of quiet. This is no move of the person: nothing that was asked for is dropped, the pinned lines
+   *  stay, and the panel does not go over to the active editor. */
+  edited(): void {
+    if (!this.visible) { return; }                             // shown again, the panel is drawn anyway
+    if (this.soon) { clearTimeout(this.soon); }
+    this.soon = setTimeout(() => { this.soon = undefined; this.render(); }, QUIET_MS);
   }
 
   /** Drops what was kept before the selection last moved. */

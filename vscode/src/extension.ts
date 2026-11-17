@@ -63,10 +63,18 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.textEditor === vscode.window.activeTextEditor) { panel.follow(); }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => { panel.follow(); }),
-    vscode.window.onDidChangeVisibleTextEditors(() => { markers.refresh(); }),
+    vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      markers.refresh();
+      // The editor of the document the panel shows is gone, and the active editor may be the same as before (a
+      // split editor was closed): no other event draws the panel, which would go on showing a file no editor shows.
+      if (!editors.some((editor) => panel.shows(editor.document.uri.toString()))) { panel.render(); }
+    }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      matcher.edited(event.document.uri.toString(), event.document.version);
-      if (event.document === active()) { panel.follow(); }
+      const uri = event.document.uri.toString();
+      matcher.edited(uri, event.document.version);
+      // The panel is drawn again for every edit of the document it shows. That is the active editor's as a rule;
+      // it is another one while the panel is pinned to a split editor, and then the pin stays.
+      if (event.document === active()) { panel.follow(); } else if (panel.shows(uri)) { panel.edited(); }
       if (vscode.window.visibleTextEditors.some((editor) => editor.document === event.document)) { markers.later(); }
     }),
     vscode.workspace.onDidCloseTextDocument((document) => { matcher.drop(document.uri.toString()); }),
@@ -82,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     index.onDidPlace(() => { redraw(); }),
     matched.event((uri) => {
       markers.matched(uri);
-      if (uri === active()?.uri.toString()) { panel.render(); }
+      if (uri === active()?.uri.toString() || panel.shows(uri)) { panel.render(); }
     }),
   );
 
