@@ -36,6 +36,9 @@ interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<st
   read?: boolean;           // the folders were read to the end at least once
   unread?: number;          // how many folders the last reading could not read
   unreadFiles?: Set<string>; // note files that are there and could not be read
+  // The keys of the notes that are kept though the last reading did not read them: the file could not be read,
+  // or it lies under a folder that could not be read. What such a note holds on disk now is not known.
+  kept?: Set<string>;
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
 
 interface Way { file: string; key: string; }
@@ -213,7 +216,8 @@ export class NoteIndex {
         return false;
       };
       for (const [key, entry] of held.entries) {
-        if (seen.has(key) || (unread.size > 0 && hidden(entry))) { continue; }
+        if (seen.has(key)) { continue; }
+        if (unread.size > 0 && hidden(entry)) { (held.kept ??= new Set()).add(key); continue; }
         held.entries.delete(key); held.links = undefined; this.byId.delete(entry.id); changed = true;
       }
       for (const [folder, code] of unread) {
@@ -445,6 +449,7 @@ export class NoteIndex {
       const code = (error as NodeJS.ErrnoException).code ?? "error";
       if (code === "ENOENT" || code === "ENOTDIR") { held.unreadFiles?.delete(file); return drop(); }
       (held.unreadFiles ??= new Set()).add(file);
+      if (had) { (held.kept ??= new Set()).add(key); }
       const before = held.rejected.get(file);
       held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file could not be read (${code}); `
         + "what it holds is not known" + (had ? ", the note read from it before is shown" : ""));
@@ -452,6 +457,7 @@ export class NoteIndex {
     }
     held.unreadFiles?.delete(file);
     if (!this.live(held)) { return false; }
+    held.kept?.delete(key);                                           // the file was read: what follows is its text of now
     if (!bound) {
       held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file changed where it leads while it was read, `
         + "so it is not used; it is read again at the next change or refresh");
@@ -581,6 +587,16 @@ export class NoteIndex {
 
   noteById(id: number): Entry | undefined {
     return this.byId.get(id);
+  }
+
+  /** Whether what the index holds of this note is what its last reading read. False for a note that is kept
+   *  from an earlier reading because its file, or a folder above it, could not be read the last time: it is still
+   *  shown, but what it holds on disk now is not known, so nothing that must be sure of the note's text goes on. */
+  fresh(entry: Entry): boolean {
+    const held = this.of(entry.project);
+    if (!held) { return false; }
+    for (const key of held.kept ?? []) { if (held.entries.get(key) === entry) { return false; } }
+    return true;
   }
 
   /** Whether the note's real path lies, now, inside its project's notes folder or vault folder. Asked again before

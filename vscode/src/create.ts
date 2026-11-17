@@ -88,10 +88,12 @@ export class Create implements vscode.Disposable {
     return { notes: at.notes.filter(holds).length, note: at.note && at.note.file && holds(at.note) ? at.note : undefined };
   }
 
-  /** Whether Update may go on for a document, by the notes as the index holds them now, and the note it is for. */
+  /** Whether Update may go on for a document, by the notes as the index holds them now, and the note it is for.
+   *  A note that the index keeps from an earlier reading, because the last one could not read it, is refused. */
   private judge(document: vscode.TextDocument): { no: string | undefined; note: Entry | undefined } {
     const { notes, note } = this.noteOf(document);
-    return { note, no: updateRefusal({ notes, note: !note?.file ? "none" : note.file.problems.length > 0 ? "unreadable" : "readable",
+    return { note, no: updateRefusal({ notes, note: !note?.file ? "none" : !this.index.notes.fresh(note) ? "unread"
+      : note.file.problems.length > 0 ? "unreadable" : "readable",
       need: note ? this.need(document, note) : undefined }) };
   }
 

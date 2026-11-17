@@ -82,12 +82,15 @@ export function refusal(at: { trusted: boolean; onDisk: boolean; file: string | 
 /** Why Update starts nothing for a file that Create's rules let through; undefined when it may go on. `notes`: how
  *  many notes explain the file. `note`: the one note that is shown for it. `need`: what the match of the note
  *  against the text found, when it is known; not known, the agent finds out itself. */
-export function updateRefusal(at: { notes: number; note: "none" | "unreadable" | "readable"; need?: Need }): string | undefined {
+export function updateRefusal(at: { notes: number; note: "none" | "unreadable" | "unread" | "readable"; need?: Need }): string | undefined {
   if (at.notes === 0) { return "no Argus note explains this file yet, so there is nothing to update; use 'Create explanation'. Nothing was started"; }
   // One file, one note: with several notes the agent is not told which one is meant, and the end of the run could
   // not tell whose change it sees. So Update waits until the file has one note.
   if (at.notes > 1) { return `${at.notes} notes explain this file; Update needs the file to have one note. Remove or merge the others first. Nothing was started`; }
   if (at.note === "none") { return "several notes explain this file; pick one in the Argus panel first. Nothing was started"; }
+  // The note is shown from an earlier reading; the reading of just now failed. Its depth and its text of now are
+  // not known, so the agent is not started on what was read before.
+  if (at.note === "unread") { return "the note of this file could not be read just now, so it is not known what it holds; nothing was started"; }
   if (at.note === "unreadable") { return "the note of this file cannot be read, so it is not given to the agent to update; nothing was started"; }
   if (at.need && at.need.changed === 0 && at.need.unexplained === 0 && (at.need.moved ?? 0) === 0) {
     return "every block of the note fits the code and no line is unexplained: there is nothing to update. Nothing was started";
