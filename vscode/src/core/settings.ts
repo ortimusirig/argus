@@ -6,8 +6,9 @@ import { Project } from "./projects";
 export const DEFAULT_CREATE_COMMAND: readonly string[] = ["claude",
   "Use the argus skill. Explain ${file}, depth ${depth}. Source root: ${sourceRoot}. Put the notes in ${notesFolder}."];
 export const DEFAULT_UPDATE_COMMAND: readonly string[] = ["claude",
-  "Use the argus skill. Update the explanation of ${file}: run changed_blocks.py, then rewrite only the changed blocks and add blocks "
-  + "for unexplained lines. Depth ${depth}. Source root: ${sourceRoot}. Notes folder: ${notesFolder}."];
+  "Use the argus skill, version 2.10 or later. Update the explanation of ${file} as the section Later runs of the skill says: correct the line "
+  + "numbers of moved blocks, rewrite only the changed blocks, add blocks for unexplained lines. Depth ${depth}. "
+  + "Source root: ${sourceRoot}. Notes folder: ${notesFolder}."];
 export const DEFAULT_PYTHON = "python";
 
 /** What `WorkspaceConfiguration.inspect()` answers. Only `globalValue`, the user's own, is ever read here. */

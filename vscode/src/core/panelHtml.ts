@@ -5,7 +5,7 @@ import { LinkTo, escape, render } from "./markdown";
 import { Details } from "./checkResult";
 import { Assignment, Placed } from "./match";
 import { Block, FileNote } from "./notes";
-import { Need, placesOf, summary, underSelection, updateNeed } from "./selection";
+import { Need, needsUpdate, placesOf, summary, underSelection, updateNeed } from "./selection";
 
 /** The page's content security policy: nothing by default; styles and images from the extension's media folder
  *  only; scripts only with the nonce of this render. */
@@ -68,7 +68,8 @@ function many(n: number, one: string, more: string): string {
  *  "Update explanation (2 changed blocks, 1 unexplained range)". */
 export function updateLabel(need: Need): string {
   const parts = [...(need.changed > 0 ? [many(need.changed, "changed block", "changed blocks")] : []),
-    ...(need.unexplained > 0 ? [many(need.unexplained, "unexplained range", "unexplained ranges")] : [])];
+    ...(need.unexplained > 0 ? [many(need.unexplained, "unexplained range", "unexplained ranges")] : []),
+    ...((need.moved ?? 0) > 0 ? [many(need.moved as number, "moved block", "moved blocks")] : [])];
   return parts.length === 0 ? "Update explanation" : `Update explanation (${parts.join(", ")})`;
 }
 
@@ -77,7 +78,7 @@ export function updateLabel(need: Need): string {
 function updateButton(view: Extract<View, { kind: "file" }>): string {
   if (view.note.problems.length > 0 || !view.assignment || view.create?.running) { return ""; }
   const need = updateNeed(view.assignment);
-  return need.changed === 0 && need.unexplained === 0 ? "" : ` <button data-msg="update">${escape(updateLabel(need))}</button>`;
+  return !needsUpdate(need) ? "" : ` <button data-msg="update">${escape(updateLabel(need))}</button>`;
 }
 
 function listed(items: Listed[]): string {

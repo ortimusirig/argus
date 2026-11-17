@@ -37,10 +37,19 @@ export function summary(assignment: Assignment): Summary {
 
 /** What "Update explanation" would do for a file: how many blocks are changed, and how many ranges of lines have
  *  no explanation. */
-export interface Need { changed: number; unexplained: number; }
+export interface Need { changed: number; unexplained: number;
+  moved?: number; }       // blocks whose code is the same but lies at other lines than the note records
 
 export function updateNeed(assignment: Assignment): Need {
-  let changed = 0;
-  for (const placed of assignment.placed) { if (placed.state === "changed") { changed++; } }
-  return { changed, unexplained: assignment.unexplained.length };
+  let changed = 0, moved = 0;
+  for (const placed of assignment.placed) {
+    if (placed.state === "changed") { changed++; }
+    else if ((placed.state === "current" || placed.state === "current-masked") && placed.at && placed.at.from !== placed.block.from) { moved++; }
+  }
+  return { changed, unexplained: assignment.unexplained.length, moved };
+}
+
+/** Whether there is anything for "Update explanation" to do. */
+export function needsUpdate(need: Need): boolean {
+  return need.changed > 0 || need.unexplained > 0 || (need.moved ?? 0) > 0;
 }

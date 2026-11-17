@@ -86,7 +86,7 @@ export function updateRefusal(at: { notes: number; note: "none" | "unreadable" |
   if (at.notes === 0) { return "no Argus note explains this file yet, so there is nothing to update; use 'Create explanation'. Nothing was started"; }
   if (at.note === "none") { return "several notes explain this file; pick one in the Argus panel first. Nothing was started"; }
   if (at.note === "unreadable") { return "the note of this file cannot be read, so it is not given to the agent to update; nothing was started"; }
-  if (at.need && at.need.changed === 0 && at.need.unexplained === 0) {
+  if (at.need && at.need.changed === 0 && at.need.unexplained === 0 && (at.need.moved ?? 0) === 0) {
     return "every block of the note fits the code and no line is unexplained: there is nothing to update. Nothing was started";
   }
   return undefined;

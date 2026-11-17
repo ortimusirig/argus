@@ -12,7 +12,7 @@ import { GitWatch } from "./core/gitWatch";
 import { graphPlaces, isPlace } from "./core/graphWatch";
 import { Entry } from "./core/noteIndex";
 import { Badge } from "./core/panelHtml";
-import { Project } from "./core/projects";
+import { Project, systemRules } from "./core/projects";
 import { Ran, RunOptions, checkerArgs, mayRun } from "./core/run";
 import { projectKey, userPython } from "./core/settings";
 import { Checks, Memory, Stored, memoryOf } from "./core/validity";
@@ -102,7 +102,12 @@ export class Check implements vscode.Disposable {
    *  for the configured path may mean the link leads elsewhere now, so the watchers are set anew. */
   private async watchGraph(per: Per): Promise<void> {
     if (!per.project.graph) { return; }
-    const graph = path.resolve(per.project.graph);      // as it is read: an event names a full path
+    // The graph's path as the checker reads it: links and ".." in its folder by the file system's own rule, then
+    // the file's name. The file itself may be a link; that is asked next.
+    const given = per.project.graph;
+    let home: string;
+    try { home = systemRules.real(path.dirname(path.resolve(given))); } catch { home = path.dirname(path.resolve(given)); }
+    const graph = path.join(home, path.basename(given));
     const asked = ++per.graphAsked;
     const real = await fs.promises.realpath(graph).catch(() => undefined);
     if (this.per.get(projectKey(per.project)) !== per) { return; }        // the settings changed meanwhile
@@ -233,8 +238,8 @@ export class Check implements vscode.Disposable {
     if (!per) { return { say: "this file is not in an Argus project; nothing was checked", always: true, used: false }; }
     if (!vscode.workspace.isTrusted) { return { say: `not checked: ${RESTRICTED}`, always: true, used: false }; }
     if (per.running.has(key)) { return { used: false }; }
-    await this.watchGraph(per);                                // where the graph leads is asked again before a check
-    per.running.add(key);
+    per.running.add(key);                                      // taken before anything is awaited: a second request sees it
+    void this.watchGraph(per);                                 // where the graph leads is asked again; the check does not wait for it
     this.changed();
     let used = false;
     try {
