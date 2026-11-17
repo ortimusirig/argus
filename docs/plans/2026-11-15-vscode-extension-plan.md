@@ -344,3 +344,21 @@ P2 FIXED: plan round 10 #1 - "Specify Unicode-aware advancement in maskedMatch" 
   choice (Update works on the picked duplicate) was declined: the skill's script and checker treat duplicate notes
   of one file as a problem, so an update of one of them would leave the notes folder failing.
 - **No test code.** No testing infrastructure and no new test code; changes are proved by running the product.
+
+## P2 backlog of the extension (owner pilot)
+
+Owner rule 7 of the review skill: far more than ten review rounds are complete on this branch, so open P2 findings
+may wait here for the owner's pilot. They are fixed and confirmed by a review before anything goes beyond the pilot.
+
+- P2 BACKLOG (confirming round 4, commit 3011c8a): "Invalidate validation on editor saves" (extension.ts): a save of
+  a checked file under a folder the watcher leaves out keeps the old check badge until the next input or focus event.
+  Planned fix: a save listener that marks the checks of every affected project as old.
+- P2 BACKLOG (confirming round 4, commit 3011c8a): "Rediscover linked notes after hidden-directory retargeting"
+  (core/noteIndex.ts): a note link that leads through a dot folder which is itself a junction, pointed elsewhere, is
+  not read again until Refresh. Planned fix: remember the folders a link passes through.
+- P2 BACKLOG (confirming round 4, commit 3011c8a): "Retain notes reached through an unreadable alias folder"
+  (core/noteIndex.ts): when the folder that holds a note link cannot be listed, the linked note leaves the index
+  although the Problems line says earlier notes are kept. Planned fix: keep such entries and mark them unread.
+- P2 BACKLOG (stress round 6 of the new features, commit a90cf4e): "Watch graph-directory links for retargeting"
+  (check.ts): a graph folder that is a junction and is pointed elsewhere is not watched; the badge is corrected at
+  the next check.
