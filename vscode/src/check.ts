@@ -228,7 +228,9 @@ export class Check implements vscode.Disposable {
     const at = this.index.locate(document);
     if (!at.project || at.sourceRel === undefined) { return "this file is not in an Argus project; nothing was checked"; }
     const done = await this.checkAt(at.project, at.sourceRel);
-    return done.always || !at.note ? done.say : undefined;      // with a note, the badge in the panel says it
+    // With a note, the badge in the panel says it. Whether there is one is asked now: the check read the notes
+    // from disk again, and the note of before may be gone, or a first one may be there.
+    return done.always || !this.index.locate(document).note ? done.say : undefined;
   }
 
   /** Runs the check for one source file of a project. `say`: the outcome as a sentence; `always`: nothing was

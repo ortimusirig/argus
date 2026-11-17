@@ -9,7 +9,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { Check } from "./check";
 import { Index } from "./index";
-import { Creates, Ended, Follow, Kind, NOTE_GONE, Run, Status, afterRun, alreadyRunning, changedMeanwhile, commandSetting, fileHash, fill,
+import { Creates, Ended, Follow, Kind, NOTES_NOT_READ, NOTE_GONE, Run, Status, afterRun, alreadyRunning, changedMeanwhile, commandSetting, fileHash, fill,
   findProgram, modelArgs, noteMark, refusal, revisionMark, saveQuestion, taskName, updateRefusal, variableIn } from "./core/create";
 import { Entry } from "./core/noteIndex";
 import { Project, relativeIn, systemRules } from "./core/projects";
@@ -88,9 +88,14 @@ export class Create implements vscode.Disposable {
     return { notes: at.notes.filter(holds).length, note: at.note && at.note.file && holds(at.note) ? at.note : undefined };
   }
 
-  /** Whether Update may go on for a document, by the notes as the index holds them now, and the note it is for.
-   *  A note that the index keeps from an earlier reading, because the last one could not read it, is refused. */
-  private judge(document: vscode.TextDocument): { no: string | undefined; note: Entry | undefined } {
+  /** Whether Update may go on for a document, and the note it is for. The rule of Update: the project's notes are
+   *  read from disk first, and only then is anything decided that depends on the note (how many notes the file
+   *  has, whether the note could be read just now, whether it is broken, what the match found). Nothing of that is
+   *  ever decided from what the index held before this reading: a note whose last reading failed is read again
+   *  here, also when no file event told that it can be read again. This is the only place that judges the note.
+   *  A reading that fails as a whole, and a note that this reading could not read either, are refused. */
+  private async judge(document: vscode.TextDocument, project: Project): Promise<{ no: string | undefined; note: Entry | undefined }> {
+    try { await this.index.refreshNow(project); } catch { return { no: NOTES_NOT_READ, note: undefined }; }
     const { notes, note } = this.noteOf(document);
     return { note, no: updateRefusal({ notes, note: !note?.file ? "none" : !this.index.notes.fresh(note) ? "unread"
       : note.file.problems.length > 0 ? "unreadable" : "readable",
@@ -104,9 +109,9 @@ export class Create implements vscode.Disposable {
     const at = this.index.locate(document);
     let no = refusal({ trusted: vscode.workspace.isTrusted, onDisk: !document.isUntitled && document.uri.scheme === "file",
       file: at.project ? at.sourceRel : undefined });
-    // A first answer for Update from the notes as they are remembered, before anything is asked or saved. The
-    // answer that counts is given in `start`, after the notes were read from disk again.
-    if (no === undefined && kind === "update") { no = this.judge(document).no; }
+    // A first answer for Update before anything is asked or saved, from the notes as they are on disk now (`judge`
+    // reads them first). The answer that counts is given in `start`, after the save, from a reading of its own.
+    if (no === undefined && kind === "update") { no = (await this.judge(document, at.project as Project)).no; }
     if (no !== undefined) { this.say(no); return; }
     const project = at.project as Project, file = at.sourceRel as string;
     const run = this.runs.begin(projectKey(project), file, kind);
@@ -145,10 +150,11 @@ export class Create implements vscode.Disposable {
     // The project's notes are read from disk now, once, after the save and before the note is judged: a note
     // changed outside VS Code a moment ago (the watcher has not told of it yet) is judged as it is on disk. The
     // hashes of the notes from before the start come from this reading too.
-    await this.index.refreshNow(project).catch(() => undefined);
     // Update: whether it may go on is decided from the note as it was just read (a note that is broken now is not
-    // handed to the agent), and the depth is that note's.
-    const judged = kind === "update" ? this.judge(document) : undefined;
+    // handed to the agent), and the depth is that note's. `judge` does the reading itself; Create, which judges no
+    // note, reads here.
+    const judged = kind === "update" ? await this.judge(document, project) : undefined;
+    if (kind === "create") { await this.index.refreshNow(project).catch(() => undefined); }
     if (judged?.no !== undefined) { return judged.no; }
     // The depth: for Create the setting; for Update the depth of the file's note (its `depth` property; a note
     // without one counts as full).

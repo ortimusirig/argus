@@ -114,6 +114,9 @@ export function changedMeanwhile(kind: Kind): string {
 /** Said when the note of a file is not there any more at the start of an Update. */
 export const NOTE_GONE = "the note of this file is not there any more; nothing was started";
 
+/** Said when the reading of the notes from disk that Update judges the note by failed as a whole. */
+export const NOTES_NOT_READ = "the notes of this project could not be read from disk just now, so it is not known what the note of this file holds; nothing was started";
+
 /** What the lookup of a program asks of the system. Tests give the other system, and a disk that is not there. */
 export interface Lookup { windows: boolean; env: Record<string, string | undefined>; isFile(file: string): Promise<boolean>;
   read?: (file: string) => Promise<string>;     // the text of a launcher file; without it a batch file is always refused
