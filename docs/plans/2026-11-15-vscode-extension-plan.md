@@ -337,4 +337,10 @@ P2 FIXED: plan round 10 #1 - "Specify Unicode-aware advancement in maskedMatch" 
   decision: in a file where the trim is at work, a block can show as changed although its code is still there
   further away, and "Update explanation" can be offered for it. Without the trim such a file took memory without
   end. Files of normal shape never reach the bound.
+- **Update needs one note per file.** Owner's decision of 2026-11-17 ("A"), after being told both choices: when
+  two or more notes explain the same source file, "Update explanation" does not run. The panel says how many notes
+  explain the file and that Update needs the file to have one note; the person removes or moves the duplicates and
+  then runs Update. Reading, the choice between the duplicate notes, Check and Create are not changed. The other
+  choice (Update works on the picked duplicate) was declined: the skill's script and checker treat duplicate notes
+  of one file as a problem, so an update of one of them would leave the notes folder failing.
 - **No test code.** No testing infrastructure and no new test code; changes are proved by running the product.
