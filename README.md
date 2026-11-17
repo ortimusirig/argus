@@ -11,7 +11,7 @@ Argus (after the hundred-eyed watchman of Greek myth; earlier name: code-explain
 | Concept | programming term | The term explained from zero, with the smallest real example from the code |
 | Mechanism | behaviour that spans files | Steps, a sequence diagram, failure paths |
 | Library | open-source project or system service | What it is, version, licence, where it is used |
-| End-to-End Flow | chosen flow | One real input followed from entry point to result |
+| End-to-End Flow | main path (at least one in every run; one per main command, at most three unless asked) | One real input followed from the entry point to every end the code can reach, as a diagram: each box names its blocks and shows who decides; every outcome; what each part cannot do |
 
 Every project, file, mechanism and library answers the same questions: what we gain, what we lose, what was not possible without it, issues today, what it makes possible, open source used, risks.
 
@@ -56,7 +56,7 @@ Writes `<source root>/.tours/<Project>.tour` for the [CodeTour](https://github.c
 python -B skills/argus/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope> --graph <graphify-out/graph.json>
 ```
 
-It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE: by the note's `source_hash` (a hash of the source file, no git needed), or by its `commit` for notes written before 2.10. `--help` lists the options; `--json` prints the result as one JSON object for a program to read; `--fingerprint` prints one hash over everything the run read, listed and asked git, built while it runs, so a program can tell whether an earlier result still holds.
+It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism or Flow note has no diagram, a Flow note has no outcome row or names a block that does not exist, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE: by the note's `source_hash` (a hash of the source file, no git needed), or by its `commit` for notes written before 2.10. `--help` lists the options; `--json` prints the result as one JSON object for a program to read; `--fingerprint` prints one hash over everything the run read, listed and asked git, built while it runs, so a program can tell whether an earlier result still holds.
 
 ## Later runs: only what changed
 
@@ -72,7 +72,7 @@ Version 2.10.0. Replaces the DOCX generator of version 1.
 
 | Version | Change |
 | --- | --- |
-| 2.10.0 | A later run rewrites only the blocks whose code changed (`changed_blocks.py`), not the whole note. Git is optional: notes carry `source_hash`, and a file with changes that are not committed no longer looks current. The check no longer takes `%%` inside code for a comment, and warns about `<word>` outside code |
+| 2.10.0 | A later run rewrites only the blocks whose code changed (`changed_blocks.py`), not the whole note. Git is optional: notes carry `source_hash`, and a file with changes that are not committed no longer looks current. The check no longer takes `%%` inside code for a comment, and warns about `<word>` outside code. Every run writes a Flow note with a diagram of every end state; graphify's `graph.html` is kept in `<notes folder>/_graph/` and named in Start Here |
 
 | Part | State |
 | --- | --- |

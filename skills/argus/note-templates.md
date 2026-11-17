@@ -137,7 +137,7 @@ Rules the check enforces on a File note:
 | Masked secrets | Every line with `[masked]` is listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`). Around each mask the line equals the source; a line may be `[masked]` alone. What a mask hides appears nowhere else in the note. At most a quarter of the file's non-blank lines are masked (two always allowed) |
 | Empty file | A source with no non-blank line: lens table, "The file is empty." under Level 2, no block |
 | Ownership | Only notes with `written_by: argus` are read by the check |
-| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. No note holds an Obsidian comment (`%%`) outside code. The check warns about `<word>` outside code, which Obsidian hides. Every note is linked from another note |
+| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. A Flow note has an "Every outcome" table with a row, and names only block ids that exist (see "End-to-End Flow note"). No note holds an Obsidian comment (`%%`) outside code. The check warns about `<word>` outside code, which Obsidian hides. Every note is linked from another note |
 | Stale | A note with `source_hash` is STALE when the hash of its source (its `sources`) differs now. A note without it is judged by `commit` and git |
 | Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
@@ -265,24 +265,60 @@ A system service that is not open source but that the code depends on (an operat
 ---
 # <Project> flow - <what the flow does>
 
-<One sentence: the real input, and the result it ends in.>
+<One sentence: the real input (a command line, a call, a request), and every way it can end; name the good end.>
+
+Code read: <branch, commit, "plus uncommitted changes" when so>. Blocks are in [[<File note>]]<, [[<File note>]]>. Back to [[<Project> - Start Here]].
+
+Who decides is in the colour of each box: green = the code, by a fixed check; yellow = a model; purple = a person; red = the run stops; grey = the results are thrown away; thick green = the good end.
 
 ```mermaid
-flowchart LR
-    <one node per file or process the flow passes through>
+flowchart TD
+  A["<the real input> (<block id>)"] --> B{"<a check the code makes, as a question>? (<block ids>)"}
+  B -- no --> X1["<an end: what is set and shown>"]
+  B -- yes --> C["<a step> (<block ids>)"]
+  C --> Z["<the good end> (<block id>)"]
+
+  classDef rule fill:#e3f0ea,stroke:#2f6f55,color:#1b211d
+  classDef model fill:#f7ecd6,stroke:#8a5a12,color:#1b211d
+  classDef human fill:#f0e3f5,stroke:#7a3f8f,color:#1b211d
+  classDef bad fill:#f8e4e1,stroke:#a3352b,color:#1b211d
+  classDef void fill:#e9eaee,stroke:#6a6f7a,color:#1b211d
+  classDef good fill:#e3f0ea,stroke:#2f6f55,color:#1b211d,stroke-width:3px
+  class B rule
+  class X1 bad
+  class Z good
 ```
 
 ## Steps
 
 | Step | File, block | What happens | Value passed on |
 | --- | --- | --- | --- |
-| 1 | [[<File note>]] block <n> | <...> | <real value> |
+| 1 | [[<File note>]] block <id> | <...> | <real value> |
+| 2 | blocks <id> and <id> | <...> | <real value> |
 
 ## Every outcome
 
 | Outcome | Where it is decided | What the person sees |
 | --- | --- | --- |
+| <an end state, as the code names it> | block <id> | <the message, the exit code, what was or was not done> |
+
+## What each part cannot do
+
+| Part | Cannot |
+| --- | --- |
+| <a program, a model, a person or the code itself that takes part> | <what the code makes impossible for it, from the code> |
 ````
+
+Rules for a Flow note:
+
+| Rule | Detail |
+| --- | --- |
+| Read, never guessed | Follow the code from the entry to every place where an outcome, a status or an error is set. Do not infer a stage from a name. An end state the code can reach that is not in the diagram and in "Every outcome" makes the note wrong |
+| Decisions | A check is a branch node (`{"...?"}`) with one arrow per answer. Each end is a node of its own |
+| Block ids | A node names the blocks it rests on in round brackets at the end of its text: `(53a)`, `(53a, 53b)`, `(32 to 34, 39)`. The Steps table writes `block 53a` or `blocks 53c and 53d`. The check fails when a named id is no block of a File note the Flow note links to; of `32 to 34` it looks at both ends |
+| Who decides | Every node has one of the six classes. Leave out a class no node uses; do not add others |
+| Size | One flow, one diagram. Above about 40 nodes, cut the flow into two notes at a natural point |
+| Check | The diagram is not empty; "Every outcome" has at least one row; the named block ids exist. A project with File notes and no Flow note gets a WARN |
 
 ## Start Here note
 
@@ -302,6 +338,13 @@ flowchart LR
 
 | Step | Read | Why |
 | --- | --- | --- |
+| <n> | [[<Project> flow - ...]] <one row for every Flow note> | <the input it follows, as a diagram: every end and who decides> |
+
+## The graph
+
+<One sentence: the page shows every function of the project and what calls what, made by graphify from the code alone.> Open it in a browser: `<full path of <Project> graph.html>`. <Not a [[link]]: it is no note.>
+
+<When the guided walk is not in the project: "Guided walk: `<full path of the .tour file>`. In VS Code, run the command CodeTour: Open Tour File... and choose it.">
 
 ## <Project> in one table
 
