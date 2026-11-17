@@ -332,19 +332,33 @@ WIKILINK = re.compile(r"\[\[[^\]]*\]\]")       # taken out of the cell first: a 
 IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
 
 
-def check_flow_note(name, lines, mask, file_blocks):
+def check_flow_note(name, lines, mask, file_blocks, outside=None):
     """A Flow note has an 'Every outcome' table with a row, and every block id that the 'File, block' cell of
     its Steps table names is a block of a File note it links to. `file_blocks` is {File note name: its block ids}.
+    `outside`, given with --vault, answers for a note that is in the vault but not among the notes of --notes:
+    (its block ids, None) when it is a File note of this skill, (None, why not) when its blocks cannot be read,
+    None when the vault holds no such note.
     The diagram is not read for block ids: its text is free text, for the reader. That it is there and not empty
     is checked elsewhere."""
     outcome = [cells(row) for row in section(lines, mask, "Every outcome") or [] if is_row(row)]
     if len([c for c in outcome if c and not set("".join(c)) <= set("-: ")]) < 2:   # the heading row and one more
         fails.append(f"{name}: a flow note needs an '## Every outcome' table with at least one row")
+    beyond = {}                                      # a linked note outside --notes: (its block ids, why not)
+
+    def blocks_of(target):
+        """The block ids of a linked File note, in --notes or in the vault; None when it is no such note."""
+        if target in file_blocks:
+            return file_blocks[target]
+        if outside is None:
+            return None
+        if target not in beyond:
+            beyond[target] = outside(target) or (None, None)
+        return beyond[target][0]
 
     def linked(text):
         found = []
         for target in link_names(text):
-            if target in file_blocks and target not in found:
+            if blocks_of(target) is not None and target not in found:
                 found.append(target)
         return found
 
@@ -361,8 +375,18 @@ def check_flow_note(name, lines, mask, file_blocks):
             column = next((k for k, cell in enumerate(c) if "block" in cell.lower()), 1)
             continue
         if column < len(c):
-            named += [("the Steps table", m.group(1), linked(row) or all_linked)
-                      for m in IDS_IN_ROW.finditer(WIKILINK.sub(" ", without_inline_code(c[column])))]
+            ids = [m.group(1) for m in IDS_IN_ROW.finditer(WIKILINK.sub(" ", without_inline_code(c[column])))]
+            here = linked(row)
+            # The cell links a note of the vault whose blocks cannot be read, and the row links no File note: the
+            # ids of this row cannot be checked. That is said, and it is no FAIL: the note is not one of --notes.
+            closed = [] if here else [t for t in dict.fromkeys(link_names(c[column])) if beyond.get(t, (0, 0))[1]]
+            if ids and closed:
+                for target in closed:
+                    line = f"{name}: block ids of [[{target}]] cannot be checked: {beyond[target][1]}"
+                    if line not in warns:
+                        warns.append(line)
+                continue
+            named += [("the Steps table", written, here or all_linked) for written in ids]
     if named and not all_linked:
         ids = sorted({block_id for _, written, _ in named for block_id in re.findall(BLOCK_ID, written)})
         fails.append(f"{name}: it names block {', '.join(ids[:10])}{' ...' if len(ids) > 10 else ''} but links no "
@@ -370,7 +394,7 @@ def check_flow_note(name, lines, mask, file_blocks):
         return
     unknown = {}
     for where, written, notes in named:
-        known = set().union(*(file_blocks[n] for n in notes))
+        known = set().union(*(blocks_of(n) for n in notes))
         for block_id in re.findall(BLOCK_ID, written):
             if block_id not in known:
                 unknown.setdefault((where, block_id), notes)
@@ -435,14 +459,48 @@ def note_files(folder):
 
 def link_targets(vault, notes):
     """What a [[link]] may point at: any note by name, any other file by its full name. One listing of the vault,
-    which adds itself to the run's fingerprint."""
+    which adds itself to the run's fingerprint. Returns the targets, and for every note name of the vault that is
+    not a name among `notes` the files that carry it."""
     vault = Path(vault)
-    targets = set(notes)
-    for p in vault.rglob("*"):
+    targets, beyond = set(notes), {}
+    for p in sorted(vault.rglob("*")):
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
             targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
+            if p.suffix.lower() == ".md" and p.stem not in notes:
+                beyond.setdefault(p.stem, []).append(p)
     witness("link targets", vault, *sorted(targets))
-    return targets
+    return targets, beyond
+
+
+def vault_file_notes(beyond):
+    """For check_flow_note: the blocks of a note of the vault that is outside --notes. `beyond` is the second
+    answer of link_targets. A note is read at most once, only when a Flow note links it, and is never written;
+    the read adds itself to the run's fingerprint."""
+    answers = {}
+
+    def answer(name):
+        if name not in beyond:
+            return None
+        if name not in answers:
+            paths = beyond[name]
+            witness("linked vault note", name, *paths)
+            if len(paths) > 1:
+                answers[name] = (None, f"the vault holds {len(paths)} notes of that name outside the notes folder")
+                return answers[name]
+            try:
+                text = read_text(paths[0])[0].replace("\r\n", "\n").replace("\r", "\n")
+            except OSError as error:
+                answers[name] = (None, f"the linked note cannot be read ({error.strerror or type(error).__name__})")
+                return answers[name]
+            props = frontmatter(text)
+            if props.get("written_by", "").lower() != "argus" or props.get("type", "") != "file":
+                answers[name] = (None, "the linked note is not a File note of this skill")
+            else:
+                lines = text.split("\n")
+                answers[name] = ({block["id"] for block in note_blocks(lines, fence_mask(lines))}, None)
+        return answers[name]
+
+    return answer
 
 
 def main():
@@ -457,7 +515,8 @@ def main():
     ap.add_argument("--scope", action="append", default=[],
                     help="a folder or file under the source root that is in scope; repeatable. Only source files "
                          "in scope count as MISSING. Default, and '.': the whole source root")
-    ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes. Default: --notes, so "
+    ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes and to read the blocks of a File note "
+                                    "there that a Flow note links. Default: --notes, so "
                                     "give it whenever Concept or Library notes are shared with other folders")
     ap.add_argument("--graph", help="graph JSON from graphify, to compare its functions with the notes")
     ap.add_argument("--no-graph", action="store_true",
@@ -482,7 +541,8 @@ def main():
         if p.stem in notes:
             fails.append(f"note name used twice: {p.stem}")
         notes[p.stem] = p
-    targets = link_targets(vault, notes)
+    targets, beyond = link_targets(vault, notes)
+    outside = vault_file_notes(beyond) if args.vault else None   # without --vault nothing is read outside --notes
 
     # What the run was told and what it found in the folders goes into its fingerprint; file contents and git
     # answers are added where they are read.
@@ -569,7 +629,7 @@ def main():
             warns.append(f"{name}: <word> outside code on line {shown}: Obsidian reads it as HTML and does not show "
                          f"it; put it in backticks")
     for name, (lines, mask) in flows.items():
-        check_flow_note(name, lines, mask, file_blocks)
+        check_flow_note(name, lines, mask, file_blocks, outside)
     for project, found_kinds in sorted(projects.items()):
         if "file" in found_kinds and "flow" not in found_kinds:
             warns.append(f"project '{project}' has {found_kinds.count('file')} File notes and no End-to-End Flow "
