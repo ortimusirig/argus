@@ -11,6 +11,7 @@ alone: no git is needed, and uncommitted changes count. A note without it is jud
 """
 import argparse
 import hashlib
+from collections import Counter
 import json
 import re
 import subprocess
@@ -118,8 +119,9 @@ def check_file_note(name, text, props, root):
     for block_id in sorted(set(block_ids) & set(retired_ids(props))):
         fails.append(f"{name}: block {block_id} uses an id that the property retired_blocks lists; the id of a "
                      f"removed block is never used again")
-    for block_id in sorted({b for b in block_ids if block_ids.count(b) > 1}):
-        fails.append(f"{name}: two '### Block {block_id}' sections")
+    for block_id, times in sorted(Counter(block_ids).items()):
+        if times > 1:
+            fails.append(f"{name}: two '### Block {block_id}' sections")
 
     # Level 2: one row per block, each naming its concepts in the last cell.
     level2 = {}
