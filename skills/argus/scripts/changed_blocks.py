@@ -26,7 +26,9 @@ with the source file as it is on disk now and gives each block one state:
              limit. Its code may be in the source as it was
   not compared  the block has no code of its own that the script can take: no code fence in its own section, or
              two code fences directly under each other. A PROBLEM line says what to repair in the note. It is not
-             a changed block, and the result is not CURRENT while one exists
+             a changed block, and the result is not CURRENT while one exists. The note's form is checked in every
+             run, with or without --fix-moved, before any block is compared: when the note holds something the
+             script does not handle (what the guard of --fix-moved refuses), every block of it is not compared
 
 It also gives the ranges of non-blank source lines that no placed block covers (UNEXPLAINED: "lines no block
 covers"). With each range it names the blocks that were not found, nearest first, as possible owners, and the id
@@ -368,6 +370,23 @@ def compare(note_lines, props, lines):
     keep = max(1, PLACES // max(1, len(blocks)))
     budget = SEARCH_WORK // max(1, len(blocks))
     found, bounded, problems, cut_short = [], [], [], set()
+    # The note's form comes first, in every run, whether anything is to be written or not. A note that the guard
+    # of the writer refuses (its two readings of 'what is code' differ, or it holds a construct the readers were
+    # not made for) can give a block code that is not its own: an unchanged block would be reported as changed.
+    # So nothing is compared for such a note. Every block is 'not compared', no place and no unexplained line is
+    # stated, and the one PROBLEM line says what to repair.
+    strange = unhandled(note_lines)
+    if strange:
+        result = [{"id": block["id"], "from": block["a"], "to": block["b"], "lines": 0, "no_code": True,
+                   "note_form": True, "state": "not compared"} for block in blocks]
+        counts = {state: len(result) if state == "not compared" else 0 for state in STATES}
+        problems.append(f"note line {strange[0]} holds {strange[1]}, which the script does not handle. No block of "
+                        f"this note is compared and nothing is written for it: repair the note's form at that line, "
+                        f"then run again. Rewrite no block for this reason")
+        return {"blocks": result, "counts": counts, "unexplained": [], "bounded": bounded, "problems": problems,
+                "lines": total, "retired_blocks": retired_ids(props), "reordered": [], "_blocks": blocks,
+                "_mask": mask, "_declared": declared, "_cites": [], "_depth": props.get("depth", ""),
+                "_form": strange}
     last_known = max([total] + [max(b["b"], b["a"] + len(b["code"]) - 1) for b in blocks])
     for a, b in declared:
         if b > last_known:
@@ -1137,6 +1156,10 @@ def moved_text(data, report):
         return None, [], None, left                  # the PROBLEM line of the comparison says why
     if any("stray" in block for block in blocks):
         return None, [], None, left                  # the PROBLEM line of the comparison names the block
+    if report.get("_form"):
+        return None, [], None, left                  # the PROBLEM line of the comparison names the construct
+    # The comparison ran this test on the same text already. It stays here, under the lock and directly before
+    # the writing, so that the writer never rests on a test made elsewhere.
     strange = unhandled(lines)
     if strange:
         return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
@@ -1557,7 +1580,9 @@ def print_report(report):
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
         elif entry["state"] == "not compared":
-            print(f"NOT COMPARED {was}: it has no code fence of its own to compare (see PROBLEM). Not a changed "
+            why = ("the note holds something the script does not handle" if entry.get("note_form") else
+                   "it has no code fence of its own to compare")
+            print(f"NOT COMPARED {was}: {why} (see PROBLEM). Not a changed "
                   f"block, and nothing is said about its place: repair the note's form, then run again")
         elif entry["state"] == "changed":
             if entry.get("spaces_only"):
