@@ -29,8 +29,9 @@ the recorded line are looked at, and the report says so in a BOUNDED line.
 Without --fix-moved nothing is written. With it, for each block that only moved, the script writes the new line
 numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
 its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
-when its whole code is at one free place that no other block without a sure place could take. The script writes
-nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
+when its whole code is at one free place that no other block without a sure place could take. Line numbers that the note cites in its own text move too where that is sure: in the Line column of the Trace
+table, and 'line N' in the section of the block that holds line N. Every other cited line number that a move
+touches is named in a TODO line for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
 note at the same time, and a note that changed after it was compared is not written. The report that follows
 shows the state after the writing.
 
@@ -310,6 +311,9 @@ def compare(note_lines, props, lines):
             bounded.append(f"block {block['id']}: its code may be at up to {possible} places; only the "
                            f"{len(starts)} found nearest to line {block['a']} were looked at")
         found.append(starts)
+    if cut_short:
+        bounded.append("the search was cut short for this note, so --fix-moved writes no move for it: every block "
+                       "that is not at its recorded lines is undecided")
     best_starts, left_out, unproven = assign([(b["a"], len(b["code"])) for b in blocks], found, total)
     for index in unproven:
         bounded.append(f"block {blocks[index]['id']}: whether an equally good placing leaves it out was not worked "
@@ -320,10 +324,10 @@ def compare(note_lines, props, lines):
         length, a, b = len(block["code"]), block["a"], block["b"]
         entry = {"id": block["id"], "from": a, "to": b, "lines": length}
         best = best_starts[index]
-        if len(best) == 1 and not left_out[index] and best[0] + 1 != a and (
-                index in cut_short or (cut_short and len(found[index]) != 1)):
-            # The best place is not the recorded one, and places were left out of the search: of this block, or of
-            # another block while this one has more than one place. A full search could put it elsewhere.
+        if len(best) == 1 and not left_out[index] and cut_short and not (best[0] + 1 == a and b == a + length - 1):
+            # The block is not at its recorded lines, and places of some block of this note were left out of the
+            # search. The best way to place the blocks could be another one with those places, also for a block
+            # that has one place only. So no move of this note is sure, and none is written.
             entry["state"] = "undecided"
             entry["proposed"] = [best[0] + 1, best[0] + length]
         elif len(best) == 1 and not left_out[index]:
@@ -424,7 +428,77 @@ def compare(note_lines, props, lines):
         problems.append(f"block {block_id} uses an id that retired_blocks lists")
     counts = {state: sum(1 for e in result if e["state"] == state) for state in STATES}
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
-            "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared}
+            "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared,
+            "_cites": cited_lines(note_lines, mask, blocks, result)}
+
+
+CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
+LINE_CELL_TEXT = re.compile(r"(\s*)(\d{1,9})(?:(\s*-\s*)(\d{1,9}))?(\s*)")
+
+
+def cited_lines(note, mask, blocks, entries):
+    """The places where the File note cites a line number of its source outside the numbers of the blocks
+    themselves: 'line 12' or 'lines 12-14' in its text, and the Line column of the Trace table. Each is a dict:
+    at (index of the note line), start and end (where the numbers stand in that line), old (the numbers), new (the
+    numbers after the blocks' moves, or None when a block of them has no sure place) and sure. A citation is sure,
+    and --fix-moved writes it, when it stands in the Trace table's Line column, or in the section of the block
+    that holds the cited lines, and that block only moved. Every other citation that a move or a change touches
+    is for a person to look at. Citations of lines in blocks that are the same are left out."""
+    spans = sorted((b["a"], b["a"] + max(len(b["code"]), 1) - 1, k) for k, b in enumerate(blocks))
+
+    def owner(n):
+        return next((k for a, b, k in spans if a <= n <= b), None)
+
+    def delta(k):
+        entry = entries[k]
+        if entry["state"] in ("same", "moved"):
+            return entry["at"][0] - entry["from"]
+        return entry["moved_to"][0] - entry["from"] if "moved_to" in entry else None
+
+    props_end = next((i for i in range(1, len(note)) if note[i].strip() == "---"), 0) if note and note[0] == "---" else -1
+    section_of = {}
+    for k, block in enumerate(blocks):
+        for i in range(block["start"] + 1, block["end"]):
+            section_of[i] = k
+    headings = {block["start"] for block in blocks}
+    found = []
+
+    def cite(i, start, end, numbers, joins, in_trace):
+        owners = [owner(n) for n in numbers]
+        if all(k is None for k in owners):
+            return                                   # lines of no block: blank lines, or not lines of this file
+        deltas = [None if k is None else delta(k) for k in owners]
+        if all(d == 0 for d in deltas):
+            return
+        known = all(d is not None for d in deltas)
+        new = [n + d for n, d in zip(numbers, deltas)] if known else None
+        sure = known and len(set(owners)) == 1 and (in_trace or section_of.get(i) == owners[0])
+        text = None if new is None else joins[0].join(map(str, new)) if len(new) > 1 else str(new[0])
+        found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": sure, "text": text,
+                      "blocks": [blocks[k]["id"] for k in owners if k is not None]})
+
+    trace, column = False, None
+    for i, line in enumerate(note):
+        if mask[i] or i <= props_end or i in headings:
+            continue
+        if line.startswith("## "):
+            trace, column = line.startswith("## Trace"), None
+        for m in CITE.finditer(line):
+            numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
+            cite(i, m.start(2), m.end(4) if m.group(4) else m.end(2), numbers, [m.group(3) or ""], False)
+        if trace and is_row(line):
+            edges = [m.start() for m in re.finditer(r"(?<!\\)\|", line)]
+            texts = [line[a + 1:b] for a, b in zip(edges, edges[1:])]
+            if column is None:
+                column = next((k for k, cell in enumerate(texts) if cell.strip().lower() == "line"), -1)
+            elif 0 <= column < len(texts):
+                m = LINE_CELL_TEXT.fullmatch(texts[column])
+                if m:
+                    base = edges[column] + 1
+                    numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
+                    cite(i, base + m.start(2), base + (m.end(4) if m.group(4) else m.end(2)), numbers,
+                         [m.group(3) or ""], True)
+    return found
 
 
 def next_id(above, taken):
@@ -537,6 +611,14 @@ def moved_text(data, report):
     if len(lines) != len(mask):
         return None, [], "the note does not have the lines that were compared; nothing written"
     wrote, masked_changed = [], False
+    # First the line numbers the note cites in its own text, where they are sure: from the right end of each line,
+    # so that the places of the others in that line stay true.
+    sure = [c for c in report["_cites"] if c["sure"]]
+    for c in sorted(sure, key=lambda c: (c["at"], -c["start"])):
+        lines[c["at"]] = lines[c["at"]][:c["start"]] + c["text"] + lines[c["at"]][c["end"]:]
+    if sure:
+        wrote.append(f"{len(sure)} line numbers that the note cites (in the Trace table, or in the text of the "
+                     f"block they lie in) moved with their blocks")
     level2 = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## Level 2")), None)
     level2_end = len(lines) if level2 is None else next(
         (i for i in range(level2 + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
@@ -639,7 +721,19 @@ def build(path, text, root, scopes, known):
     report["source_hash"] = {"recorded": recorded or None, "now": now, "state": state}
     report.update({key: value for key, value in found.items() if not key.startswith("_")})
     report["_found"] = found
+    report["check_lines"] = check_lines([c for c in found["_cites"] if not c["sure"]])
     return report
+
+
+def check_lines(cites):
+    """The line numbers a File note cites that --fix-moved does not write, as texts for a person."""
+    out = []
+    for c in cites:
+        old = "-".join(map(str, c["old"]))
+        what = (f"probably {c['text']} now" if c["new"] is not None
+                else "its block has no sure place yet")
+        out.append(f"note line {c['at'] + 1} cites line {old} (block {', '.join(c['blocks'])}): {what}")
+    return out
 
 
 def note_text(data):
@@ -670,11 +764,13 @@ def note_report(path, root, scopes, fix, known):
                 else:
                     report = locked
                     new, wrote, error = moved_text(data, locked["_found"])
+                    to_check = [c for c in locked["_found"]["_cites"] if not c["sure"]]
                     if new is not None and not error:
                         error = write_note(path, data, new)
                     if new is not None and not error:
                         report = build(path, note_text(decode_note(new)[1]), root, scopes, known)
                         report["wrote"] = wrote
+                        report["check_lines"] = check_lines(to_check)
         except (OSError, TimeoutError) as failure:
             error = f"nothing written: {failure}"
         if error:
@@ -695,12 +791,14 @@ def finish(report, known):
             or report["problems"]):
         todo.append("blocks: act on the lines above (Later runs, step 3)")
     if hash_state == "differs" or (report["wrote"] and hash_state != "none"):
-        todo.append("close the note: the source changed. Set the line count in its Source line, commit, "
+        todo.append("close the note: the source changed. Check the line numbers it cites in its own text "
+                    "(Trace, Check your understanding), set the line count in its Source line, commit, "
                     "source_hash and written, then look at the notes that cite this file (Later runs, steps 5 "
                     "and 6)")
     elif hash_state == "none" and report["source_state"] == "found":
-        todo.append("close the note: it has no source_hash. Check the line count in its Source line and set "
-                    "commit, source_hash and written (Later runs, step 5)")
+        todo.append("close the note: it has no source_hash. Check the line numbers it cites in its own text "
+                    "and the line count in its Source line, and set commit, source_hash and written (Later runs, "
+                    "step 5)")
     cited_by = [other["note"] for other in known["notes"] if other["path"] != report["path"] and (
         (report["source_state"] == "found" and report["source"] in other["sources"])
         or (other["type"] in ("mechanism", "flow", "concept") and report["note"] in other["links"]))]
@@ -708,6 +806,10 @@ def finish(report, known):
     if (report["wrote"] or counts["moved"]) and cited_by:
         todo.append("blocks moved: correct the line numbers of this file that these notes cite (Later runs, step "
                     "6): " + ", ".join(cited_by))
+    cites = report.get("check_lines", [])
+    if cites:
+        todo.append("line numbers the note cites in its own text, to correct by hand: " + "; ".join(cites[:15])
+                    + (f"; and {len(cites) - 15} more" if len(cites) > 15 else ""))
     report["todo"] = todo
     return report
 
@@ -808,6 +910,23 @@ def print_report(report):
         print(f"TODO {name}: {item}")
 
 
+def scope_of(root, raw):
+    """A scope as a path under the source root, with /. It must lie under the root, but need not exist: the
+    scope of a file that was deleted is how its GONE line is reached. A scope that exists gets its spelling on
+    disk. Exits (as normalize_scopes does) when the scope leads out of the root."""
+    base = os.path.abspath(root)
+    full = os.path.abspath(os.path.join(base, str(raw)))
+    if os.path.exists(full):
+        return (normalize_scopes(root, [raw]) or [""])[0]
+    try:
+        inside = os.path.commonpath([os.path.normcase(base), os.path.normcase(full)]) == os.path.normcase(base)
+    except ValueError:
+        inside = False
+    if not inside:
+        sys.exit(f"--scope is not under the source root: {raw}")
+    return os.path.relpath(full, base).replace(os.sep, "/").strip("./") if full != base else ""
+
+
 def main():
     utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -826,10 +945,14 @@ def main():
     if not root.is_dir():
         ap.error(f"not a folder: {root}")
     try:
-        scopes = normalize_scopes(root, args.scope)
-        names = normalize_scopes(root, args.hash or [])
+        scopes = [scope_of(root, raw) for raw in args.scope]
+        scopes = [] if "" in scopes else scopes
     except SystemExit as error:
         ap.error(str(error.code))
+    try:
+        names = normalize_scopes(root, args.hash or [])
+    except SystemExit as error:
+        ap.error(str(error.code).replace("--scope", "--hash"))
     if args.hash:
         if len(names) != len(args.hash) or not all((root / name).is_file() for name in names):
             ap.error("--hash takes files under the source root")
