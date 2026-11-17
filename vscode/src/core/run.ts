@@ -8,7 +8,8 @@ import { Project } from "./projects";
  *  much output); `reason` then says which. */
 export interface Ran { started: boolean; exit: number | null; stdout: string; reason?: string; }
 
-export interface RunOptions { cwd?: string; timeoutMs?: number; maxBuffer?: number; }
+export interface RunOptions { cwd?: string; timeoutMs?: number; maxBuffer?: number;
+  env?: Record<string, string>; }       // variables added to this process's own for the program
 
 /**
  * Runs `program` with `args` when the workspace is trusted. Not trusted: nothing is started and the answer is
@@ -18,7 +19,7 @@ export function mayRun(trust: { isTrusted: boolean }, program: string, args: rea
   if (!trust.isTrusted) { return undefined; }
   return new Promise<Ran>((resolve) => {
     try {
-      execFile(program, [...args], { cwd: options.cwd, timeout: options.timeoutMs ?? 120000, maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
+      execFile(program, [...args], { cwd: options.cwd, env: options.env ? { ...process.env, ...options.env } : undefined, timeout: options.timeoutMs ?? 120000, maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
         windowsHide: true, shell: false, encoding: "utf8" }, (error, stdout) => {
         if (!error) { resolve({ started: true, exit: 0, stdout }); return; }
         const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null; code?: string | number | null };

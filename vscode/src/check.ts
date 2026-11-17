@@ -19,7 +19,9 @@ import { Checks, Memory, Stored, memoryOf } from "./core/validity";
 
 const QUIET_MS = 1500;
 const GIT_QUIET_MS = 300;
-const LIMITS: RunOptions = { timeoutMs: 120000, maxBuffer: 20 * 1024 * 1024 };
+// PYTHONUTF8: the checker writes its result as UTF-8 on every system (on Windows Python would else use the
+// system's own encoding, and a file name outside it broke the result).
+const LIMITS: RunOptions = { timeoutMs: 120000, maxBuffer: 20 * 1024 * 1024, env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" } };
 const RESTRICTED = "this window is in Restricted Mode";
 
 interface Per {

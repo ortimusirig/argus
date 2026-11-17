@@ -151,7 +151,7 @@ export class Create implements vscode.Disposable {
     const setting = commandSetting(kind);
     const command = fill(userCommand(config.inspect<unknown>(setting.slice("argus.".length)), kind), values);
     const program = await findProgram(command[0], { windows: process.platform === "win32", env: process.env, isFile: isProgram,
-      read: (file) => fs.promises.readFile(file, "utf8"), setting });
+      read: (file) => fs.promises.readFile(file, "utf8"), real: (file) => fs.promises.realpath(file), setting });
     if ("problem" in program) { return program.problem; }
     // The hashes from before the start: the file as saved, and the file's notes as they are on disk now.
     await this.index.refreshNow(project).catch(() => undefined);

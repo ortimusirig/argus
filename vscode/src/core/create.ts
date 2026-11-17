@@ -111,6 +111,7 @@ export const NOTE_GONE = "the note of this file is not there any more; nothing w
 /** What the lookup of a program asks of the system. Tests give the other system, and a disk that is not there. */
 export interface Lookup { windows: boolean; env: Record<string, string | undefined>; isFile(file: string): Promise<boolean>;
   read?: (file: string) => Promise<string>;     // the text of a launcher file; without it a batch file is always refused
+  real?: (file: string) => Promise<string>;     // the real path of a file, links resolved
   setting?: string; }                           // the setting the command came from, named in a problem; argus.createCommand when not given
 /** `before`: arguments that come before the command's own (the script that node runs, for an npm launcher). */
 export type Program = { path: string; before?: string[] } | { problem: string };
@@ -173,31 +174,36 @@ async function behindShim(shim: string, lookup: Lookup, p: typeof path.win32): P
   const folder = p.dirname(shim);
   const inside = (rel: string): string | undefined =>
     rel.split(/[\\/]/).some((part) => part === ".." || part === "" || part.includes(":")) ? undefined : p.join(folder, rel);
-  // Every line must be one that npm's launcher writes; one line, and only one, starts the program. A line in a
-  // comment, or a batch file that does anything else, is no launcher: it is refused as any batch file.
-  const SETUP = [/^@echo off$/i, /^goto start$/i, /^:find_dp0$/i, /^set dp0=%~dp0$/i, /^exit \/b$/i, /^:start$/i, /^setlocal$/i,
-    /^call :find_dp0$/i, /^if exist "%dp0%\\node\.exe" \($/i, /^set "_prog=%dp0%\\node\.exe"$/i, /^\) else \($/i,
-    /^set "_prog=node"$/i, /^set pathext=%pathext:;\.js;=;%$/i, /^\)$/];
+  // The file must be one of the two launchers npm writes, line for line and in their order (empty lines aside):
+  // the one that starts an .exe, or the one that starts a script with node. Then what the launcher runs is known
+  // without reading batch language: a line in a comment, a jump over the start line, or anything else is no
+  // launcher, and the file is refused as any batch file.
+  const HEAD = [/^@echo off$/i, /^goto start$/i, /^:find_dp0$/i, /^set dp0=%~dp0$/i, /^exit \/b$/i, /^:start$/i, /^setlocal$/i,
+    /^call :find_dp0$/i];
+  const NODE = [/^if exist "%dp0%\\node\.exe" \($/i, /^set "_prog=%dp0%\\node\.exe"$/i, /^\) else \($/i, /^set "_prog=node"$/i,
+    /^set pathext=%pathext:;\.js;=;%$/i, /^\)$/];
   const EXE = /^"%dp0%\\([^"%]+\.exe)"\s+%\*$/i;
-  const JS = /^(?:endlocal & goto #_undefined_# 2>nul \|\| title %comspec% & )?"%_prog%"\s+"%dp0%\\([^"%]+\.[cm]?js)"\s+%\*$/i;
-  const starts: string[] = [];
-  for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === "" || SETUP.some((known) => known.test(line))) { continue; }
-    starts.push(line);
+  const JS = /^endlocal & goto #_undefined_# 2>nul \|\| title %comspec% & "%_prog%"\s+"%dp0%\\([^"%]+\.[cm]?js)"\s+%\*$/i;
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  const fits = (shape: RegExp[]): boolean => lines.length === shape.length && shape.every((known, n) => known.test(lines[n]));
+  // The target must lie inside the launcher's folder also by its real path: a link in between must not lead out.
+  const within = async (target: string): Promise<boolean> => {
+    if (!await lookup.isFile(target)) { return false; }
+    if (!lookup.real) { return true; }
+    try {
+      const home = (await lookup.real(folder)).toLowerCase(), there = (await lookup.real(target)).toLowerCase();
+      return there.startsWith(home.endsWith("\\") || home.endsWith("/") ? home : home + p.sep);
+    } catch { return false; }
+  };
+  if (fits([...HEAD, EXE])) {
+    const target = inside((EXE.exec(lines[lines.length - 1]) as RegExpExecArray)[1]);
+    return target !== undefined && await within(target) ? { path: target } : undefined;
   }
-  if (starts.length !== 1) { return undefined; }
-  const exe = EXE.exec(starts[0]);
-  if (exe) {
-    const target = inside(exe[1]);
-    return target !== undefined && await lookup.isFile(target) ? { path: target } : undefined;
-  }
-  const js = JS.exec(starts[0]);
-  if (js) {
-    const script = inside(js[1]);
-    if (script === undefined || !await lookup.isFile(script)) { return undefined; }
+  if (fits([...HEAD, ...NODE, JS])) {
+    const script = inside((JS.exec(lines[lines.length - 1]) as RegExpExecArray)[1]);
+    if (script === undefined || !await within(script)) { return undefined; }
     const beside = p.join(folder, "node.exe");
-    if (await lookup.isFile(beside)) { return { path: beside, before: [script] }; }
+    if (await lookup.isFile(beside)) { return await within(beside) ? { path: beside, before: [script] } : undefined; }
     const node = await findProgram("node", { ...lookup, read: undefined });
     return "path" in node ? { path: node.path, before: [script] } : undefined;
   }

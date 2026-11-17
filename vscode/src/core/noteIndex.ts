@@ -35,6 +35,7 @@ interface Held { project: Project; entries: Map<string, Entry>; rejected: Map<st
   refreshed: number;        // the tick at which the last reading of the folders began
   read?: boolean;           // the folders were read to the end at least once
   unread?: number;          // how many folders the last reading could not read
+  unreadFiles?: Set<string>; // note files that are there and could not be read
   links?: LinkMap<Entry>; } // the notes by name, for the [[links]]: built when asked for, dropped when `entries` changes
 
 interface Way { file: string; key: string; }
@@ -168,7 +169,8 @@ export class NoteIndex {
 
   /** Whether the last reading could not read every folder: then "this file has no note" is not known. */
   incomplete(project: Project): boolean {
-    return (this.of(project)?.unread ?? 0) > 0;
+    const held = this.of(project);
+    return (held?.unread ?? 0) > 0 || (held?.unreadFiles?.size ?? 0) > 0;
   }
 
   /** Reads the project's folders from disk at once; resolves when the index is up to date. */
@@ -185,6 +187,7 @@ export class NoteIndex {
       let changed = false;
       const rejectedBefore = held.rejected;
       held.rejected = new Map();
+      held.unreadFiles = new Set();
       const seen = new Set<string>();
       const from = new Map<string, Way>(), real = new Map<string, string>();
       const unread = new Map<string, string>();          // folders that are there and could not be read, with the reason
@@ -416,7 +419,19 @@ export class NoteIndex {
         bound = !there.isSymbolicLink() && there.dev === opened.dev && there.ino === opened.ino
           && systemRules.real(canonical) === canonical && this.placeOf(project, canonical) === place;
       } finally { await handle.close(); }
-    } catch { return this.live(held) && drop(); }
+    } catch (error) {
+      if (!this.live(held)) { return false; }
+      // A file that is gone is no note. A file that is there and cannot be read is another thing: what it holds
+      // is not known. The note read from it before stays as it was, and the Problems list says so.
+      const code = (error as NodeJS.ErrnoException).code ?? "error";
+      if (code === "ENOENT" || code === "ENOTDIR") { held.unreadFiles?.delete(file); return drop(); }
+      (held.unreadFiles ??= new Set()).add(file);
+      const before = held.rejected.get(file);
+      held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file could not be read (${code}); `
+        + "what it holds is not known" + (had ? ", the note read from it before is shown" : ""));
+      return before !== held.rejected.get(file);
+    }
+    held.unreadFiles?.delete(file);
     if (!this.live(held)) { return false; }
     if (!bound) {
       held.rejected.set(file, `${path.basename(file).replace(/\.md$/i, "")}: the file changed where it leads while it was read, `
