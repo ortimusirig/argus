@@ -14,6 +14,7 @@ with the source file as it is on disk now and gives each block one state:
              beside it that may be its new form, and whether it is gone. Or its whole code is in the source but
              past other blocks (two functions changed places): then the lines where it is now are given
   ambiguous  the same code is at several places and the order of the blocks does not decide which
+  undecided  its code is at other lines, but the search was cut short (BOUNDED), so the place is not sure
 
 It also gives the ranges of non-blank source lines that no placed block covers (unexplained), and whether the
 note's source_hash still equals the file.
@@ -40,9 +41,17 @@ more line, with the value for a Mechanism or Flow note that has all these files 
 Each UNEXPLAINED line also gives the id a new block at those lines would get: the id of the block above plus a
 letter, never an id in use and never one the note's property retired_blocks lists.
 
-Exit code 0: every block is same, no line is unexplained and no source_hash differs: nothing to update.
-1: at least one block is moved, changed or ambiguous, a line is unexplained, a source_hash differs, a note's source
-file is gone, or a note could not be read or written. 2: wrong arguments, or a folder that does not exist.
+What is still to do for a note is said in TODO lines (in --json: "todo"): act on the blocks, close the note
+(line count, commit, source_hash, written), correct line numbers that other notes cite. The last line says CURRENT
+only when no note has a TODO line. A note without source_hash has one: it gets the property.
+
+A note whose 'source' names no file is told apart: GONE (the file is not there, but the sources of other notes
+are: it was deleted or renamed) or PROBLEM (the path is no path of a file under the source root, or no note's
+source is found there: the property or --source is wrong, and nothing is to be removed).
+
+Exit code 0: CURRENT, no note has anything to do. 1: at least one note has a TODO line (a block is moved,
+changed, ambiguous or undecided, a line is unexplained, a source_hash differs or is missing, something was just
+written, a source file is gone, or there is a PROBLEM). 2: wrong arguments, or a folder that does not exist.
 """
 import argparse
 import difflib
@@ -66,6 +75,7 @@ from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
 ORDER_WORK = 5_000_000      # steps of the proof that no equally good way leaves a block out
+STATES = ("same", "moved", "changed", "ambiguous", "undecided")
 SHOWN = 12              # places or ranges written out in one line of the plain report
 LOCK_WAIT = 30          # seconds --fix-moved waits for another run that holds the same note
 RANGE = re.compile(r"\(lines? \d+(?:\s*-\s*\d+)?\)(\s*)$")
@@ -282,7 +292,7 @@ def compare(note_lines, props, lines):
     text = Text(lines)
     keep = max(1, PLACES // max(1, len(blocks)))
     budget = SEARCH_WORK // max(1, len(blocks))
-    found, bounded, problems = [], [], []
+    found, bounded, problems, cut_short = [], [], [], set()
     last_known = max([total] + [max(b["b"], b["a"] + len(b["code"]) - 1) for b in blocks])
     for a, b in declared:
         if b > last_known:
@@ -296,6 +306,7 @@ def compare(note_lines, props, lines):
             problems.append(f"block {block['id']} has no code fence")
         starts, possible, cut = places(text, block["code"], block["a"], declared, keep, budget)
         if cut:
+            cut_short.add(len(found))
             bounded.append(f"block {block['id']}: its code may be at up to {possible} places; only the "
                            f"{len(starts)} found nearest to line {block['a']} were looked at")
         found.append(starts)
@@ -309,7 +320,13 @@ def compare(note_lines, props, lines):
         length, a, b = len(block["code"]), block["a"], block["b"]
         entry = {"id": block["id"], "from": a, "to": b, "lines": length}
         best = best_starts[index]
-        if len(best) == 1 and not left_out[index]:
+        if len(best) == 1 and not left_out[index] and best[0] + 1 != a and (
+                index in cut_short or (cut_short and len(found[index]) != 1)):
+            # The best place is not the recorded one, and places were left out of the search: of this block, or of
+            # another block while this one has more than one place. A full search could put it elsewhere.
+            entry["state"] = "undecided"
+            entry["proposed"] = [best[0] + 1, best[0] + length]
+        elif len(best) == 1 and not left_out[index]:
             start = best[0]
             covered[start:start + length] = [True] * length
             entry["at"] = [start + 1, start + length]
@@ -405,7 +422,7 @@ def compare(note_lines, props, lines):
         taken.add(u["new_id"])
     for block_id in sorted({block["id"] for block in blocks} & set(retired)):
         problems.append(f"block {block_id} uses an id that retired_blocks lists")
-    counts = {state: sum(1 for e in result if e["state"] == state) for state in ("same", "moved", "changed", "ambiguous")}
+    counts = {state: sum(1 for e in result if e["state"] == state) for state in STATES}
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
             "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared}
 
@@ -573,9 +590,11 @@ def moved_text(data, report):
 
 # ---------------------------------------------------------------- main
 
-def note_report(path, root, scopes, fix):
-    """The report of one note, or None when it is not a File note of this skill or its source is out of scope."""
-    text = read_text(path)[0].replace("\r\n", "\n").replace("\r", "\n")
+def build(path, text, root, scopes, known):
+    """Everything about one note, decided from its text alone: whether it is a File note of this skill, whether its
+    source is in scope, where the source is, and the state of its blocks against the source as it is on disk now.
+    Returns None when the note is not to be looked at, else the report (its '_found' is the comparison, or None
+    when there is no source file to compare with)."""
     props = frontmatter(text)
     if props.get("written_by", "").lower() != "argus" or props.get("type") != "file":
         return None
@@ -584,55 +603,140 @@ def note_report(path, root, scopes, fix):
     if not in_scope(src or given.strip("/"), scopes):
         return None
     report = {"note": path.stem, "path": str(path), "source": src or given, "depth": props.get("depth", ""),
-              "wrote": []}
+              "wrote": [], "source_state": "found", "source_gone": False, "_found": None}
     if not src:
-        report.update(source_gone=True, blocks=[], unexplained=[], bounded=[], lines=0,
-                      counts={"same": 0, "moved": 0, "changed": 0, "ambiguous": 0},
-                      problems=[f"property 'source' names no file under the source root: '{given}'. When the file "
-                                f"was deleted, remove the note as the vault's rules say"])
-        report["source_hash"] = {"recorded": props.get("source_hash") or None, "now": None, "state": "none"}
+        report.update(blocks=[], unexplained=[], bounded=[], lines=0, problems=[],
+                      counts={state: 0 for state in STATES},
+                      source_hash={"recorded": props.get("source_hash") or None, "now": None, "state": "none"})
+        target = Path(root) / given
+        others = sum(1 for other in known["notes"] if other["path"] != str(path) and other["source"])
+        if not given:
+            report["source_state"] = "rejected"
+            report["problems"].append("the note has no 'source' property. Remove nothing; correct the property")
+        elif Path(given).is_absolute() or given.startswith("/") or ".." in given.split("/") or os.path.lexists(target):
+            # Not a missing file: an absolute path, a path that leads out of the root, a folder, or a link that
+            # leads out. A mistake in the property or in the source root.
+            report["source_state"] = "rejected"
+            report["problems"].append(f"property 'source' is '{given}': not the path of a file under the source root "
+                                      f"(absolute, leading out of it, or no plain file). This is a mistake in the "
+                                      f"property or in --source, not a deleted file. Remove nothing; tell the person")
+        elif others == 0:
+            report["source_state"] = "root in doubt"
+            report["problems"].append(f"source '{given}' is not under the source root, and no other File note's "
+                                      f"source is found there either: --source may be the wrong folder. Remove "
+                                      f"nothing; tell the person")
+        else:
+            report["source_state"], report["source_gone"] = "gone", True
+            report["gone"] = (f"source file '{given}' is not under the source root, where the sources of {others} "
+                              f"other File notes are: the file was deleted or renamed")
         return report
     lines, _ = source_lines(Path(root) / src)
     found = compare(text.split("\n"), props, lines)
-    if fix and any(e["state"] == "moved" or "moved_to" in e for e in found["blocks"]):
-        # Read, compare and write as one step: under the note's lock, from one reading of the note's bytes.
-        try:
-            with NoteLock(path):
-                data = Path(path).read_bytes()
-                decoded = decode_note(data)
-                if decoded is None:
-                    error, wrote = "the note is not UTF-8; nothing written", []
-                else:
-                    text = decoded[1].replace("\r\n", "\n").replace("\r", "\n")
-                    props = frontmatter(text)
-                    found = compare(text.split("\n"), props, lines)
-                    new, wrote, error = moved_text(data, found)
-                    if new is not None and not error:
-                        error = write_note(path, data, new)
-                    if new is not None and not error:
-                        text = decode_note(new)[1].replace("\r\n", "\n").replace("\r", "\n")
-                        props = frontmatter(text)
-                        problems = found["problems"]
-                        found = compare(text.split("\n"), props, lines)
-                        found["problems"] = problems
-                        report["wrote"] = wrote
-        except (OSError, TimeoutError) as failure:
-            error = f"nothing written: {failure}"
-        if error:
-            found["problems"].append(error)
     recorded, now = props.get("source_hash", ""), file_hash(Path(root) / src)
     state = "none" if not recorded else "same" if recorded == now else "differs"
     if recorded and not SOURCE_HASH.fullmatch(recorded):
         found["problems"].append("property 'source_hash' is not 'sha256:' and 64 hex digits")
     report["source_hash"] = {"recorded": recorded or None, "now": now, "state": state}
     report.update({key: value for key, value in found.items() if not key.startswith("_")})
+    report["_found"] = found
     return report
 
 
-def needs_update(report):
-    counts = report["counts"]
-    return bool(counts["moved"] or counts["changed"] or counts["ambiguous"] or report["unexplained"]
-                or report["problems"] or report["source_hash"]["state"] == "differs")
+def note_text(data):
+    return data.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def note_report(path, root, scopes, fix, known):
+    """The report of one note, or None when it is not a File note of this skill or its source is out of scope."""
+    report = build(path, note_text(read_text(path)[0]), root, scopes, known)
+    if report is None:
+        return None
+    found = report["_found"]
+    if fix and found and any(e["state"] == "moved" or "moved_to" in e for e in found["blocks"]):
+        # Read, decide, compare and write as one step, under the note's lock. Nothing decided before the lock is
+        # used: whether the note is this skill's File note, its scope, its source path, the source text and the
+        # blocks are all taken again from the bytes read under the lock, and those bytes are the ones written over.
+        error = None
+        try:
+            with NoteLock(path):
+                data = Path(path).read_bytes()
+                decoded = decode_note(data)
+                locked = build(path, note_text(decoded[1]), root, scopes, known) if decoded else None
+                if decoded is None:
+                    error = "the note is not UTF-8; nothing written"
+                elif locked is None or locked["_found"] is None:
+                    error = ("read again under the lock, the note is no longer a File note of this skill with a "
+                             "source file in scope; nothing written")
+                else:
+                    report = locked
+                    new, wrote, error = moved_text(data, locked["_found"])
+                    if new is not None and not error:
+                        error = write_note(path, data, new)
+                    if new is not None and not error:
+                        report = build(path, note_text(decode_note(new)[1]), root, scopes, known)
+                        report["wrote"] = wrote
+        except (OSError, TimeoutError) as failure:
+            error = f"nothing written: {failure}"
+        if error:
+            report["problems"].append(error)
+    return report
+
+
+def finish(report, known):
+    """Adds what is still to do for the note ('todo') and drops the working parts. The run's result is CURRENT only
+    when no note has anything to do, so nobody has to judge whether a step may be left out."""
+    report.pop("_found", None)
+    counts, todo = report["counts"], []
+    hash_state = report["source_hash"]["state"]
+    if report["source_state"] == "gone":
+        todo.append("the source file is gone: say which file, then move or remove the note as the vault's rules "
+                    "say (Later runs, step 3)")
+    if (counts["changed"] or counts["ambiguous"] or counts["undecided"] or counts["moved"] or report["unexplained"]
+            or report["problems"]):
+        todo.append("blocks: act on the lines above (Later runs, step 3)")
+    if hash_state == "differs" or (report["wrote"] and hash_state != "none"):
+        todo.append("close the note: the source changed. Set the line count in its Source line, commit, "
+                    "source_hash and written, then look at the notes that cite this file (Later runs, steps 5 "
+                    "and 6)")
+    elif hash_state == "none" and report["source_state"] == "found":
+        todo.append("close the note: it has no source_hash. Check the line count in its Source line and set "
+                    "commit, source_hash and written (Later runs, step 5)")
+    cited_by = [other["note"] for other in known["notes"] if other["path"] != report["path"] and (
+        (report["source_state"] == "found" and report["source"] in other["sources"])
+        or (other["type"] in ("mechanism", "flow", "concept") and report["note"] in other["links"]))]
+    report["cited_by"] = cited_by
+    if (report["wrote"] or counts["moved"]) and cited_by:
+        todo.append("blocks moved: correct the line numbers of this file that these notes cite (Later runs, step "
+                    "6): " + ", ".join(cited_by))
+    report["todo"] = todo
+    return report
+
+
+def survey(notes_dir, root):
+    """What the notes folder holds, read once before any note is judged: for each note of this skill its type, the
+    source files it names that are under the source root, and the notes it links to. From this a missing source
+    file can be told from a wrong source root, and the notes that cite a file are known."""
+    notes = []
+    for path in note_paths(notes_dir):
+        try:
+            text = note_text(read_text(path)[0])
+        except OSError:
+            continue
+        props = frontmatter(text)
+        if props.get("written_by", "").lower() != "argus":
+            continue
+        kind = props.get("type", "")
+        given = [props.get("source", "")] if kind == "file" else props.get("sources", "").split(",")
+        sources = [s for s in (on_disk(root, g.strip()) for g in given if g.strip()) if s]
+        links = {m.strip().rstrip("\\").split("/")[-1] for m in re.findall(r"\[\[([^\]|#]+)", text)}
+        notes.append({"note": path.stem, "path": str(path), "type": kind, "sources": sources, "links": links,
+                      "source": sources[0] if kind == "file" and sources else None})
+    return {"notes": notes}
+
+
+def note_paths(notes_dir):
+    return [path for path in sorted(Path(notes_dir).rglob("*.md"))
+            if not any(part.startswith(".") for part in path.relative_to(notes_dir).parts[:-1])]
 
 
 def print_report(report):
@@ -643,7 +747,9 @@ def print_report(report):
         print(f"WROTE {name}: {item}")
     print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
           f"{counts['same']} same, {counts['moved']} moved, {counts['changed']} changed, {counts['ambiguous']} "
-          f"ambiguous; {len(report['unexplained'])} unexplained ranges; {hash_state}")
+          f"ambiguous, {counts['undecided']} undecided; {len(report['unexplained'])} unexplained ranges; {hash_state}")
+    if report["source_state"] == "gone":
+        print(f"GONE {name}: {report['gone']}")
     for item in report["problems"]:
         print(f"PROBLEM {name}: {item}")
     for item in report["bounded"]:
@@ -655,6 +761,10 @@ def print_report(report):
         was = f"block {entry['id']} ({at(entry['from'], entry['to'])})"
         if entry["state"] == "moved":
             print(f"MOVED {was}: now {at(*entry['at'])}")
+        elif entry["state"] == "undecided":
+            print(f"UNDECIDED {was}: its code is at {at(*entry['proposed'])}, but the search for places was cut "
+                  f"short (see BOUNDED), so a full search could place it elsewhere. Nothing is written for it: "
+                  f"read the code and set its line numbers by hand")
         elif entry["state"] == "ambiguous":
             starts = entry["candidates"]
             more = f" and {len(starts) - SHOWN} more" if len(starts) > SHOWN else ""
@@ -668,9 +778,9 @@ def print_report(report):
                 parts = [f"its whole code is at {at(*entry['moved_to'])}, past other blocks: no rewrite, --fix-moved "
                          f"writes the new lines"]
             elif "elsewhere" in entry:
-                parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks, at more than "
-                         f"one place or where another block could be too: no rewrite, choose the place and set "
-                         f"the block's line numbers by hand"]
+                parts = [f"its whole code is at lines {spans(entry['elsewhere'])}, past other blocks; at more than "
+                         f"one place, or where another block could be too, or the search was cut short (BOUNDED): "
+                         f"no rewrite, choose the place and set the block's line numbers by hand"]
             else:
                 parts = [f"expected at {at(*entry['expected'])}"]
                 if entry.get("spaces_only"):
@@ -694,6 +804,8 @@ def print_report(report):
         else:
             why = "new code: no changed block beside it"
         print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
+    for item in report["todo"]:
+        print(f"TODO {name}: {item}")
 
 
 def main():
@@ -729,21 +841,21 @@ def main():
     if not args.notes or not Path(args.notes).is_dir():
         ap.error(f"--notes must name a folder: {args.notes}")
     notes_dir = Path(args.notes)
+    known = survey(notes_dir, root)
+    empty = {"source": "", "depth": "", "wrote": [], "blocks": [], "unexplained": [], "bounded": [], "lines": 0,
+             "source_state": "not read", "source_gone": False,
+             "source_hash": {"recorded": None, "now": None, "state": "none"}}
     reports = []
-    for path in sorted(notes_dir.rglob("*.md")):
-        if any(part.startswith(".") for part in path.relative_to(notes_dir).parts[:-1]):
-            continue
+    for path in note_paths(notes_dir):
         try:
-            report = note_report(path, root, scopes, args.fix_moved)
+            report = note_report(path, root, scopes, args.fix_moved, known)
         except OSError as error:
-            report = {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
-                      "unexplained": [], "bounded": [], "lines": 0, "problems": [f"could not be read: {error}"],
-                      "counts": {"same": 0, "moved": 0, "changed": 0, "ambiguous": 0},
-                      "source_hash": {"recorded": None, "now": None, "state": "none"}}
+            report = dict(empty, note=path.stem, path=str(path), problems=[f"could not be read: {error}"],
+                          counts={state: 0 for state in STATES})
         if report:
-            reports.append(report)
-    todo = [r for r in reports if needs_update(r)]
-    totals = {state: sum(r["counts"][state] for r in reports) for state in ("same", "moved", "changed", "ambiguous")}
+            reports.append(finish(report, known))
+    todo = [r for r in reports if r["todo"]]
+    totals = {state: sum(r["counts"][state] for r in reports) for state in STATES}
     verdict = "UPDATE NEEDED" if todo else "CURRENT"
     code = 1 if todo else 0
     if args.json:
@@ -757,7 +869,7 @@ def main():
     where = ", ".join(scopes) if scopes else "whole source root"
     print(f"RESULT scope {where}: {len(reports)} File notes, {sum(len(r['blocks']) for r in reports)} blocks: "
           f"{totals['same']} same, {totals['moved']} moved, {totals['changed']} changed, {totals['ambiguous']} "
-          f"ambiguous, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
+          f"ambiguous, {totals['undecided']} undecided, {sum(len(r['unexplained']) for r in reports)} unexplained ranges, "
           f"{sum(len(r['wrote']) for r in reports)} written: {verdict}")
     sys.exit(code)
 
