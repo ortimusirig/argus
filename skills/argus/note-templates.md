@@ -137,7 +137,7 @@ Rules the check enforces on a File note:
 | Masked secrets | Every line with `[masked]` is listed in the property `masked_lines` (for example `masked_lines: 12-14, 20`). Around each mask the line equals the source; a line may be `[masked]` alone. What a mask hides appears nowhere else in the note. At most a quarter of the file's non-blank lines are masked (two always allowed) |
 | Empty file | A source with no non-blank line: lens table, "The file is empty." under Level 2, no block |
 | Ownership | Only notes with `written_by: argus` are read by the check |
-| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. A Flow note has an "Every outcome" table with a row, and names only block ids that exist (see "End-to-End Flow note"). No note holds an Obsidian comment (`%%`) outside code. The check warns about `<word>` outside code, which Obsidian hides. Every note is linked from another note |
+| Other notes | Mechanism, Library and Start Here notes have their lens rows, each with an answer. A Mechanism or Flow note has a Mermaid diagram that is not empty. A Flow note has an "Every outcome" table with a row, and its Steps table names only block ids that exist (see "End-to-End Flow note"). No note holds an Obsidian comment (`%%`) outside code. The check warns about `<word>` outside code, which Obsidian hides. Every note is linked from another note |
 | Stale | A note with `source_hash` is STALE when the hash of its source (its `sources`) differs now. A note without it is judged by `commit` and git |
 | Every block explained | Each block has its row in the Level 2 table, and at `depth: map` at least one sentence of explanation after its code |
 
@@ -315,10 +315,10 @@ Rules for a Flow note:
 | --- | --- |
 | Read, never guessed | Follow the code from the entry to every place where an outcome, a status or an error is set. Do not infer a stage from a name. An end state the code can reach that is not in the diagram and in "Every outcome" makes the note wrong |
 | Decisions | A check is a branch node (`{"...?"}`) with one arrow per answer. Each end is a node of its own |
-| Block ids | A node names the blocks it rests on in round brackets at the end of its text: `(53a)`, `(53a, 53b)`, `(32 to 34, 39)`. The Steps table writes `block 53a` or `blocks 53c and 53d`. The check fails when a named id is no block of a File note the Flow note links to; of `32 to 34` it looks at both ends |
+| Block ids | A node names the blocks it rests on in round brackets at the end of its text, for the reader: `(53a)`, `(53a, 53b)`, `(32 to 34, 39)`. Every block a node names is also in a row of the Steps table, in the "File, block" cell, written `block 53a` or `blocks 53c and 53d`. The check reads that cell only, not the diagram: it fails when a block named there is no block of a File note the Flow note links to (of `32 to 34` it looks at both ends) |
 | Who decides | Every node has one of the six classes. Leave out a class no node uses; do not add others |
 | Size | One flow, one diagram. Above about 40 nodes, cut the flow into two notes at a natural point |
-| Check | The diagram is not empty; "Every outcome" has at least one row; the named block ids exist. A project with File notes and no Flow note gets a WARN |
+| Check | The diagram is not empty; "Every outcome" has at least one row; the block ids in the Steps table exist. A project with File notes and no Flow note gets a WARN |
 
 ## Start Here note
 
