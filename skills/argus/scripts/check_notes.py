@@ -359,8 +359,10 @@ def check_flow_note(name, lines, mask, file_blocks, outside=None):
             continue
         if column < len(c):
             ids = [m.group(1) for m in IDS_IN_ROW.finditer(WIKILINK.sub(" ", without_inline_code(c[column])))]
-            here = linked(row)
-            # The cell links a note of the vault whose blocks cannot be read, and the row links no File note: the
+            # The File notes of a row are those its block cell links: a link in the words of another cell is text
+            # and decides nothing about where the ids are looked for.
+            here = linked(c[column])
+            # The cell links a note of the vault whose blocks cannot be read, and the cell links no File note: the
             # ids of this row cannot be checked. That is said, and it is no FAIL: the note is not one of --notes.
             closed = [] if here else [t for t in dict.fromkeys(link_names(c[column])) if beyond.get(t, (0, 0))[1]]
             if ids and closed:
