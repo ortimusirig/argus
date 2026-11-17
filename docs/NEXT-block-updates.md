@@ -43,3 +43,16 @@ One changed line in a 1,400-line script rewrites a 30,000-word note (about 275,0
 No testing infrastructure and no new test code (owner, 2026-11-16): prove changes by running the product itself.
 Codex reviews stress the product. The 13 points of `docs/SKILL-FEEDBACK-2026-11-16.md` belong to the same skill
 revision where they touch the same text (dirty work tree, `%%` in inline code, a second language).
+
+## P2 backlog of skill 2.10
+
+Open after ten Codex stress rounds of branch `skill-2.10`. None blocks the merge; each is one line.
+
+| Item | Where | Planned fix |
+| --- | --- | --- |
+| The test whether another block could take a displaced block's free place looks at every place of every other unplaced block: it grows with blocks times places (8.8 s for 10,000 reversed blocks) | `skills/argus/scripts/changed_blocks.py`, the loop over `rivals` in `compare` (line 439 at commit `d3efe1c`) | Index the places as intervals once for the note, or give the scan a budget and report the moves it left undecided |
+| The TODO lines about cited line numbers and about what rests on a rewritten block are printed by the run that sees the change; a later run no longer knows them | `changed_blocks.py`, `finish` | Keep them in the note (a property) until the note is closed, or in a small state file beside the lock |
+| A writer that does not take the lock (an editor, an agent editing by hand) can still save in the instant between the last reading of the note and the replace | `changed_blocks.py`, `write_note` | None known without a lock every writer honours; the help says so |
+| `~/.argus/locks` keeps one empty file for each note that was ever written by `--fix-moved` | `changed_blocks.py`, `NoteLock` | Remove a lock file after use when no other run waits for it, or clear old ones in `setup_tools.py` |
+| The diagram of a Flow note and its Steps table can name different blocks and no check sees it; only the Steps table is checked | `skills/argus/scripts/check_notes.py`, `check_flow_note`; `note-templates.md` | A written form for block ids in the diagram that can be read without parsing free text, or a table of nodes beside the diagram |
+| A line table whose heading is not exactly `Line` or `Lines` (an older note, another language) is not written by `--fix-moved`; its rows become TODO lines | `changed_blocks.py`, `line_column` | A list of accepted headings in one place, or a property of the note that names its line column |
