@@ -437,6 +437,13 @@ def compare(note_lines, props, lines):
             entry["state"] = "displaced"
             entry["elsewhere"] = [[s + 1, s + length] for s in free[:SHOWN]]
             entry["_free"] = free
+        elif entry["state"] == "changed" and found[index]:
+            # Its whole code is in the source too, but only at lines that another block holds. One of the two
+            # blocks may be gone, or the blocks changed places. The code itself is there, so this is no changed
+            # block either, and nobody is sent to rewrite it.
+            entry["state"] = "displaced"
+            entry["elsewhere"] = [[s + 1, s + length] for s in found[index][:SHOWN]]
+            entry["held"] = True
     for index, entry in enumerate(result):
         if len(entry.get("_free", ())) != 1 or bounded:
             continue
@@ -483,7 +490,9 @@ def compare(note_lines, props, lines):
         # An unexplained range never crosses a placed block, so the ranges that start in the gap lie in it.
         gap = unexplained[bisect_left(starts_of_ranges, low):bisect_right(starts_of_ranges, high)]
         ids = [result[i]["id"] for i in group]
+        changed_here = [result[i]["id"] for i in group if result[i]["state"] == "changed"]
         for u in gap:
+            u["changed_beside"] = changed_here[:SHOWN]
             u["beside"] = ids[:SHOWN]
             if len(ids) > SHOWN:
                 u["beside_more"] = len(ids) - SHOWN
@@ -550,7 +559,7 @@ def compare(note_lines, props, lines):
     # by the same number of lines is neither.
     reordered = [f"block {e['id']} is past other blocks now (lines {span(e['from'], e['to'])} before, "
                  + (f"lines {span(*e['moved_to'])} now)" if "moved_to" in e else f"lines {spans(e['elsewhere'])} now)")
-                 for e in result if "moved_to" in e or "elsewhere" in e]
+                 for e in result if ("moved_to" in e or "elsewhere" in e) and not e.get("held")]
     placed = [e for e in result if "at" in e]        # in the order of their sections in the note
     for earlier, later in zip(placed, placed[1:]):
         if later["at"][0] < earlier["at"][0]:
@@ -733,6 +742,120 @@ def write_note(path, compared, new):
     return None
 
 
+# ---------------------------------------------------------------- the guard of --fix-moved
+#
+# The writer understands a small Markdown and nothing else. Two functions stand around it, and neither shares any
+# reading of the note with it: unhandled() refuses a note that holds something the writer was not made for, and
+# own_check() looks at what the writer produced and lets only line numbers in known places through. A new shape
+# of note is then refused or caught, not misread.
+
+SEPARATOR_ROW = re.compile(r"\|(\s*:?-+:?\s*\|)+\s*")
+OWN_HEADING = re.compile(r"### Block \w+\b.*\(lines? \d+(\s*-\s*\d+)?\)\s*")
+OWN_LINE_CELL = re.compile(r"\s*\d+(\s*-\s*\d+)?\s*")
+
+
+def unhandled(lines):
+    """The first thing in a note that the writer of --fix-moved does not handle, as (line number, what it is), or
+    None. The writer handles: code fences of backticks that start at the beginning of a line, and tables whose
+    rows start at the beginning of a line, with one heading row and one separator row under it. Anything else
+    that could hold or hide a table or a fence is named here: a fence of ~, a fence that is indented or stands in
+    a quote or a list item, a fence that is never closed, an HTML block, an Obsidian comment, a table that is
+    indented, has no separator row, or stands directly under another table."""
+    fence, fence_at, rows = None, 0, 0
+    for n, line in enumerate(lines, 1):
+        text = line.lstrip(" \t")
+        indent = len(line) - len(text)
+        ticks = len(text) - len(text.lstrip("`"))
+        if fence is not None:
+            if indent == 0 and ticks >= fence and text.strip("`").strip() == "":
+                fence = None
+            continue
+        if indent == 0 and ticks >= 3:
+            fence, fence_at, rows = ticks, n, 0
+            continue
+        if text.startswith("~~~"):
+            return n, "a code fence made of ~"
+        if ticks >= 3:
+            return n, "a code fence that does not start at the beginning of its line"
+        marker = re.match(r"(?:>\s?|[-*+]\s+|\d+[.)]\s+)+", text)
+        inner = text[marker.end():] if marker else ""
+        if marker and (inner.startswith("|") or inner.startswith("```") or inner.startswith("~~~")):
+            return n, "a table or a code fence inside a quote or a list item"
+        if re.match(r"<[A-Za-z!/]", text) and not re.match(r"<[A-Za-z][A-Za-z0-9+.-]*:", text):
+            return n, "an HTML block"
+        if "%%" in re.sub(r"`[^`]*`", "", line):
+            return n, "an Obsidian comment (%%)"
+        if not text.startswith("|"):
+            rows = 0
+            continue
+        if indent:
+            return n, "a table row that does not start at the beginning of its line"
+        rows += 1
+        separator = SEPARATOR_ROW.fullmatch(line.rstrip()) is not None
+        if rows == 2 and not separator:
+            return n, "a table without a separator row under its heading row"
+        if rows != 2 and separator:
+            return n, "a table directly under another table, or one that starts with a separator row"
+    if fence is not None:
+        return fence_at, "a code fence that is opened and not closed"
+    return None
+
+
+def own_check(old, new):
+    """Looks at what the writer made, by itself: `old` and `new` are the note's lines before and after. Returns
+    None when every line that differs is a block heading, the masked_lines property, or a row of a table whose
+    heading row has a column Line or Lines, and when on such a line nothing differs but the numbers of the line
+    range. Else the number of the first line that breaks this. It reads the note in its own way and uses nothing
+    of the writer's."""
+    if len(old) != len(new):
+        return 0
+    in_props = bool(old) and old[0].strip() == "---"
+    fence, heading = None, None                      # the open fence; the heading row of the table we are in
+    for n, (was, now) in enumerate(zip(old, new), 1):
+        props_line = in_props and n > 1
+        if props_line and was.strip() == "---":
+            in_props = props_line = False
+        # A fence here is any run of three or more ` or ~ at the start of a line, indented or not: wider than what
+        # the writer knows, so that a table inside any kind of fence is never let through.
+        text = was.lstrip(" \t>")
+        mark = text[:1] if text[:3] in ("```", "~~~") else ""
+        run = len(text) - len(text.lstrip(mark)) if mark else 0
+        inside = fence is not None
+        if fence is None and run >= 3 and not in_props:
+            fence, inside = (mark, run), True
+        elif fence is not None and mark == fence[0] and run >= fence[1] and text.strip(mark).strip() == "":
+            fence = None
+        first_row = False
+        if inside or not was.startswith("|"):
+            heading = None
+        elif heading is None:
+            heading, first_row = was, True
+        if was == now:
+            continue
+        if inside:
+            return n
+        if props_line:
+            if (was.startswith("masked_lines:") and now.startswith("masked_lines:")
+                    and re.fullmatch(r"[\d,\s-]*", now[len("masked_lines:"):])):
+                continue
+            return n
+        if OWN_HEADING.fullmatch(was) and OWN_HEADING.fullmatch(now):
+            if was[:was.rindex("(line")] == now[:now.rindex("(line")]:
+                continue
+            return n
+        if heading is None or first_row:
+            return n
+        names = [cell.strip().lower() for cell in re.split(r"(?<!\\)\|", heading)]
+        column = next((k for k, name in enumerate(names) if name in ("line", "lines")), None)
+        before, after = re.split(r"(?<!\\)\|", was), re.split(r"(?<!\\)\|", now)
+        if (column is None or len(before) != len(after) or column >= len(before)
+                or any(x != y for k, (x, y) in enumerate(zip(before, after)) if k != column)
+                or not OWN_LINE_CELL.fullmatch(before[column]) or not OWN_LINE_CELL.fullmatch(after[column])
+                or re.sub(r"[\d-]", "", before[column]) != re.sub(r"[\d-]", "", after[column])):
+            return n
+    return None
+
+
 def moved_text(data, report):
     """The note's bytes with the new line numbers of every moved block. `data` are the bytes `report` was made
     from. A number is written only where the place is known to hold a line number: the block heading, a table
@@ -753,6 +876,10 @@ def moved_text(data, report):
     if len(set(ids)) != len(ids):
         # A row of a table is found by the block's id; with one id for two blocks a row would get the wrong lines.
         return None, [], None, left                  # the PROBLEM line of the comparison says why
+    strange = unhandled(lines)
+    if strange:
+        return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
+                          f"which the writer does not handle. Set the line numbers of the moved blocks by hand"), left
     wrote, masked_changed = [], False
     # First the line numbers the note cites in its own text, where they are sure: from the right end of each line,
     # so that the places of the others in that line stay true.
@@ -944,6 +1071,14 @@ def note_report(path, root, scopes, fix, known):
                     new, wrote, error, left = moved_text(data, locked["_found"])
                     to_check = check_lines([c for c in locked["_found"]["_cites"] if not c["sure"]]) + left
                     if new is not None and not error:
+                        # The writer's result is looked at by a check of its own before it may reach the disk.
+                        split = re.compile(r"\r\n|\r|\n").split
+                        bad = own_check(split(decoded[1]), split(decode_note(new)[1]))
+                        if bad is not None:
+                            error = (f"the writer's own check failed at note line {bad}: a difference that is no "
+                                     f"line number in a block heading, in masked_lines or in a Line column. Nothing "
+                                     f"written; set the line numbers of the moved blocks by hand")
+                    if new is not None and not error:
                         error = write_note(path, data, new)
                     if new is not None and not error:
                         report = build(path, note_text(decode_note(new)[1]), root, scopes, known)
@@ -982,9 +1117,13 @@ def finish(report, known):
         (report["source_state"] == "found" and report["source"] in other["sources"])
         or (other["type"] in ("mechanism", "flow", "concept") and report["note"] in other["links"]))]
     report["cited_by"] = cited_by
-    if (report["wrote"] or counts["moved"]) and cited_by:
-        todo.append("blocks moved: correct the line numbers of this file that these notes cite (Later runs, step "
-                    "6): " + ", ".join(cited_by))
+    by_line = [other["note"] for other in known["notes"] if other["note"] in cited_by and other["cites_lines"]]
+    report["cited_by_line"] = by_line
+    if (report["wrote"] or counts["moved"]) and by_line:
+        # A note that names a place by its block needs nothing after a move. Only 'line N' goes stale.
+        todo.append("blocks moved, and these notes cite source lines as 'line N': replace each by its block "
+                    "('block 29 of [[the File note]]'), once; a block citation does not go stale (Later runs, step "
+                    "6): " + ", ".join(by_line))
     if report.get("reordered"):
         todo.append("the order of blocks changed: " + "; ".join(report["reordered"][:8])
                     + (f"; and {len(report['reordered']) - 8} more" if len(report["reordered"]) > 8 else "")
@@ -1035,6 +1174,8 @@ def survey(notes_dir, root):
         links = {name for i, line in enumerate(lines) if not fenced[i] for name in link_names(line)}
         notes.append({"note": path.stem, "path": str(path), "type": kind, "sources": sources, "links": links,
                       "given": [g.strip() for g in given if g.strip()], "source_hash": props.get("source_hash", ""),
+                      "cites_lines": any(CITE.search(without_inline_code(line))
+                                         for i, line in enumerate(lines) if not fenced[i]),
                       "source": sources[0] if kind == "file" and sources else None})
     return {"notes": notes}
 
@@ -1089,8 +1230,9 @@ def note_paths(notes_dir):
 def print_report(report):
     counts, name = report["counts"], report["note"]
     now = report["source_hash"]["now"] or "not read"
-    hash_state = {"same": "source_hash same", "differs": f"source_hash differs, now {now}",
-                  "none": f"no source_hash, now {now}"}[report["source_hash"]["state"]]
+    hash_state = {"same": "source_hash same",
+                  "differs": f"its source_hash differs from the file; the value to write is {now}",
+                  "none": f"the note has no source_hash; the value to write is {now}"}[report["source_hash"]["state"]]
     for item in report["wrote"]:
         print(f"WROTE {name}: {item}")
     print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
@@ -1129,6 +1271,10 @@ def print_report(report):
                 print(f"DISPLACED {was}: its code is unchanged at {at(*entry['moved_to'])}, but the order of the "
                       f"blocks does not allow it there: it is past other blocks now. Not a changed block. "
                       f"--fix-moved writes the new lines")
+            elif entry.get("held"):
+                print(f"DISPLACED {was}: its code is unchanged in the source, but only at lines another block holds "
+                      f"(lines {spans(entry['elsewhere'])}). Not a changed block. Look at the file: when one of the "
+                      f"two blocks is gone, remove that one; else set the line numbers by hand")
             else:
                 print(f"DISPLACED {was}: its code is unchanged at lines {spans(entry['elsewhere'])}, but the order "
                       f"of the blocks does not allow it there; there is more than one such place, or another block "
@@ -1158,7 +1304,14 @@ def print_report(report):
             why = f"beside block {', '.join(u['beside'])}{more}, which has no sure place: may be its new form"
         else:
             why = "new code: no changed block beside it"
-        print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
+        if not u["code_of"] and len(u.get("changed_beside", ())) == 1:
+            # The lines lie where one changed block is expected: they are most likely that block, not a new one.
+            block_id = u["changed_beside"][0]
+            print(f"UNEXPLAINED {at(u['from'], u['to'])}: probably the new form of block {block_id}: take these "
+                  f"lines into block {block_id} when you rewrite it (lines it does not take would be a new block "
+                  f"with the id {u['new_id']})")
+        else:
+            print(f"UNEXPLAINED {at(u['from'], u['to'])}: {why}; a new block here gets the id {u['new_id']}")
     for item in report["todo"]:
         print(f"TODO {name}: {item}")
 
