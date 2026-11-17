@@ -29,9 +29,10 @@ the recorded line are looked at, and the report says so in a BOUNDED line.
 Without --fix-moved nothing is written. With it, for each block that only moved, the script writes the new line
 numbers of that block into the note: the block heading, the block's row in the Level 2 table, the line numbers of
 its line-table rows, and its entries in masked_lines. A block that moved past other blocks counts too, but only
-when its whole code is at one free place that no other block without a sure place could take. Line numbers that the note cites in its own text move too where that is sure: in the Line column of the Trace
-table, and 'line N' in the section of the block that holds line N. Every other cited line number that a move
-touches is named in a TODO line for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
+when its whole code is at one free place that no other block without a sure place could take. The Line column of the Trace table moves too. So --fix-moved writes line numbers in line columns only, never
+inside a code fence, inline code, a Code cell or a sentence. Every 'line N' in the note's text that a move touches
+("Check your understanding", "Part of line N", a sentence) is named in a TODO line, with its place and the likely
+new number, for a person. The script writes nothing else, never renames or deletes a note, and says what it wrote in WROTE lines. Two runs cannot write one
 note at the same time, and a note that changed after it was compared is not written. The report that follows
 shows the state after the writing.
 
@@ -50,7 +51,10 @@ A note whose 'source' names no file is told apart: GONE (the file is not there, 
 are: it was deleted or renamed) or PROBLEM (the path is no path of a file under the source root, or no note's
 source is found there: the property or --source is wrong, and nothing is to be removed).
 
-Exit code 0: CURRENT, no note has anything to do. 1: at least one note has a TODO line (a block is moved,
+--hash prints nothing and ends with exit code 1 when a file cannot be read.
+
+Exit code 0: CURRENT, no note has anything to do. 1: no File note of this skill is in scope (NO FILE NOTE IN
+SCOPE: check --notes and --scope), or at least one note has a TODO line (a block is moved,
 changed, ambiguous or undecided, a line is unexplained, a source_hash differs or is missing, something was just
 written, a source file is gone, or there is a PROBLEM). 2: wrong arguments, or a folder that does not exist.
 """
@@ -71,7 +75,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
                      frontmatter, in_ranges, in_scope, is_row, line_ranges, mask_fits, merge_ranges,
-                     normalize_scopes, note_blocks, on_disk, read_text, retired_ids, source_lines, utf8_output)
+                     normalize_scopes, note_blocks, on_disk, read_text, retired_ids, source_lines, utf8_output,
+                     without_inline_code)
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
 SEARCH_WORK = 40_000_000    # line comparisons all blocks of one note together may make while looking for places
@@ -441,9 +446,10 @@ def cited_lines(note, mask, blocks, entries):
     themselves: 'line 12' or 'lines 12-14' in its text, and the Line column of the Trace table. Each is a dict:
     at (index of the note line), start and end (where the numbers stand in that line), old (the numbers), new (the
     numbers after the blocks' moves, or None when a block of them has no sure place) and sure. A citation is sure,
-    and --fix-moved writes it, when it stands in the Trace table's Line column, or in the section of the block
-    that holds the cited lines, and that block only moved. Every other citation that a move or a change touches
-    is for a person to look at. Citations of lines in blocks that are the same are left out."""
+    and --fix-moved writes it, only when it is a cell of the Trace table's Line column: a cell that holds nothing
+    but a line number. 'line N' in a sentence is never written: it may stand in quoted code, or mean a line of
+    another file. It is given to a person to look at, with the likely new number. Text inside code spans is not
+    read at all. Citations of lines in blocks that are the same are left out."""
     spans = sorted((b["a"], b["a"] + max(len(b["code"]), 1) - 1, k) for k, b in enumerate(blocks))
 
     def owner(n):
@@ -456,10 +462,6 @@ def cited_lines(note, mask, blocks, entries):
         return entry["moved_to"][0] - entry["from"] if "moved_to" in entry else None
 
     props_end = next((i for i in range(1, len(note)) if note[i].strip() == "---"), 0) if note and note[0] == "---" else -1
-    section_of = {}
-    for k, block in enumerate(blocks):
-        for i in range(block["start"] + 1, block["end"]):
-            section_of[i] = k
     headings = {block["start"] for block in blocks}
     found = []
 
@@ -472,7 +474,7 @@ def cited_lines(note, mask, blocks, entries):
             return
         known = all(d is not None for d in deltas)
         new = [n + d for n, d in zip(numbers, deltas)] if known else None
-        sure = known and len(set(owners)) == 1 and (in_trace or section_of.get(i) == owners[0])
+        sure = known and len(set(owners)) == 1 and in_trace
         text = None if new is None else joins[0].join(map(str, new)) if len(new) > 1 else str(new[0])
         found.append({"at": i, "start": start, "end": end, "old": numbers, "new": new, "sure": sure, "text": text,
                       "blocks": [blocks[k]["id"] for k in owners if k is not None]})
@@ -483,7 +485,7 @@ def cited_lines(note, mask, blocks, entries):
             continue
         if line.startswith("## "):
             trace, column = line.startswith("## Trace"), None
-        for m in CITE.finditer(line):
+        for m in CITE.finditer(without_inline_code(line)):       # places in this text are not used: never written
             numbers = [int(m.group(2))] + ([int(m.group(4))] if m.group(4) else [])
             cite(i, m.start(2), m.end(4) if m.group(4) else m.end(2), numbers, [m.group(3) or ""], False)
         if trace and is_row(line):
@@ -617,8 +619,7 @@ def moved_text(data, report):
     for c in sorted(sure, key=lambda c: (c["at"], -c["start"])):
         lines[c["at"]] = lines[c["at"]][:c["start"]] + c["text"] + lines[c["at"]][c["end"]:]
     if sure:
-        wrote.append(f"{len(sure)} line numbers that the note cites (in the Trace table, or in the text of the "
-                     f"block they lie in) moved with their blocks")
+        wrote.append(f"{len(sure)} line numbers in the Line column of the Trace table moved with their blocks")
     level2 = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## Level 2")), None)
     level2_end = len(lines) if level2 is None else next(
         (i for i in range(level2 + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
@@ -637,7 +638,9 @@ def moved_text(data, report):
         rows = 0
         for i in range(block["last"], block["end"]):
             m = None if mask[i] or not delta else ROW_NUMBER.match(lines[i])
-            if m:
+            # A line row names lines of this block. A row that starts with another number is no line row.
+            low, high = block["a"], block["a"] + len(block["code"]) - 1
+            if m and low <= int(m.group(2)) <= high and low <= int(m.group(4) or m.group(2)) <= high:
                 second = f"{m.group(3)}{int(m.group(4)) + delta}" if m.group(4) else ""
                 lines[i] = f"{m.group(1)}{int(m.group(2)) + delta}{second}{m.group(5)}" + lines[i][m.end():]
                 rows += 1
@@ -682,7 +685,7 @@ def build(path, text, root, scopes, known):
         return None
     given = props.get("source", "").replace("\\", "/")
     src = on_disk(root, given) if given else None
-    if not in_scope(src or given.strip("/"), scopes):
+    if not in_scope(src or "/".join(part for part in given.split("/") if part not in ("", ".")), scopes):
         return None
     report = {"note": path.stem, "path": str(path), "source": src or given, "depth": props.get("depth", ""),
               "wrote": [], "source_state": "found", "source_gone": False, "_found": None}
@@ -730,7 +733,7 @@ def check_lines(cites):
     out = []
     for c in cites:
         old = "-".join(map(str, c["old"]))
-        what = (f"probably {c['text']} now" if c["new"] is not None
+        what = (f"{c['text']} now, if it means this source file" if c["new"] is not None
                 else "its block has no sure place yet")
         out.append(f"note line {c['at'] + 1} cites line {old} (block {', '.join(c['blocks'])}): {what}")
     return out
@@ -843,8 +846,9 @@ def note_paths(notes_dir):
 
 def print_report(report):
     counts, name = report["counts"], report["note"]
-    hash_state = {"same": "source_hash same", "differs": f"source_hash differs, now {report['source_hash']['now']}",
-                  "none": f"no source_hash, now {report['source_hash']['now']}"}[report["source_hash"]["state"]]
+    now = report["source_hash"]["now"] or "not read"
+    hash_state = {"same": "source_hash same", "differs": f"source_hash differs, now {now}",
+                  "none": f"no source_hash, now {now}"}[report["source_hash"]["state"]]
     for item in report["wrote"]:
         print(f"WROTE {name}: {item}")
     print(f"NOTE {name}: {report['source']}, {report['lines']} lines, {len(report['blocks'])} blocks: "
@@ -924,7 +928,7 @@ def scope_of(root, raw):
         inside = False
     if not inside:
         sys.exit(f"--scope is not under the source root: {raw}")
-    return os.path.relpath(full, base).replace(os.sep, "/").strip("./") if full != base else ""
+    return "/".join(Path(os.path.relpath(full, base)).parts) if full != base else ""
 
 
 def main():
@@ -956,8 +960,12 @@ def main():
     if args.hash:
         if len(names) != len(args.hash) or not all((root / name).is_file() for name in names):
             ap.error("--hash takes files under the source root")
-        for name in names:
-            print(f"{file_hash(root / name)}  {name}")
+        values = [(file_hash(root / name), name) for name in names]
+        unread = [name for value, name in values if value is None]
+        if unread:                                   # no value is printed: a part of a hash is no hash
+            sys.exit(f"changed_blocks.py: cannot read {', '.join(unread)}; no source_hash printed")
+        for value, name in values:
+            print(f"{value}  {name}")
         if len(names) > 1:
             print(f"{files_hash(root, names)[0]}  together, for a note with these files as its sources")
         sys.exit(0)
@@ -979,8 +987,9 @@ def main():
             reports.append(finish(report, known))
     todo = [r for r in reports if r["todo"]]
     totals = {state: sum(r["counts"][state] for r in reports) for state in STATES}
-    verdict = "UPDATE NEEDED" if todo else "CURRENT"
-    code = 1 if todo else 0
+    # No File note in scope: nothing was compared, and that is not "current" (a wrong --notes or --scope gives it).
+    verdict = "UPDATE NEEDED" if todo else "CURRENT" if reports else "NO FILE NOTE IN SCOPE"
+    code = 0 if verdict == "CURRENT" else 1
     if args.json:
         json.dump({"result": verdict, "exit_code": code, "scope": scopes, "totals": totals,
                    "unexplained_ranges": sum(len(r["unexplained"]) for r in reports),
