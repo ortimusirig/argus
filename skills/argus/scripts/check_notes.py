@@ -49,6 +49,10 @@ def excerpt(cell):
 HTML_TAG = re.compile(r"(?<!\\)</?(?!br\b)[A-Za-z][\w-]*(?:\s[^<>]*)?/?>")
 
 
+# "line 12", "lines 12-14" outside code: a place in the source named by its line number.
+LINE_CITE = re.compile(r"\b[Ll]ines?\s+\d")
+
+
 def props_end(lines):
     """The index of the line that closes the properties, 0 when they are not closed, -1 when there are none."""
     if not lines or lines[0] != "---":
@@ -528,13 +532,15 @@ def main():
             if kind == "flow":
                 flows[name] = (lines, mask)
         body_from = props_end(lines) + 1  # the first line after the properties, counted from 1
-        tags = []
+        tags, line_cites = [], []
         for number, line in prose:
             bare_line = without_inline_code(line)
             if "%%" in bare_line:
                 fails.append(f"{name} line {number}: an Obsidian comment (%%) hides text from the reader")
             if number > body_from and HTML_TAG.search(bare_line):
                 tags.append(number)
+            if kind != "file" and number > body_from and LINE_CITE.search(bare_line):
+                line_cites.append(number)
             for target in link_names(line):
                 linked_by.setdefault(target, set()).add(name)
                 if target not in targets:
@@ -544,6 +550,11 @@ def main():
                 for code in re.findall(r"`([^`]*)`", bare):
                     if re.search(r"(^|[^\\])\|", code):
                         fails.append(f"{name} line {number}: unescaped | inside code in a table: {code[:40]}")
+        if line_cites:
+            shown = ", ".join(map(str, line_cites[:10])) + (" ..." if len(line_cites) > 10 else "")
+            warns.append(f"{name}: cites source lines as 'line N' ({len(line_cites)} places, note line {shown}): "
+                         f"outside a File note name a place by its block, 'block 29 of [[the File note]]'; line "
+                         f"numbers go stale when the code moves")
         if tags:
             shown = ", ".join(map(str, tags[:10])) + (" ..." if len(tags) > 10 else "")
             warns.append(f"{name}: <word> outside code on line {shown}: Obsidian reads it as HTML and does not show "
