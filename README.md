@@ -29,7 +29,7 @@ Every project, file, mechanism and library answers the same questions: what we g
 | --- | --- |
 | Python 3.10+ | The check script |
 | [graphify](https://github.com/Graphify-Labs/graphify) (`pip install graphifyy`) | Required. The graph gives the file order, the callers and callees, and the mechanism candidates. The skill stops without it. It is run as `graphify update <copy of the code>`, which uses no LLM. Do not run `graphify install` |
-| git | The history behind "what was not possible without it" and "issues today"; detecting notes that went stale |
+| git | Optional. The history behind "what was not possible without it" and "issues today". Without git, or with changes that are not committed, the `source_hash` property of each note says whether the code changed |
 | [obsidian-skills](https://github.com/kepano/obsidian-skills) | Optional: Obsidian syntax, canvas maps, Bases views |
 
 ## Install
@@ -56,11 +56,23 @@ Writes `<source root>/.tours/<Project>.tour` for the [CodeTour](https://github.c
 python -B skills/argus/scripts/check_notes.py --notes <notes folder> --source <source root> --scope <folder or file in scope> --graph <graphify-out/graph.json>
 ```
 
-It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE. `--help` lists the options; `--json` prints the result as one JSON object for a program to read; `--fingerprint` prints one hash over everything the run read, listed and asked git, built while it runs, so a program can tell whether an earlier result still holds.
+It fails when a source file in scope has no note, a non-blank line is in no block, a block's code differs from the source, a line has no row or its row quotes code that is not on that line (depth `full`), a lens row is missing or empty, a function in the graph is never named in its file's note, a Mechanism note has no diagram, a link points nowhere, a note is empty or nothing links to a note. It reports notes whose source changed since they were written as STALE: by the note's `source_hash` (a hash of the source file, no git needed), or by its `commit` for notes written before 2.10. `--help` lists the options; `--json` prints the result as one JSON object for a program to read; `--fingerprint` prints one hash over everything the run read, listed and asked git, built while it runs, so a program can tell whether an earlier result still holds.
+
+## Later runs: only what changed
+
+```bash
+python -B skills/argus/scripts/changed_blocks.py --notes <notes folder> --source <source root> --scope <folder or file in scope> [--fix-moved] [--json]
+```
+
+Compares the code copied into each block of a File note with the source file on disk, with no model and no git. Each block is `same`, `moved` (same code at other lines), `changed` (its code is no longer in the source) or `ambiguous` (the same code at several places); lines that no block holds are `unexplained`. `--fix-moved` writes the new line numbers of moved blocks into the note and nothing else. The skill then rewrites only the changed blocks, adds blocks for unexplained lines and removes blocks whose code is gone. The placing rule is the one the VS Code extension uses. Exit code 0: nothing to update; 1: something to update; 2: wrong arguments. `--hash <file>` prints the value of the `source_hash` property.
 
 ## Status
 
-Version 2.9.2. Replaces the DOCX generator of version 1.
+Version 2.10.0. Replaces the DOCX generator of version 1.
+
+| Version | Change |
+| --- | --- |
+| 2.10.0 | A later run rewrites only the blocks whose code changed (`changed_blocks.py`), not the whole note. Git is optional: notes carry `source_hash`, and a file with changes that are not committed no longer looks current. The check no longer takes `%%` inside code for a comment, and warns about `<word>` outside code |
 
 | Part | State |
 | --- | --- |

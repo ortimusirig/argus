@@ -1,6 +1,6 @@
 # Next work, agreed with the owner on 2026-11-16: update only what changed, git optional, model choice
 
-Status: AGREED, NOT STARTED (usage was at 58% of the 60% stop line when it was agreed).
+Status: item 1 of "Order" (the skill) is BUILT as version 2.10.0 on branch `skill-2.10` (worktree `C:\dev\argus-skill`), not merged, not pushed. Items 2 and 3 are open. In the extension, run `npm run build` after the merge so that it ships the 2.10 checker.
 
 ## Why
 
