@@ -50,6 +50,10 @@ letter, never an id in use and never one the note's property retired_blocks list
 Mechanism and Flow notes whose 'sources' name a file in scope are looked at too: one whose source_hash no longer
 equals its sources, or that has none, gets a TODO line (in --json: "dependent_notes").
 
+Blocks whose order changed get a TODO line too (in --json: "reordered"): a block found past other blocks, or
+block sections that stand in the note in another order than their lines in the file. The same code in another
+order can do another thing. The line stays until the sections of the note are in file order.
+
 What is still to do for a note is said in TODO lines (in --json: "todo"): act on the blocks, close the note
 (line count, commit, source_hash, written), correct line numbers that other notes cite. The last line says CURRENT
 only when no note has a TODO line. A note without source_hash has one: it gets the property.
@@ -85,7 +89,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
                      frontmatter, in_ranges, in_scope, is_row, line_ranges, link_names, mask_fits, merge_ranges,
-                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, source_lines, utf8_output,
+                     missing_under_root,
+                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, source_lines, source_set, utf8_output,
                      without_inline_code)
 
 PLACES = 200_000        # places all blocks of one note together may keep; each block keeps PLACES / blocks
@@ -500,6 +505,19 @@ def compare(note_lines, props, lines):
         problems.append(f"block {block_id} uses an id that retired_blocks lists")
     counts = {state: sum(1 for e in result if e["state"] == state) for state in STATES}
     cites = cited_lines(note_lines, mask, blocks, result)
+    # Blocks whose order changed. Same code in another order can do another thing (what runs first), and no
+    # comparison of code sees it. Two signs: a block whose whole code is found past other blocks, and block
+    # sections that stand in the note in another order than their lines in the file. The second sign stays after
+    # --fix-moved wrote the new lines, until the sections of the note are put in file order. A shift of all blocks
+    # by the same number of lines is neither.
+    reordered = [f"block {e['id']} is past other blocks now (lines {span(e['from'], e['to'])} before, "
+                 + (f"lines {span(*e['moved_to'])} now)" if "moved_to" in e else f"lines {spans(e['elsewhere'])} now)")
+                 for e in result if "moved_to" in e or "elsewhere" in e]
+    placed = [e for e in result if "at" in e]        # in the order of their sections in the note
+    for earlier, later in zip(placed, placed[1:]):
+        if later["at"][0] < earlier["at"][0]:
+            reordered.append(f"block {later['id']} (lines {span(*later['at'])}) stands before block {earlier['id']} "
+                             f"(lines {span(*earlier['at'])}) in the file, and after it in the note")
     # For each changed block: the places of the same note that name it or its lines. What they say rests on the
     # old code, and no check can see whether it still holds, so they are named for the one who rewrites the block.
     level2 = next((i for i, line in enumerate(note_lines) if not mask[i] and line.startswith("## Level 2")), None)
@@ -515,8 +533,8 @@ def compare(note_lines, props, lines):
                                 "trace_rows": sorted({c["at"] + 1 for c in mine if c["trace"]}),
                                 "cites": sorted({c["at"] + 1 for c in mine if not c["trace"]})}
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
-            "lines": total, "retired_blocks": retired, "_blocks": blocks, "_mask": mask, "_declared": declared,
-            "_cites": cites}
+            "lines": total, "retired_blocks": retired, "reordered": reordered, "_blocks": blocks, "_mask": mask,
+            "_declared": declared, "_cites": cites}
 
 
 CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
@@ -738,16 +756,27 @@ def moved_text(data, report):
                     rows += 1
         if rows:
             done.append(f"{rows} line-table rows moved by {delta:+d}")
-        for table in tables(lines, mask, level2 + 1, level2_end)[:1] if level2 is not None else ():
+        # Every table of the Level 2 section, each by itself: a row that starts with the block's id gets the new
+        # range in the column headed Lines. A row that holds the block's old range but does not start with its id
+        # is not written: it is named for a person.
+        old_range = [block["a"], block["a"] + len(block["code"]) - 1]
+        level2_rows = 0
+        for table in tables(lines, mask, level2 + 1, level2_end) if level2 is not None else ():
             found, has_column = line_cells(lines, table)
-            mine = [i for i in table[1:] if (cells(lines[i]) or [""])[0] == block["id"]][:1]
+            mine = [i for i in table[1:] if (cells(lines[i]) or [""])[0] == block["id"]]
             if mine and not has_column:
-                left.append(f"note line {mine[0] + 1}: the Level 2 table has no column headed Lines, so the row of "
-                            f"block {block['id']} was not written. Its lines are now {new_range}")
+                left.append(f"note line {mine[0] + 1}: this table of Level 2 has no column headed Lines, so the row "
+                            f"of block {block['id']} was not written. Its lines are now {new_range}")
             for i, a, b, m in found:
-                if [i] == mine:
+                if i in mine:
                     lines[i] = f"{lines[i][:a]}{m.group(1)}{new_range}{m.group(5)}{lines[i][b:]}"
-                    done.append("Level 2 row")
+                    level2_rows += 1
+                elif delta and [numbers_of(m)[0], numbers_of(m)[-1]] == old_range:
+                    left.append(f"note line {i + 1}: a row of Level 2 holds lines {m.group(0).strip()}, the old lines "
+                                f"of block {block['id']}, but does not start with its id, so it was not written. If "
+                                f"it is that block's row, its lines are now {new_range}")
+        if level2_rows:
+            done.append("Level 2 row" if level2_rows == 1 else f"{level2_rows} Level 2 rows")
         old, rest = cut_ranges(declared, block["a"], block["a"] + len(block["code"]) - 1)
         if old and delta:
             declared = rest
@@ -793,10 +822,12 @@ def build(path, text, root, scopes, known):
         if not given:
             report["source_state"] = "rejected"
             report["problems"].append("the note has no 'source' property. Remove nothing; correct the property")
-        elif plain_relative(given) is None or os.path.lexists(target):
+        elif (plain_relative(given) is None or os.path.lexists(target)
+              or not missing_under_root(root, plain_relative(given))):
             # Not a missing file. Its form is no plain path under the root (a drive, a network start, a leading
-            # slash, a '..' part), or something is there that on_disk() refused: a folder, or a link that leads
-            # out. A mistake in the property or in the source root.
+            # slash, a '..' part), or something is there that on_disk() refused (a folder, a link that leads out),
+            # or the folder it would lie in is itself not under the root (a folder link that leads out). A mistake
+            # in the property or in the source root.
             report["source_state"] = "rejected"
             report["problems"].append(f"property 'source' is '{given}': not the path of a file under the source root "
                                       f"(a drive or an absolute path, a path leading out of it, or no plain file). This is a mistake in the "
@@ -905,6 +936,12 @@ def finish(report, known):
     if (report["wrote"] or counts["moved"]) and cited_by:
         todo.append("blocks moved: correct the line numbers of this file that these notes cite (Later runs, step "
                     "6): " + ", ".join(cited_by))
+    if report.get("reordered"):
+        todo.append("the order of blocks changed: " + "; ".join(report["reordered"][:8])
+                    + (f"; and {len(report['reordered']) - 8} more" if len(report["reordered"]) > 8 else "")
+                    + ". What runs first may have changed. Re-read what rests on these blocks: the Trace, 'Check your "
+                    "understanding', and the Flow and Mechanism notes; then put the block sections and the Level 2 "
+                    "rows of the note in file order, which ends this line (Later runs, steps 3 and 6)")
     rewritten = [e for e in report["blocks"] if e["state"] == "changed" and "in_note" in e
                  and "moved_to" not in e and "elsewhere" not in e]
     for entry in rewritten[:10]:
@@ -966,11 +1003,11 @@ def dependent_notes(known, root, scopes):
         # Chosen by the sources the note declares, whether the files are there or not: a note whose only source
         # was deleted must not drop out.
         declared = [(given, on_disk(root, given), plain_relative(given)) for given in note["given"]]
-        if scopes and not any(in_scope(found or plain or "", scopes) for _, found, plain in declared):
+        if scopes and not any(in_scope(found or plain, scopes) for _, found, plain in declared if found or plain):
             continue
         entry = {"note": note["note"], "path": note["path"], "type": note["type"], "state": "current", "todo": []}
         missing = [given for given, found, plain in declared if not found and plain
-                   and not os.path.lexists(Path(root) / plain)]
+                   and not os.path.lexists(Path(root) / plain) and missing_under_root(root, plain)]
         if missing:
             entry["state"] = "source missing"
             entry["todo"].append(f"its source {', '.join(missing)} is not under the source root (deleted or renamed, "
@@ -1121,6 +1158,7 @@ def main():
     if args.hash:
         if len(names) != len(args.hash) or not all((root / name).is_file() for name in names):
             ap.error("--hash takes files under the source root")
+        names = source_set(root, names)[0]           # each file once, as the check counts the sources of a note
         values = [(file_hash(root / name), name) for name in names]
         unread = [name for value, name in values if value is None]
         if unread:                                   # no value is printed: a part of a hash is no hash
@@ -1142,7 +1180,7 @@ def main():
             # Made new for each note: no list or dict of one note's report is shared with another's.
             report = {"note": path.stem, "path": str(path), "source": "", "depth": "", "wrote": [], "blocks": [],
                       "unexplained": [], "bounded": [], "lines": 0, "source_state": "not read",
-                      "source_gone": False, "problems": [f"could not be read: {error}"],
+                      "source_gone": False, "problems": [f"could not be read: {error}"], "reordered": [],
                       "counts": {state: 0 for state in STATES},
                       "source_hash": {"recorded": None, "now": None, "state": "none"}}
         if report:
