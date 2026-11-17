@@ -140,8 +140,6 @@ export class Create implements vscode.Disposable {
     }
     // The command is the user's own (never the workspace's); each argument is filled on its own.
     const config = vscode.workspace.getConfiguration("argus");
-    // The folders are handed over as full paths: the agent runs in the source root, and a folder written
-    // relative in the settings would mean another place there than it means to the extension.
     // The project's notes are read from disk now, once, after the save and before the note is judged: a note
     // changed outside VS Code a moment ago (the watcher has not told of it yet) is judged as it is on disk. The
     // hashes of the notes from before the start come from this reading too.
@@ -154,6 +152,8 @@ export class Create implements vscode.Disposable {
     // without one counts as full).
     const note = judged?.note;
     if (kind === "update" && !note) { return NOTE_GONE; }
+    // The folders are handed over as full paths: the agent runs in the source root, and a folder written
+    // relative in the settings would mean another place there than it means to the extension.
     // The folders as the index itself resolves them (links and ".." by the file system's own rule), so the agent
     // works in the very folders the extension reads.
     const folder = (given: string): string => { try { return systemRules.real(given); } catch { return path.resolve(given); } };
