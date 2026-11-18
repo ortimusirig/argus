@@ -1,0 +1,100 @@
+// Argus for VS Code: registers the panel, the markers, the check, Create and Update, the commands and the events. Wiring only; the
+// logic is in src/core.
+
+import * as vscode from "vscode";
+import { Check } from "./check";
+import { Create } from "./create";
+import { Index } from "./index";
+import { Markers } from "./markers";
+import { Panel } from "./panel";
+import { Matcher } from "./core/matching";
+import { updateNeed } from "./core/selection";
+
+/** The document a command was given (a button of the panel names the file it stands under). Only an open document
+ *  of this window counts; anything else is as if nothing was given. */
+function asked(given: unknown): vscode.TextDocument | undefined {
+  return vscode.workspace.textDocuments.find((document) => document === given);
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  const index = new Index();
+  const matched = new vscode.EventEmitter<string>();          // a document (its URI) has a new assignment
+  const matcher = new Matcher((uri) => { matched.fire(uri); });
+  const panel = new Panel(context.extensionUri, index, matcher);
+  const markers = new Markers(context.extensionUri, index, matcher);
+  const check = new Check(context, index, () => { panel.render(); });
+  panel.validation = (project, sourceRel, note) => check.badge(project, sourceRel, note);
+  const create = new Create(index, check, (text) => { panel.say(text); }, () => { panel.render(); });
+  panel.creating = (project, sourceRel, notes) => create.status(project, sourceRel, notes);
+  // What Update would do for a document, when its match is done; the same match the panel's button is drawn from.
+  create.need = (document, note) => {
+    const assignment = matcher.fresh(document.uri.toString(), document.version, note);
+    return assignment ? updateNeed(assignment) : undefined;
+  };
+
+  const active = (): vscode.TextDocument | undefined => vscode.window.activeTextEditor?.document;
+  const redraw = (): void => { panel.render(); markers.refresh(); };
+  const forget = (): void => { matcher.keep((id) => index.notes.noteById(id) !== undefined); };
+  const configure = (): void => { index.configure(); forget(); check.configure(); create.configure(); redraw(); };
+
+  context.subscriptions.push(index, matched, markers, check, create, panel,
+    // Shut down: no match goes on, and none is published to listeners that are gone.
+    { dispose: () => { matcher.keep(() => false); } },
+    vscode.window.registerWebviewViewProvider(Panel.viewId, panel),
+    vscode.languages.registerCodeLensProvider({ scheme: "file" }, markers),
+
+    vscode.commands.registerCommand("argus.explainSelection", (uri?: unknown, from?: unknown, to?: unknown) =>
+      // A CodeLens gives the document and the lines of its block; the menu and the palette give nothing.
+      panel.explain(false, typeof uri === "string" && typeof from === "number" && typeof to === "number" ? { uri, from, to } : undefined)),
+    // From an editor's title or the explorer the command comes with the file it was clicked on: that file is
+    // explained, also when another editor is the active one.
+    vscode.commands.registerCommand("argus.explainFile", (target?: unknown) =>
+      panel.explain(true, target instanceof vscode.Uri ? { uri: target.toString(), from: 1, to: 1 } : undefined)),
+    vscode.commands.registerCommand("argus.refresh", async () => { await index.refreshAll(); redraw(); }),
+    vscode.commands.registerCommand("argus.check", async (given?: unknown) => {
+      const say = await check.check(asked(given) ?? panel.document());
+      if (say) { panel.say(say); } else { panel.render(); }
+    }),
+    vscode.commands.registerCommand("argus.create", (given?: unknown) => create.run("create", asked(given) ?? panel.document())),
+    vscode.commands.registerCommand("argus.update", (given?: unknown) => create.run("update", asked(given) ?? panel.document())),
+    vscode.commands.registerCommand("argus.openInObsidian", () => panel.openInObsidian()),
+
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      if (event.textEditor === vscode.window.activeTextEditor) { panel.follow(); }
+    }),
+    vscode.window.onDidChangeActiveTextEditor(() => { panel.follow(); }),
+    vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      markers.refresh();
+      // The editor of the document the panel shows is gone, and the active editor may be the same as before (a
+      // split editor was closed): no other event draws the panel, which would go on showing a file no editor shows.
+      if (!editors.some((editor) => panel.shows(editor.document.uri.toString()))) { panel.render(); }
+    }),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      const uri = event.document.uri.toString();
+      matcher.edited(uri, event.document.version);
+      // The panel is drawn again for every edit of the document it shows. That is the active editor's as a rule;
+      // it is another one while the panel is pinned to a split editor, and then the pin stays.
+      if (event.document === active()) { panel.follow(); } else if (panel.shows(uri)) { panel.edited(); }
+      if (vscode.window.visibleTextEditors.some((editor) => editor.document === event.document)) { markers.later(); }
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => { matcher.drop(document.uri.toString()); }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("argus")) { configure(); }
+    }),
+    // Trusted now: VS Code gives the workspace's own argus.projects too. The check starts its pending calls itself.
+    vscode.workspace.onDidGrantWorkspaceTrust(configure),
+    // A note that left the index takes what was matched against it with it.
+    index.onDidChange(() => { forget(); redraw(); }),
+    // A picked note may be matched already: then no match is published, and the pick alone draws the markers.
+    index.onDidChoose(() => { markers.refresh(); }),
+    index.onDidPlace(() => { redraw(); }),
+    matched.event((uri) => {
+      markers.matched(uri);
+      if (uri === active()?.uri.toString() || panel.shows(uri)) { panel.render(); }
+    }),
+  );
+
+  configure();
+}
+
+export function deactivate(): void { /* everything is in context.subscriptions */ }
