@@ -131,3 +131,28 @@ After the skill passes: merge `skill-2.10` into `main` (keep `main`'s `docs/HAND
 The owner pushes; this session cannot.
 
 Cost rule that held: one fresh agent per fix round (110,000 to 200,000 tokens each); never resume a long agent.
+
+## Release state on 2026-11-17, 17:10
+
+Both parts pass the owner's rule (two consecutive Codex reviews with no P0 and no P1):
+- Skill: rounds 31 (`24134c0`) and 32 (`132021b`): P0=0, P1=0. Six P2 of rounds 30 to 32 are in
+  `docs/NEXT-block-updates.md`, section "P2 backlog of skill 2.10" (14 rows in all).
+- Extension: confirming rounds 4 (`3011c8a`) and 5 (`b96766a`): P0=0, P1=0; four P2 in the plan's backlog.
+
+Done after that:
+- `skill-2.10` merged into `main` (`3b2ed38`; `docs/HANDOFF.md` is main's; 72 tests pass). Skill version 2.10.0.
+- `main` merged into `vscode-extension` (`730cd50`), then `f2dca33`: the extension reads inline code as the
+  checker of 2.10 does (the only test that failed after the merge; 239 tests pass). This commit and the two merges
+  were NOT reviewed by Codex.
+- Package built: `C:\dev\argus-ext\vscode\argus-3.0.0.vsix` (17:04) and installed in the owner's VS Code
+  (a window reload is needed).
+- Skill copied to `C:\Users\aiuser4\.claude\skills\argus` (first install there).
+
+Not done: the owner's push of `main`, `skill-2.10` and `vscode-extension`; the owner's hand test of Create and
+Update in VS Code; a second real agent run of "Later runs" with the installed skill; the extension's matcher still
+asks for a mask at the recorded line (an unchanged block with masked lines shows as changed after lines are
+inserted above it; display only); the P2 backlogs; the diagram link from File notes to Flow notes (owner: after
+the release); cleanup of scratch folders and `~/.argus/locks`.
+
+How masked lines work since `62a27d3`: `changed_blocks.py` never writes a block that has masked lines and never
+writes `masked_lines`; such a block gets a TODO for the agent, and "not compared" when it matches nowhere.
