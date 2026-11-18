@@ -24,7 +24,8 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_notes as cn  # noqa: E402
-from _common import in_scope, normalize_scopes, on_disk, read_text, source_lines, utf8_output  # noqa: E402
+from _common import (in_scope, normalize_scopes, note_blocks, on_disk, read_text, same_line, source_lines,  # noqa: E402
+                     utf8_output)
 
 SCHEMA = "https://aka.ms/codetour-schema"
 
@@ -65,30 +66,22 @@ def file_steps(name, text, props, root, prefix, vault, skipped):
     lens = table_as_list([cn.cells(r) for r in level1 if cn.is_row(r)], vault)
     steps = [{"file": path, "line": 1, "title": f"{src}: why this file exists",
               "description": f"### {src}\n\n{lens}\n\n_Explained by the note “{name}”._"}]
-    starts = [i for i, line in enumerate(note) if not mask[i] and cn.BLOCK.match(line)]
     # Purposes from the Level 2 table, for headings that give only "Block <id>".
     level2 = {}
     for row in cn.section(note, mask, "Level 2") or []:
         c = cn.cells(row) if cn.is_row(row) else []
         if len(c) >= 3 and re.fullmatch(r"\d\w*", c[0]):
             level2[c[0]] = c[2]
-    for n, start in enumerate(starts):
-        m = cn.BLOCK.match(note[start])
-        block_id, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
-        end = starts[n + 1] if n + 1 < len(starts) else len(note)
-        end = next((i for i in range(start + 1, end) if not mask[i] and note[i].startswith("## ")), end)
+    for block in note_blocks(note, mask):
+        block_id, a, b, start, end = block["id"], block["a"], block["b"], block["start"], block["end"]
         purpose = re.sub(r"\s*\(lines? [\d\s-]+\)\s*$", "", note[start][len("### "):]).strip()
         purpose = re.sub(r"^Block \w+:?\s*", "", purpose).strip() or level2.get(block_id, "") or f"Block {block_id}"
-        first = next((i for i in range(start + 1, end) if mask[i]), None)
-        if first is None or a < 1 or b > len(lines) or a > b:
+        if block["first"] is None or a < 1 or b > len(lines) or a > b:
             skipped.append(f"{name}: block {block_id} has no code or a range outside the file")
             continue
-        last = next((i for i in range(first, end) if not mask[i]), end)
-        code, want = note[first + 1:last - 1], lines[a - 1:b]
-        same = len(code) == len(want) and all(
-            got == real or (cn.MASK in got and (a + k) in declared and
-                            (got.strip() == cn.MASK or re.fullmatch(cn.mask_pattern(got), real)))
-            for k, (got, real) in enumerate(zip(code, want)))
+        last, code, want = block["last"], block["code"], lines[a - 1:b]
+        same = len(code) == len(want) and all(same_line(got, real, (a + k) in declared)
+                                              for k, (got, real) in enumerate(zip(code, want)))
         if not same:
             skipped.append(f"{name}: block {block_id} (lines {a}-{b}) no longer equals {src}; refresh the note")
             continue

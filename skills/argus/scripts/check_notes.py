@@ -5,9 +5,13 @@
 
 Exit code 0: no FAIL and no MISSING. 1: at least one. 2: wrong arguments. STALE and WARN lines do not change the
 exit code, but the last line counts them, and every masked line is listed for a person to confirm.
+
+STALE: the code changed since the note was written. A note with the property source_hash is judged by that hash
+alone: no git is needed, and uncommitted changes count. A note without it is judged by git and its commit property.
 """
 import argparse
 import hashlib
+from collections import Counter
 import json
 import re
 import subprocess
@@ -16,16 +20,13 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # never leave a __pycache__ folder beside the scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (all_files, fingerprint, inventory, is_callable_node, normalize_scopes, on_disk,  # noqa: E402
-                     read_text, resolve_graph_paths, source_lines, utf8_output, witness)
+from _common import (BLOCK, FENCE, LINE_CELL, MASK, all_files, cells, fence_mask, file_hash,  # noqa: E402,F401
+                     files_hash, fingerprint, frontmatter, inventory, is_callable_node, is_row, line_set, link_names, mask_pattern,
+                     normalize_scopes, note_blocks, on_disk, read_text, resolve_graph_paths, retired_ids, row_quote, section,
+                     SOURCE_HASH, source_lines, utf8_output, without_inline_code, witness)
 
 LENS = ["one sentence", "gain", "lose", "not possible", "issues", "makes possible", "open source", "risks"]
 LENS_BY_TYPE = {"file": LENS, "mechanism": LENS, "start": LENS, "library": LENS[1:]}
-BLOCK = re.compile(r"^### Block (\w+)\b.*\(lines? (\d+)(?:\s*-\s*(\d+))?\)\s*$")
-LINE_CELL = re.compile(r"(\d+)(?:\s*-\s*(\d+))?")
-FENCE = re.compile(r"^(`{3,})")
-LINK = re.compile(r"\[\[([^\]|#]+)")
-MASK = "[masked]"
 MASK_SHARE = 0.25   # at most this share of a file's non-blank lines may carry a mask ...
 MASK_FLOOR = 2      # ... but two masked lines are always allowed
 MISSING_SHOWN = 30
@@ -35,87 +36,19 @@ fails, missing, stale, warns, infos = [], [], [], [], []
 
 # ---------------------------------------------------------------- reading notes
 
-def frontmatter(text):
-    """The properties at the top of a note, as a dict of strings."""
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end < 0:
-        return {}
-    props = {}
-    for line in text[3:end].splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            props[key.strip()] = value.strip().strip("\"'")
-    return props
+# <word> or </word> outside code, which Obsidian takes for HTML. Not \<word>, not <br>, not a link <https://...>.
+HTML_TAG = re.compile(r"(?<!\\)</?(?!br\b)[A-Za-z][\w-]*(?:\s[^<>]*)?/?>")
 
 
-def fence_mask(lines):
-    """For each line: True when it is a fence line or inside a fence. A fence closes only on one at least as long."""
-    mask, fence = [], None
-    for line in lines:
-        m = FENCE.match(line)
-        if fence is None and m:
-            fence = len(m.group(1))
-            mask.append(True)
-        elif fence is not None:
-            mask.append(True)
-            if m and len(m.group(1)) >= fence and line.strip("`").strip() == "":
-                fence = None
-        else:
-            mask.append(False)
-    return mask
+# "line 12", "lines 12-14" outside code: a place in the source named by its line number.
+LINE_CITE = re.compile(r"\b[Ll]ines?\s+\d")
 
 
-def section(lines, mask, heading):
-    """The lines under a '## <heading...>' line that is outside every fence, up to the next such '## ' line."""
-    start = next((i for i, line in enumerate(lines) if not mask[i] and line.startswith("## " + heading)), None)
-    if start is None:
-        return None
-    end = next((i for i in range(start + 1, len(lines)) if not mask[i] and lines[i].startswith("## ")), len(lines))
-    return [lines[i] for i in range(start + 1, end) if not mask[i]]
-
-
-def is_row(line):
-    return line.lstrip().startswith("|")
-
-
-def cells(row):
-    """The cells of one table row, stripped. A | written as \\| stays inside its cell."""
-    parts = re.split(r"(?<!\\)\|", row.strip())
-    return [c.strip() for c in parts[1:-1]]
-
-
-def without_inline_code(line):
-    """The line with every `code span` removed, so that [[ inside code is not read as a link."""
-    return re.sub(r"(`+)(?:(?!\1).)*?\1", " ", line)
-
-
-def excerpt(cell):
-    """(code quoted by a Code cell, whether it was cut short with …). (None, False) when the cell quotes no code."""
-    m = re.match(r"``\s?(.*?)\s?``", cell) or re.match(r"`([^`]*)`", cell)
-    if not m:
-        return None, False
-    text = m.group(1).replace("\\|", "|")
-    cut = "…" in text or "..." in text[-3:] or "…" in cell[m.end():]
-    return re.split(r"…", text)[0].strip(), cut
-
-
-def mask_pattern(text, groups=False):
-    """A regular expression for a line with [masked] in it: the text around each mask, anything in between."""
-    joiner = "(.+?)" if groups else ".+?"
-    return joiner.join(re.escape(part) for part in text.split(MASK))
-
-
-def line_set(text, last):
-    """'3, 7-9' -> {3, 7, 8, 9}, clipped to 1..last. Anything that is not a number or a range is ignored."""
-    result = set()
-    for piece in str(text).split(","):
-        m = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", piece)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2) or m.group(1))
-            result.update(range(max(a, 1), min(b, last) + 1))
-    return result
+def props_end(lines):
+    """The index of the line that closes the properties, 0 when they are not closed, -1 when there are none."""
+    if not lines or lines[0] != "---":
+        return -1
+    return next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
 
 
 def lens_missing(rows, wanted):
@@ -164,17 +97,21 @@ def check_file_note(name, text, props, root):
     for label in lens_missing([cells(r) for r in (level1 or []) if is_row(r)], LENS):
         fails.append(f"{name}: Level 1 has no lens row of its own, with an answer, for '{label}'")
 
-    starts = [i for i, line in enumerate(note) if not mask[i] and BLOCK.match(line)]
+    blocks = note_blocks(note, mask)
     if not nonblank:
-        if starts:
+        if blocks:
             fails.append(f"{name}: {src} has no code, so its note must have no '### Block' section")
         infos.append(f"{src}: {len(lines)} lines, 0 non-blank, 0 blocks: an empty file, lens only")
         return src, []
-    if not starts:
+    if not blocks:
         fails.append(f"{name}: no '### Block <id>: <purpose> (lines a-b)' heading found")
-    block_ids = [BLOCK.match(note[i]).group(1) for i in starts]
-    for block_id in sorted({b for b in block_ids if block_ids.count(b) > 1}):
-        fails.append(f"{name}: two '### Block {block_id}' sections")
+    block_ids = [block["id"] for block in blocks]
+    for block_id in sorted(set(block_ids) & set(retired_ids(props))):
+        fails.append(f"{name}: block {block_id} uses an id that the property retired_blocks lists; the id of a "
+                     f"removed block is never used again")
+    for block_id, times in sorted(Counter(block_ids).items()):
+        if times > 1:
+            fails.append(f"{name}: two '### Block {block_id}' sections")
 
     # Level 2: one row per block, each naming its concepts in the last cell.
     level2 = {}
@@ -192,11 +129,8 @@ def check_file_note(name, text, props, root):
         fails.append(f"{name}: Level 2 row {extra} has no '### Block {extra}' section")
 
     in_block, in_row, hidden, masked_seen = {}, {}, {}, set()
-    for n, start in enumerate(starts):
-        m = BLOCK.match(note[start])
-        block_id, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
-        end = starts[n + 1] if n + 1 < len(starts) else len(note)
-        end = next((i for i in range(start + 1, end) if not mask[i] and note[i].startswith("## ")), end)
+    for block in blocks:
+        block_id, a, b, start, end = block["id"], block["a"], block["b"], block["start"], block["end"]
         if a < 1 or b > len(lines) or a > b:
             fails.append(f"{name}: block {block_id} range {a}-{b} is outside the file (1-{len(lines)})")
             continue
@@ -205,13 +139,19 @@ def check_file_note(name, text, props, root):
                 fails.append(f"{name}: line {ln} is in block {in_block[ln]} and block {block_id}")
             in_block[ln] = block_id
         # The first code fence of the block must hold exactly the source lines a..b.
-        first = next((i for i in range(start + 1, end) if mask[i]), None)
-        if first is None:
+        if block["first"] is None:
             fails.append(f"{name}: block {block_id} has no code fence")
             after = [note[i] for i in range(start + 1, end)]
         else:
-            last = next((i for i in range(first, end) if not mask[i]), end)
-            code, want = note[first + 1:last - 1], lines[a - 1:b]
+            last = block["last"]
+            # Two fences directly under each other are read as one code by this check (and by the VS Code
+            # extension). The rule stays; the note's writer is told, because the block's code then holds two fence
+            # lines and changed_blocks.py will not compare or write such a block.
+            ticks = len(note[block["first"]]) - len(note[block["first"]].lstrip("`"))
+            if any(len(line) - len(line.lstrip("`")) >= ticks and not line.strip("`").strip() for line in block["code"]):
+                warns.append(f"{name}: block {block_id}: two code fences stand directly under each other and are "
+                             f"read as one; put a line of text between them")
+            code, want = block["code"], lines[a - 1:b]
             if len(code) != len(want):
                 fails.append(f"{name}: block {block_id} code has {len(code)} lines, source lines {a}-{b} are {len(want)}")
             else:
@@ -249,7 +189,12 @@ def check_file_note(name, text, props, root):
             if r1 > r2:
                 fails.append(f"{name}: row {label} runs backwards")
                 continue
-            for ln in range(r1, r2 + 1):
+            # Lines beyond the end of the file are counted, not walked: a row may name any number.
+            beyond = r2 - max(len(lines), r1 - 1)
+            if beyond > 0:
+                fails.append(f"{name}: block {block_id} has a row for line {max(len(lines) + 1, r1)}, outside {a}-{b}"
+                             + (f" (and {beyond - 1} more lines beyond the end of the file)" if beyond > 1 else ""))
+            for ln in range(r1, min(r2, len(lines)) + 1):
                 if ln < a or ln > b:
                     fails.append(f"{name}: block {block_id} has a row for line {ln}, outside {a}-{b}")
                 elif ln in in_row and ln in nonblank:
@@ -265,20 +210,13 @@ def check_file_note(name, text, props, root):
             if not c[3]:
                 fails.append(f"{name}: row {label} has an empty 'Real value' cell (write a value, none, or not run)")
             # The Code cell quotes the row's first non-blank line: all of it, or its start followed by …
-            target = next((k for k in range(max(r1, 1), min(r2, len(lines)) + 1) if k in nonblank), None)
-            quoted, cut = excerpt(c[1])
-            if target is None:
-                continue
-            real = lines[target - 1].strip()
-            if quoted == MASK and all(k in declared for k in range(r1, r2 + 1) if k in nonblank):
-                continue  # a row for lines the note declares as masked
-            if not quoted or not quoted.replace(MASK, "").strip():
+            # The rule itself is row_quote() in _common.py: changed_blocks.py places rows by the same one.
+            wrong, target, quoted = row_quote(c[1], r1, r2, lines, declared.__contains__)
+            if wrong == "no code":
                 fails.append(f"{name}: row {label} quotes no code in its Code cell")
-            elif MASK in quoted:
-                found = re.match(mask_pattern(quoted), real)
-                if not found or (not cut and found.end() != len(real)):
-                    fails.append(f"{name}: row {label} quotes code that is not line {target}: {quoted[:50]}")
-            elif not (quoted == real or (cut and real.startswith(quoted))):
+            elif wrong == "not the line":
+                fails.append(f"{name}: row {label} quotes code that is not line {target}: {quoted[:50]}")
+            elif wrong == "not whole":
                 fails.append(f"{name}: row {label} must quote line {target} whole, or its start followed by …: "
                              f"{quoted[:50]}")
 
@@ -311,15 +249,21 @@ def check_file_note(name, text, props, root):
     if masked_seen:
         warns.append(f"{name}: {len(masked_seen)} masked lines ({', '.join(map(str, sorted(masked_seen)))}); a person "
                      f"must confirm each hides a secret and nothing else")
-    infos.append(f"{src}: {len(lines)} lines ({encoding}), {len(nonblank)} non-blank, {len(starts)} blocks, depth "
+    infos.append(f"{src}: {len(lines)} lines ({encoding}), {len(nonblank)} non-blank, {len(blocks)} blocks, depth "
                  f"{depth}, in blocks {len(nonblank & set(in_block))}/{len(nonblank)}, rows {rows}"
                  + (f", masked lines: {len(masked_seen)}" if masked_seen else ""))
     return src, sorted(masked_seen)
 
 
+UPDATE = "run changed_blocks.py to see which blocks changed, then update only those"
+
+
 def check_stale(name, props, root, kind, src=None):
-    """A File note is stale when its source has a newer commit. A Mechanism or Flow note is stale when any of the
-    files in its 'sources' property changed after the note's 'commit'."""
+    """Whether the code changed since the note was written. A note with a 'source_hash' property is judged by it
+    alone, with no git: stale when the hash of its source (File note) or of its 'sources' (Mechanism or Flow note)
+    differs now. That also holds for uncommitted changes. A note without it is judged by git: a File note is stale
+    when its source has a newer commit, a Mechanism or Flow note when any of its 'sources' changed after the note's
+    'commit'. Returns how it was judged: 'hash', 'commit' or None."""
     noted = props.get("commit", "")
     if kind == "file":
         files = [src]
@@ -327,23 +271,120 @@ def check_stale(name, props, root, kind, src=None):
         files = [f.strip().replace("\\", "/") for f in props.get("sources", "").split(",") if f.strip()]
         if not files:
             warns.append(f"{name}: no 'sources' property, so a change to the code it describes cannot be detected")
-            return
+            return None
+    recorded = props.get("source_hash", "")
+    if recorded:
+        if SOURCE_HASH.fullmatch(recorded):
+            now, rejected = (file_hash(Path(root) / src), []) if kind == "file" else files_hash(root, files)
+            for bad in rejected:
+                warns.append(f"{name}: 'sources' names no file under the source root: '{bad}' (not opened)")
+            if now != recorded:
+                what = src if kind == "file" else ", ".join(files)
+                tail = UPDATE if kind == "file" else "check the note against the code, then set its source_hash"
+                stale.append(f"{name}: {what} changed since the note was written (source_hash differs, now "
+                             f"{(now or 'unreadable')[:15]}); {tail}")
+            return "hash"
+        warns.append(f"{name}: property 'source_hash' is not 'sha256:' and 64 hex digits; judged by its commit")
     if not noted:
-        warns.append(f"{name}: no 'commit' property, so a change to the source cannot be detected")
-        return
+        warns.append(f"{name}: no 'source_hash' and no 'commit' property, so a change to the source cannot be "
+                     f"detected")
+        return None
     if kind == "file":
         now = git(root, "log", "-1", "--format=%H", "--", files[0])
         if not now:
-            warns.append(f"{name}: git has no history for {files[0]}, stale check skipped")
+            warns.append(f"{name}: git has no history for {files[0]}, stale check skipped (a 'source_hash' property "
+                         f"works without git)")
         elif not now.startswith(noted):
-            stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}")
-        return
+            stale.append(f"{name}: written at commit {noted}, source is now at {now[:8]}; {UPDATE}")
+        return "commit"
     if git(root, "rev-parse", "--verify", "--quiet", noted + "^{commit}") is None:
-        warns.append(f"{name}: commit {noted} is not in the source's history, stale check skipped")
-        return
+        warns.append(f"{name}: commit {noted} is not in the source's history, stale check skipped (a 'source_hash' "
+                     f"property works without git)")
+        return "commit"
     newer = git(root, "rev-list", "-1", f"{noted}..HEAD", "--", *files)
     if newer:
         stale.append(f"{name}: written at commit {noted}; {', '.join(files)} changed since (now {newer[:8]})")
+    return "commit"
+
+
+# ---------------------------------------------------------------- Flow notes
+
+BLOCK_ID = r"\d\w*"
+ID_LIST = BLOCK_ID + r"(?:(?:\s*,\s*|\s+and\s+|\s+to\s+)" + BLOCK_ID + r")*"
+WIKILINK = re.compile(r"\[\[[^\]]*\]\]")       # taken out of the cell first: a note's name may hold "block 2"
+IDS_IN_ROW = re.compile(r"\bblocks?\s+(" + ID_LIST + r")")           # in the Steps table: block 53a, blocks 3 and 4
+
+
+def check_flow_note(name, lines, mask, file_blocks, outside=None):
+    """A Flow note has an 'Every outcome' table with a row, and every block id that the 'File, block' cell of
+    its Steps table names is a block of a File note it links to. `file_blocks` is {File note name: its block ids}.
+    `outside`, given with --vault, answers for a note that is in the vault but not among the notes of --notes:
+    (its block ids, None) when it is a File note of this skill, (None, why not) when its blocks cannot be read,
+    None when the vault holds no such note.
+    The diagram is not read for block ids: its text is free text, for the reader. That it is there and not empty
+    is checked elsewhere."""
+    outcome = [cells(row) for row in section(lines, mask, "Every outcome") or [] if is_row(row)]
+    if len([c for c in outcome if c and not set("".join(c)) <= set("-: ")]) < 2:   # the heading row and one more
+        fails.append(f"{name}: a flow note needs an '## Every outcome' table with at least one row")
+    beyond = {}                                      # a linked note outside --notes: (its block ids, why not)
+
+    def blocks_of(target):
+        """The block ids of a linked File note, in --notes or in the vault; None when it is no such note."""
+        if target in file_blocks:
+            return file_blocks[target]
+        if outside is None:
+            return None
+        if target not in beyond:
+            beyond[target] = outside(target) or (None, None)
+        return beyond[target][0]
+
+    def linked(text):
+        found = []
+        for target in link_names(text):
+            if blocks_of(target) is not None and target not in found:
+                found.append(target)
+        return found
+
+    all_linked = linked("\n".join(line for i, line in enumerate(lines) if not mask[i]))
+    named = []                                       # (where, the ids as written, the File notes to look in)
+    # In the Steps table only the cell that names the blocks is read (the column whose heading says "block",
+    # else the second): "block 29" in the words of another cell is text.
+    column = None
+    for row in section(lines, mask, "Steps") or []:
+        if not is_row(row):
+            continue
+        c = cells(row)
+        if column is None:
+            column = next((k for k, cell in enumerate(c) if "block" in cell.lower()), 1)
+            continue
+        if column < len(c):
+            ids = [m.group(1) for m in IDS_IN_ROW.finditer(WIKILINK.sub(" ", without_inline_code(c[column])))]
+            # The File notes of a row are those its block cell links: a link in the words of another cell is text
+            # and decides nothing about where the ids are looked for.
+            here = linked(c[column])
+            # The cell links a note of the vault whose blocks cannot be read, and the cell links no File note: the
+            # ids of this row cannot be checked. That is said, and it is no FAIL: the note is not one of --notes.
+            closed = [] if here else [t for t in dict.fromkeys(link_names(c[column])) if beyond.get(t, (0, 0))[1]]
+            if ids and closed:
+                for target in closed:
+                    line = f"{name}: block ids of [[{target}]] cannot be checked: {beyond[target][1]}"
+                    if line not in warns:
+                        warns.append(line)
+                continue
+            named += [("the Steps table", written, here or all_linked) for written in ids]
+    if named and not all_linked:
+        ids = sorted({block_id for _, written, _ in named for block_id in re.findall(BLOCK_ID, written)})
+        fails.append(f"{name}: it names block {', '.join(ids[:10])}{' ...' if len(ids) > 10 else ''} but links no "
+                     f"File note, so no named block can be checked: link the File note the blocks are in")
+        return
+    unknown = {}
+    for where, written, notes in named:
+        known = set().union(*(blocks_of(n) for n in notes))
+        for block_id in re.findall(BLOCK_ID, written):
+            if block_id not in known:
+                unknown.setdefault((where, block_id), notes)
+    for (where, block_id), notes in sorted(unknown.items()):
+        fails.append(f"{name}: {where} names block {block_id}, which is no block of {', '.join(notes)}")
 
 
 # ---------------------------------------------------------------- the graph
@@ -403,14 +444,48 @@ def note_files(folder):
 
 def link_targets(vault, notes):
     """What a [[link]] may point at: any note by name, any other file by its full name. One listing of the vault,
-    which adds itself to the run's fingerprint."""
+    which adds itself to the run's fingerprint. Returns the targets, and for every note name of the vault that is
+    not a name among `notes` the files that carry it."""
     vault = Path(vault)
-    targets = set(notes)
-    for p in vault.rglob("*"):
+    targets, beyond = set(notes), {}
+    for p in sorted(vault.rglob("*")):
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(vault).parts[:-1]):
             targets.add(p.stem if p.suffix.lower() == ".md" else p.name)
+            if p.suffix.lower() == ".md" and p.stem not in notes:
+                beyond.setdefault(p.stem, []).append(p)
     witness("link targets", vault, *sorted(targets))
-    return targets
+    return targets, beyond
+
+
+def vault_file_notes(beyond):
+    """For check_flow_note: the blocks of a note of the vault that is outside --notes. `beyond` is the second
+    answer of link_targets. A note is read at most once, only when a Flow note links it, and is never written;
+    the read adds itself to the run's fingerprint."""
+    answers = {}
+
+    def answer(name):
+        if name not in beyond:
+            return None
+        if name not in answers:
+            paths = beyond[name]
+            witness("linked vault note", name, *paths)
+            if len(paths) > 1:
+                answers[name] = (None, f"the vault holds {len(paths)} notes of that name outside the notes folder")
+                return answers[name]
+            try:
+                text = read_text(paths[0])[0].replace("\r\n", "\n").replace("\r", "\n")
+            except OSError as error:
+                answers[name] = (None, f"the linked note cannot be read ({error.strerror or type(error).__name__})")
+                return answers[name]
+            props = frontmatter(text)
+            if props.get("written_by", "").lower() != "argus" or props.get("type", "") != "file":
+                answers[name] = (None, "the linked note is not a File note of this skill")
+            else:
+                lines = text.split("\n")
+                answers[name] = ({block["id"] for block in note_blocks(lines, fence_mask(lines))}, None)
+        return answers[name]
+
+    return answer
 
 
 def main():
@@ -425,7 +500,8 @@ def main():
     ap.add_argument("--scope", action="append", default=[],
                     help="a folder or file under the source root that is in scope; repeatable. Only source files "
                          "in scope count as MISSING. Default, and '.': the whole source root")
-    ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes. Default: --notes, so "
+    ap.add_argument("--vault", help="vault root, to resolve [[links]] to notes outside --notes and to read the blocks of a File note "
+                                    "there that a Flow note links. Default: --notes, so "
                                     "give it whenever Concept or Library notes are shared with other folders")
     ap.add_argument("--graph", help="graph JSON from graphify, to compare its functions with the notes")
     ap.add_argument("--no-graph", action="store_true",
@@ -450,7 +526,8 @@ def main():
         if p.stem in notes:
             fails.append(f"note name used twice: {p.stem}")
         notes[p.stem] = p
-    targets = link_targets(vault, notes)
+    targets, beyond = link_targets(vault, notes)
+    outside = vault_file_notes(beyond) if args.vault else None   # without --vault nothing is read outside --notes
 
     # What the run was told and what it found in the folders goes into its fingerprint; file contents and git
     # answers are added where they are read.
@@ -464,6 +541,8 @@ def main():
         witness("checker", script, hashlib.sha256((Path(__file__).resolve().parent / script).read_bytes()).hexdigest())
 
     explained, own_words, kinds, linked_by, unowned, masked_total, masked_by_note = {}, {}, {}, {}, [], 0, {}
+    judged_by = {}  # note name: 'hash' or 'commit', how its stale check was made
+    file_blocks, flows, projects = {}, {}, {}  # block ids of each File note; Flow notes to check; kinds per project
     for name, p in notes.items():
         text = read_text(p)[0].replace("\r\n", "\n").replace("\r", "\n")
         props = frontmatter(text)
@@ -471,6 +550,7 @@ def main():
             unowned.append(name)  # someone's own note: kept for link resolution, never checked
             continue
         kind = kinds[name] = props.get("type", "")
+        projects.setdefault(props.get("project", ""), []).append(kind)
         if not kind:
             warns.append(f"{name}: no 'type' property")
         lines = text.split("\n")
@@ -485,12 +565,12 @@ def main():
                 if src in explained:
                     fails.append(f"{name}: {src} is also explained by the note '{explained[src]}'")
                 explained[src] = name
+                file_blocks[name] = {block["id"] for block in note_blocks(lines, mask)}
                 # The note's own words: not the properties, the title or the Source line (they hold the file name).
-                props_end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0) if lines[0] == "---" else -1
                 own_words[src] = "\n".join(line for number, line in prose
-                                           if number - 1 > props_end
+                                           if number - 1 > props_end(lines)
                                            and not line.startswith("# ") and not line.startswith("Source:"))
-                check_stale(name, props, root, "file", src)
+                judged_by[name] = check_stale(name, props, root, "file", src)
         elif kind in LENS_BY_TYPE:
             rows = [cells(line) for _, line in prose if is_row(line)]
             for label in lens_missing(rows, LENS_BY_TYPE[kind]):
@@ -502,13 +582,20 @@ def main():
             elif not any(lines[i].strip() and not FENCE.match(lines[i])
                          for i in range(opens[0] + 2, min(opens[0] + 200, len(lines))) if mask[i]):
                 fails.append(f"{name}: the mermaid diagram is empty")
-            check_stale(name, props, root, kind)
+            judged_by[name] = check_stale(name, props, root, kind)
+            if kind == "flow":
+                flows[name] = (lines, mask)
+        body_from = props_end(lines) + 1  # the first line after the properties, counted from 1
+        tags, line_cites = [], []
         for number, line in prose:
-            if "%%" in line:
+            bare_line = without_inline_code(line)
+            if "%%" in bare_line:
                 fails.append(f"{name} line {number}: an Obsidian comment (%%) hides text from the reader")
-            for target in LINK.findall(without_inline_code(line)):
-                target = target.rstrip("\\").strip().split("/")[-1]
-                target = target[:-3] if target.lower().endswith(".md") else target
+            if number > body_from and HTML_TAG.search(bare_line):
+                tags.append(number)
+            if kind != "file" and number > body_from and LINE_CITE.search(bare_line):
+                line_cites.append(number)
+            for target in link_names(line):
                 linked_by.setdefault(target, set()).add(name)
                 if target not in targets:
                     fails.append(f"{name}: link to a note that does not exist: [[{target}]]")
@@ -517,6 +604,21 @@ def main():
                 for code in re.findall(r"`([^`]*)`", bare):
                     if re.search(r"(^|[^\\])\|", code):
                         fails.append(f"{name} line {number}: unescaped | inside code in a table: {code[:40]}")
+        if line_cites:
+            shown = ", ".join(map(str, line_cites[:10])) + (" ..." if len(line_cites) > 10 else "")
+            warns.append(f"{name}: cites source lines as 'line N' ({len(line_cites)} places, note line {shown}): "
+                         f"outside a File note name a place by its block, 'block 29 of [[the File note]]'; line "
+                         f"numbers go stale when the code moves")
+        if tags:
+            shown = ", ".join(map(str, tags[:10])) + (" ..." if len(tags) > 10 else "")
+            warns.append(f"{name}: <word> outside code on line {shown}: Obsidian reads it as HTML and does not show "
+                         f"it; put it in backticks")
+    for name, (lines, mask) in flows.items():
+        check_flow_note(name, lines, mask, file_blocks, outside)
+    for project, found_kinds in sorted(projects.items()):
+        if "file" in found_kinds and "flow" not in found_kinds:
+            warns.append(f"project '{project}' has {found_kinds.count('file')} File notes and no End-to-End Flow "
+                         f"note: write one for the main path through the code")
     for name in kinds:
         if kinds[name] != "start" and not name.endswith("Start Here") and not (linked_by.get(name, set()) - {name}):
             fails.append(f"{name}: no other note links to it")
@@ -564,6 +666,7 @@ def main():
             "missing": missing,
             "fails": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in fails],
             "stale": [{"note": about(line), "text": line} for line in stale],
+            "stale_judged_by": {note: how for note, how in sorted(judged_by.items()) if how},
             "warns": [{"note": about(line), "graph": line.startswith("graph: "), "text": line} for line in warns],
             "infos": infos,
             "masked_lines": masked_by_note,
