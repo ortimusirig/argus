@@ -100,3 +100,34 @@ EXTENSION: branch `vscode-extension`, head `3e0932c`, 239 tests pass, package re
 
 The owner declined for now: dead-code hints (Vulture, graph "no caller"). Do not build.
 This session's context is nearly full; a fresh session should take over from this file. Cost rule: one fresh small agent per fix round (about 110,000 to 200,000 tokens each), never a long-lived builder.
+
+## State on 2026-11-17 (after the owner's rule "two consecutive reviews with no P0 and no P1")
+
+Owner decisions of 2026-11-17: "A" (Update refuses a source file that two or more notes explain; written into the
+extension plan, section "Owner decisions after the plan"); "do nothing now": no new work (the diagram link from
+File notes to Flow notes waits until after the release); Vulture stays out.
+
+**Extension (branch `vscode-extension`, head `b96766a`): passes the rule.** Confirming rounds 4 (`3011c8a`) and 5
+(`b96766a`): no P0, no P1; round 5: no open finding for the owner's pilot. Four P2 wait in the plan's section
+"P2 backlog of the extension (owner pilot)"; they are fixed and reviewed before anything goes beyond the pilot.
+Commits since the owner's last push: `67e71f7` to `b96766a`. Not yet done: `npm run build`, the package, a window
+reload in the owner's VS Code, the owner's hand test of Create and Update.
+
+**Skill (branch `skill-2.10`): does not pass yet.** Rounds 26 to 29 each found one or two P1, all but one in the
+handling of masked lines (`[masked]`, property `masked_lines`) in `changed_blocks.py`; each fix opened the next
+hole (`232bb39`, `7165e2d` (checker, Flow rows), `58877de`). After round 29 (two P1 on `58877de`) the approach
+changed: the script no longer writes blocks with masked lines and never changes `masked_lines`; such a block gets a
+TODO for the agent, and when it matches nowhere it is "not compared", never "changed". A fresh agent builds this on
+top of `58877de`. Next: round 30 with a context file made from
+`.git/cross-review/skill-2.10/context-skill-210-29.md` plus the dispositions of round 29; two clean rounds are
+still owed.
+
+Known and not fixed: the extension's matcher (`vscode/src/core/match.ts`) asks for a mask at the recorded line, so
+an unchanged masked block shows as changed after lines are inserted above it. Align it with the skill's final rule
+at the merge.
+
+After the skill passes: merge `skill-2.10` into `main` (keep `main`'s `docs/HANDOFF.md`), merge `main` into
+`vscode-extension`, build the package, copy `skills/argus` to the owner's skills folder, second real agent run.
+The owner pushes; this session cannot.
+
+Cost rule that held: one fresh agent per fix round (110,000 to 200,000 tokens each); never resume a long agent.
