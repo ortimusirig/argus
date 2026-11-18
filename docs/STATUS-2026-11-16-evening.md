@@ -156,3 +156,8 @@ the release); cleanup of scratch folders and `~/.argus/locks`.
 
 How masked lines work since `62a27d3`: `changed_blocks.py` never writes a block that has masked lines and never
 writes `masked_lines`; such a block gets a TODO for the agent, and "not compared" when it matches nowhere.
+
+Confirming round 6 of the extension after the merge (commit f2dca33, 2026-11-17 evening): P0=0, P1=0, P2=2; no
+finding on the inline-code alignment (21,186 inputs compared by Codex). The two P2 (watchers for a linked note
+outside the roots; a retargeted notes-folder junction) are in the plan's backlog (extension head 3ed05b3, plan text
+only; the installed package is built from f2dca33, same code). The extension's backlog holds six P2 now.
