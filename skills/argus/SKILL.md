@@ -11,9 +11,9 @@ Writes Obsidian notes that let an intelligent adult who has never programmed und
 
 Core principle: purpose first, then blocks, then lines; nothing is skipped, and a script proves it.
 
-## The reader (ELI18)
+## The reader (ELI10 and ELI18)
 
-An intelligent adult with zero programming knowledge. Write the full, precise truth in plain words. No simplification that is false. No childish tone. No analogies or metaphors: say directly what happens. Every technical word, down to `function`, `variable` and `=`, links to a Concept note that explains it from zero.
+An intelligent adult with zero programming knowledge. What a thing is for is written ELI10, what the code does ELI18: `note-templates.md`, "Two levels", lists the parts. No simplification that is false. Every technical word, down to `function`, `variable` and `=`, links to a Concept note that explains it from zero.
 
 ## Depth ladder
 

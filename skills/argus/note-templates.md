@@ -51,6 +51,17 @@ written: <YYYY-MM-DD>
 
 Other types use `type: start`, `map`, `glossary`, `flow`, `mechanism`, `concept` or `library`, with `written_by: argus`, `project` and `written`. `written_by: argus` is on every note the skill writes: it is how a later run knows which notes it may change. Only File notes have `source` and `depth`. Concept and Library notes are shared, so they have no `project`; Concept notes have `language` instead. Mechanism and Flow notes also have `sources` (the source files they describe, relative to the source root, separated by commas), `source_hash` (one source file: that file's own value, the same as in its File note; several: one hash for all of them, the first word of the last line of `changed_blocks.py --source <source root> --hash <file> <file> ...`) and, with git, `commit` (the output of `git rev-parse --short HEAD`, with `+uncommitted` when one of the files has changes that are not committed): the check marks the note STALE when one of those files changes later.
 
+## Two levels
+
+Every part of a note is written at one of two levels. No part is written twice.
+
+| Level | Parts | How to write |
+| --- | --- | --- |
+| ELI10: what a thing is for | Concept notes: the Lens table ("What it is" first). File notes: Level 1, the purpose in each block heading and in its Level 2 row, and at depth `map` the first sentence under a block's code. Mechanism notes: Purpose. Flow notes: the opening sentences. Start Here, Map, Glossary | As for a ten-year-old who is clever and curious: short sentences, everyday words, what it is for before how it works. Use a technical word only where the sentence needs it, and link it. A comparison with an everyday thing is allowed when it is true in the point it is used for; when it would mislead beyond that point, say where it stops. Simpler, never false. No childish tone |
+| ELI18: what the code does | File notes: the line table of a block (depth `full`), the sentences after the first under a block's code (depth `map`), Trace, Check your understanding. Concept notes: Parts, Smallest real example. Mechanism notes: Sequence, Steps. Flow notes: the diagram, Steps, Every outcome, What each part cannot do. Library notes | The full, precise truth in plain words, for an intelligent adult. No analogies or metaphors: say directly what happens. Every technical word links to its Concept note |
+
+A later run keeps the level of each part. A part written before this rule changes level only when the run rewrites it for another reason.
+
 ## File note
 
 ````markdown
@@ -89,7 +100,7 @@ Back to [[<Project> - Start Here]]. <Links to the Mechanism notes this file take
 <exactly the source lines a to b>
 ```
 
-<depth map: one to three sentences on what the block does and why, with [[Concept - ...]] links.>
+<depth map: first one sentence on what the block is for (ELI10), then one to three sentences on what its code does and why (ELI18), with [[Concept - ...]] links.>
 
 <depth full: the line table, in place of the sentences.>
 
@@ -157,7 +168,7 @@ Line numbers live in the File note only. Every other note (Concept, Mechanism, L
 
 | Lens | Answer |
 | --- | --- |
-| What it is | <the full, precise meaning in plain words; name the language if it is specific to one> |
+| What it is | <the meaning in simple words (ELI10), true as far as it goes; name the language if it is specific to one. The exact detail goes into Parts> |
 | What we gain | <...> |
 | What we lose | <... or "Nothing."> |
 | Without it | <what a programmer would have to do instead> |
