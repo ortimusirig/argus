@@ -25,10 +25,10 @@ with the source file as it is on disk now and gives each block one state:
   undecided  the search was cut short (BOUNDED): the block's place is not sure, or none was found before the
              limit. Its code may be in the source as it was
   not compared  the block has no code of its own that the script can take: no code fence in its own section, a
-             code fence with no line in it, or two code fences directly under each other; or its code fits
-             only at a place where it is not sure which lines masked_lines means. A PROBLEM line says
-             what to repair in the note. It is not a changed block, and the result is not CURRENT while one
-             exists. The note's form is checked in every
+             code fence with no line in it, or two code fences directly under each other (a PROBLEM line says
+             what to repair in the note); or it is a block with masked lines whose code is at no place (see
+             "Masked lines" below: a person reads the source). It is not a changed block, and the result is
+             not CURRENT while one exists. The note's form is checked in every
              run, with or without --fix-moved, before any block is compared. Only what makes a block's code,
              heading or section unsure stops the comparison, and then every block of the note is not compared:
              a property that stands twice in the properties block (the script reads the last, so which source,
@@ -56,30 +56,35 @@ the note's place.
 The placing rule is the one the VS Code extension uses. Blocks keep the order of their recorded first lines. Among
 all ways to put blocks, in that order and without overlap, at places where their whole code matches, the script
 takes the one that places the most blocks, then the one with the smallest sum of distances from the recorded lines.
-A block that an equally good way places elsewhere, or leaves out, is ambiguous. A code line with [masked] stands
-for a hidden value (it matches a source line by the text around the mask) only where masked_lines lists it;
-elsewhere it is plain text and must equal the source line. masked_lines is read in two whole ways, never mixed:
-its numbers count from the block's recorded lines (nothing was updated yet), or they are the source lines of the
-place that is tried (an update wrote the property and stopped before the heading). The block is at a place when
-one of the two makes every line match. A block with a [masked] line that neither way lists, where the source
-line differs, is changed, and a TODO line names that line. A place where it is not sure which lines the property
-means is no place: both ways fit and name different lines of the block, or only the second way fits and uses a
-number that counts from a block's recorded lines as well. A block with no other place is then not compared, a
-PROBLEM line gives the lines, and nothing is written for the note. On a file where one block's code is at very
-many places the work is bounded: the places nearest to the recorded line are looked at, and the report says so
-in a BOUNDED line.
+A block that an equally good way places elsewhere, or leaves out, is ambiguous. On a file where one block's code
+is at very many places the work is bounded: the places nearest to the recorded line are looked at, and the report
+says so in a BOUNDED line.
 
-Without --fix-moved nothing is written. With it, for each block that only moved (also past other blocks, when its
-whole code is at one free place no other block could take), the script writes that block's new line numbers in
-exactly four places and nowhere else:
+Masked lines. A note hides a secret by writing [masked] in a code line and listing that line's number in the
+property masked_lines. The script reads this in one way only and guesses nothing: a code line that holds [masked]
+is a redaction exactly when masked_lines lists its number, counted from the lines in the block's heading (the
+first line plus the line's place in the code). Such a line matches a source line by the text around each mask,
+and [masked] alone matches any one line (the rule of check_notes.py). A [masked] line that is not listed so is
+plain text and must equal the source line. A block with [masked] in its code, or with a number of masked_lines
+inside the lines of its heading, is a block with masked lines. It is placed like every other block, but the
+script never writes it, and it never writes the property masked_lines:
+  at the lines of its heading: same;
+  only at other lines: moved (or displaced). A TODO line gives the new lines and the numbers masked_lines must
+    hold for it. Write by hand: its heading, its Level 2 row, at depth full its line rows, and masked_lines;
+  at no place: not compared, never changed. The script cannot tell whether its code changed. Read the source
+    where the block was expected. Code as it was: set its lines and masked_lines by hand. Code changed: rewrite
+    that block only, never the whole note for this reason.
+The other blocks of the note are compared and written as usual. One case stops the writing of a note: a number
+of masked_lines would lie in the new lines of a block that is to be written. A PROBLEM line says so; set the
+blocks with masked lines by hand first, then run again.
+
+Without --fix-moved nothing is written. With it, for each block without masked lines that only moved (also past
+other blocks, when its whole code is at one free place no other block could take), the script writes that block's
+new line numbers in exactly three places and nowhere else:
   (a) the block heading;
-  (b) the property masked_lines: the numbers that counted from the block's recorded lines move with the block,
-      and numbers that are right at the new place already stay. No number is added for a line the property did
-      not list before. A number is taken out only when no block without a sure place holds it in its recorded
-      lines;
-  (c) the Lines cell of the block's row in the Level 2 table: the table directly under the heading
+  (b) the Lines cell of the block's row in the Level 2 table: the table directly under the heading
       '## Level 2: blocks' (only blank lines between), with the template's exact heading row;
-  (d) at depth full, the Line cell of the rows of the block's own line table: the table directly after the code
+  (c) at depth full, the Line cell of the rows of the block's own line table: the table directly after the code
       fence of that block (only blank lines between), inside that block's section, with the template's exact
       heading row. Each row is placed by the code it quotes, with the rule check_notes.py has for line rows:
       a row that quotes the source line it names already is left (an earlier, unfinished update set it), one
@@ -94,7 +99,7 @@ table in another form than the templates'), is compared as usual and can be CURR
 blocks it is not written at all: one PROBLEM line names the construct and its line, with or without --fix-moved,
 the MOVED lines give the new lines, the moved line numbers of that note are set by hand, and the result is not
 CURRENT until they are. The writer's result is checked twice before it reaches the disk. First by a second
-reading of the note: only line numbers in the four places may differ. Then, last of all, by the comparison itself:
+reading of the note: only line numbers in the three places may differ. Then, last of all, by the comparison itself:
 the new text is compared once more with the same source lines, in memory, and it is written only when every block
 that was moved is 'same' at its new lines, every block that was 'same' still is, no other block has a worse
 state, the note has no more PROBLEM lines than before, and every line row of a moved block quotes the line it
@@ -151,9 +156,9 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (MASK, SOURCE_HASH, cells, cut_ranges, fence_mask, file_hash, files_hash,  # noqa: E402
-                     frontmatter, in_ranges, in_scope, is_row, lies_under, line_ranges, link_names, mask_fits, merge_ranges,
+                     frontmatter, in_ranges, in_scope, is_row, lies_under, line_ranges, link_names,
                      missing_under_root,
-                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, row_quote, source_lines, source_set,
+                     normalize_scopes, note_blocks, on_disk, plain_relative, read_text, retired_ids, row_quote, same_line, source_lines, source_set,
                      utf8_output,
                      without_inline_code)
 
@@ -252,61 +257,31 @@ def outward(positions, target):
 def places(text, code, first_line, declared, keep, budget):
     """Every start (0-based) where the whole code matches, in rising order, the nearest to the recorded line first
     when there are more than `keep` or the work passes `budget`. `declared` are the ranges of masked_lines.
-    A line of the code that holds [masked] is a pattern (the text around each mask; [masked] alone: any line)
-    only where masked_lines lists it. Everywhere else it is plain text, and only an equal source line matches:
-    a line the property does not list hides nothing, so a change in it is a change.
-    The property is read in two whole ways, and never as a mix of the two:
-      R, not yet updated: its numbers count from the block's recorded lines (offset n - first_line);
-      P, updated already: its numbers are source lines of the place that is tried (offset n - first line of the
-         place). An update that stopped half-way can have written the property before the heading.
-    The code is at a place when one whole reading makes every line match.
-    Both readings can match at one place with other lines as patterns. When every pattern line of R is one of
-    P too, R is the stricter one and nothing is open: R is taken. Else which lines the property means is not
-    known there ('two' below).
-    Returns (starts, possible places, whether cut, start -> (the offsets of the lines that were patterns,
-    whether R matched, whether P matched, two))."""
+    One reading only: a line of the code that holds [masked] is a redaction exactly when masked_lines lists its
+    number counted from the block's recorded lines (first_line + its place in the code). Such a line matches a
+    source line by the check's own rule (same_line): the text around each mask, and [masked] alone any one line.
+    Every other line is plain text, and only an equal source line matches.
+    Returns (starts, possible places, whether cut)."""
     total, length = len(text.lines), len(code)
     if length == 0 or length > total:
-        return [], 0, False, {}
-    exact, masks = [], []                            # (place in the block, number); places of the lines with [masked]
+        return [], 0, False
+    exact, masks = [], []                            # (place in the block, number); places of the redacted lines
     for k, line in enumerate(code):
-        if MASK in line and declared:
+        if MASK in line and in_ranges(declared, first_line + k):
             masks.append(k)
             continue
-        n = text.ids.get(line)                       # no mask the property could list: only an equal line matches
+        n = text.ids.get(line)                       # plain text: only an equal line matches
         if n is None:
-            return [], 0, False, {}
+            return [], 0, False
         exact.append((k, n))
-    literal = {k: text.ids.get(code[k]) for k in masks}      # the line as plain text; None: no source line equals it
-    recorded = frozenset(k for k in masks if in_ranges(declared, first_line + k))        # reading R
     if exact:
         anchor, number = min(exact, key=lambda kn: len(text.at[kn[1]]))
         positions = text.at[number]
         others = [kn for kn in exact if kn[0] != anchor]
     else:
         anchor, positions, others = 0, range(total - length + 1), []
-    whole = [n for _, n in exact] if len(exact) == length else None
-    found, how, work, cut, seq = [], {}, 0, False, text.seq
-
-    def reads(start, patterns):
-        """Whether the lines with [masked] match at this start when exactly those in `patterns` are patterns."""
-        nonlocal work
-        for k in masks:
-            work += 1
-            line, n = code[k], seq[start + k]
-            if k not in patterns or not line.replace(MASK, "").strip():
-                if n != literal[k]:                  # plain text, or masks with nothing around them: an equal line
-                    return False
-            elif line.strip() != MASK:               # [masked] alone is any line
-                answer = text.fits.get((line, n))
-                if answer is None:
-                    real = text.first[n]
-                    work += 1 + len(real) // 16
-                    answer = text.fits[(line, n)] = mask_fits(line, real)
-                if not answer:
-                    return False
-        return True
-
+    whole = [n for _, n in exact] if not masks else None
+    found, work, cut, seq = [], 0, False, text.seq
     for position in outward(positions, first_line - 1 + anchor):
         start = position - anchor
         if start < 0 or start + length > total:
@@ -318,7 +293,6 @@ def places(text, code, first_line, declared, keep, budget):
             work += length
             if seq[start:start + length] == whole:
                 found.append(start)
-                how[start] = (recorded, True, True, False)
             continue
         ok = True
         for k, n in others:
@@ -326,16 +300,20 @@ def places(text, code, first_line, declared, keep, budget):
             if seq[start + k] != n:
                 ok = False
                 break
-        if not ok:
-            continue
-        here = frozenset(k for k in masks if in_ranges(declared, start + 1 + k))          # reading P
-        as_recorded = reads(start, recorded)
-        as_here = as_recorded if here == recorded else reads(start, here)
-        if as_recorded or as_here:
+        for k in masks if ok else ():
+            work += 1
+            line, n = code[k], seq[start + k]
+            answer = text.fits.get((line, n))
+            if answer is None:
+                real = text.first[n]
+                work += 1 + len(real) // 16
+                answer = text.fits[(line, n)] = same_line(line, real, True)
+            if not answer:
+                ok = False
+                break
+        if ok:
             found.append(start)
-            how[start] = (recorded if as_recorded else here, as_recorded, as_here,
-                          as_recorded and as_here and not recorded <= here)
-    return sorted(found), len(positions), cut, how
+    return sorted(found), len(positions), cut
 
 
 # ---------------------------------------------------------------- the best way to place the blocks
@@ -446,7 +424,7 @@ def compare(note_lines, props, lines):
     text = Text(lines)
     keep = max(1, PLACES // max(1, len(blocks)))
     budget = SEARCH_WORK // max(1, len(blocks))
-    found, read_as, bounded, problems, cut_short = [], [], [], [], set()
+    found, bounded, problems, cut_short = [], [], [], set()
     # The note's form comes first, in every run, whether anything is to be written or not. The guard's tests are
     # of two kinds (see STOPS_COMPARING and STOPS_WRITING). A note whose fences or headings can be read in two
     # ways can give a block code that is not its own: an unchanged block would be reported as changed. So nothing
@@ -519,8 +497,7 @@ def compare(note_lines, props, lines):
             block["empty"] = True
             problems.append(f"block {block['id']}: its code fence is empty: copy the block's code into it, then "
                             f"run again")
-        starts, possible, cut, how = places(text, block["code"], block["a"], declared, keep, budget)
-        read_as.append(how)
+        starts, possible, cut = places(text, block["code"], block["a"], declared, keep, budget)
         if cut:
             cut_short.add(len(found))
             bounded.append(f"block {block['id']}: its code may be at up to {possible} places; only the "
@@ -531,56 +508,21 @@ def compare(note_lines, props, lines):
                        "that is not at its recorded lines, or whose own search stopped at its limit, is undecided: "
                        "it is not a changed block and does not count towards rewriting the note. Look at it in the "
                        "file")
-    # masked_lines, before the blocks are placed: a place of a block away from its recorded lines where the
-    # reading of the property is not sure is no place for it. Two things make it unsure:
-    #   Both readings match there and R has a pattern line that P has not: the two would give other numbers.
-    #   Only reading P matches there, and one of the numbers it uses counts from the recorded lines of a block
-    #   as well: that number is a [masked] line of that block as its heading stands (reading R). One number
-    #   would be read both ways. Only when the number is another block's, and that block fits somewhere by
-    #   both readings alike (its old numbers and its numbers at that place are both listed), the number is
-    #   merely an old one of that block and the place stands. In a note that was right before the source changed, every number counts
-    #   from recorded lines, so there no block is ever placed by reading P alone: a [masked] line that the
-    #   property did not list stays plain text.
-    # Nothing is guessed. A block that has no other place is then 'not compared', not 'changed' and not 'moved':
-    # a PROBLEM line gives the lines and --fix-moved writes nothing for the note.
-    counts_from = {}                                 # a listed number -> the blocks with [masked] there, as recorded
-    for index, block in enumerate(blocks):
-        for k, line in enumerate(block["code"]):
-            if MASK in line and in_ranges(declared, block["a"] + k):
-                counts_from.setdefault(block["a"] + k, []).append(index)
-    has_its_own = [any(as_recorded and as_here and not two for _, as_recorded, as_here, two in how.values())
-                   for how in read_as]
-    unsure_at = [[] for _ in blocks]                 # per block: (start, why) of the places taken out
-    for index, block in enumerate(blocks):
-        for start in found[index]:
-            patterns, as_recorded, _, two = read_as[index][start]
-            if start + 1 == block["a"]:
-                continue                             # at its recorded lines: the two readings are one
-            if two:
-                unsure_at[index].append((start, "masked_lines fits in two ways (its numbers count from the "
-                                                "lines in the block's heading, or they are the new lines already) "
-                                                "that name different lines of the block as masked"))
-            elif not as_recorded:
-                shared = sorted(n for n in (start + 1 + k for k in patterns)
-                                if any(other == index or not has_its_own[other] for other in counts_from.get(n, ())))
-                if shared:
-                    unsure_at[index].append(
-                        (start, f"its code fits only when masked_lines {spans(ranges_of(shared))} is read as "
-                                f"{'a line' if len(shared) == 1 else 'lines'} of that place, but "
-                                f"{'that number counts' if len(shared) == 1 else 'those numbers count'} from the "
-                                f"lines in a block's heading as well"))
-        if unsure_at[index]:
-            out = {start for start, _ in unsure_at[index]}
-            found[index] = [start for start in found[index] if start not in out]
+    # A block with masked lines: [masked] in its code, or a number of masked_lines inside its recorded lines.
+    # It is placed like every block, by the one reading of places(), and --fix-moved never writes it.
+    masked = [any(MASK in line for line in b["code"])
+              or bool(cut_ranges(declared, b["a"], max(b["b"], b["a"] + len(b["code"]) - 1))[0]) for b in blocks]
     best_starts, left_out, unproven = assign([(b["a"], len(b["code"])) for b in blocks], found, total)
     for index in unproven:
         bounded.append(f"block {blocks[index]['id']}: whether an equally good placing leaves it out was not worked "
                        f"out (too many equal places); it is reported as ambiguous")
 
-    covered, result, unsure = [False] * total, [], []
+    covered, result = [False] * total, []
     for index, block in enumerate(blocks):
         length, a, b = len(block["code"]), block["a"], block["b"]
         entry = {"id": block["id"], "from": a, "to": b, "lines": length}
+        if masked[index]:
+            entry["masked_block"] = True
         if block["first"] is None or block.get("empty"):
             entry["no_code"] = True                  # no code of its own to compare: no place is stated for it
         if block.get("empty"):
@@ -613,22 +555,12 @@ def compare(note_lines, props, lines):
             # Nothing was compared: the note's form is at fault (see the PROBLEM line), not the block's code. Such
             # a block is no changed block and never a reason to rewrite anything.
             entry["state"] = "not compared"
-        elif entry["state"] == "changed" and unsure_at[index]:
-            # Its code fits somewhere, but only with a reading of masked_lines that is not sure (see above).
-            # Neither 'changed' nor 'moved' is claimed.
+        elif entry["state"] == "changed" and masked[index] and not found[index]:
+            # A block with masked lines whose code is at no place. Whether a hidden value's line or the code
+            # itself differs, the script cannot tell: it is never 'changed', and a person reads the source.
             entry["state"] = "not compared"
-            entry["masked_unsure"] = [[start + 1, start + length] for start, _ in unsure_at[index][:SHOWN]]
-            unsure.append(f"block {block['id']} (lines {span(a, b)}): "
-                          + "; ".join(f"at lines {span(start + 1, start + length)} {why}"
-                                      for start, why in unsure_at[index][:3])
-                          + (f"; and {len(unsure_at[index]) - 3} more places" if len(unsure_at[index]) > 3 else ""))
+            entry["masked_not_found"] = True
         result.append(entry)
-    if unsure:
-        problems.append("; ".join(unsure[:SHOWN]) + (f"; and {len(unsure) - SHOWN} more blocks" if len(unsure) > SHOWN else "")
-                        + ". Which lines masked_lines means is not sure, so such a block is not compared and "
-                          "--fix-moved writes nothing for this note. A [masked] line of the block may be plain text "
-                          "that changed: read the block in the file, then set the heading's lines and masked_lines by "
-                          "hand, so that masked_lines lists exactly the lines that hide a value, or rewrite the block")
     # A block without a place whose whole code is in the source at lines no placed block holds: it moved past
     # other blocks. It becomes 'displaced'.
     # --fix-moved may write such a move only when it is the block's one free place and no other block without a
@@ -663,38 +595,45 @@ def compare(note_lines, props, lines):
     for entry in result:
         entry.pop("_free", None)
 
-    # masked_lines, for the blocks that have a place: the lines of the block that were patterns in the reading
-    # that matched, at their numbers in the block's place. Under reading R (the numbers count from the recorded
-    # lines) these are the numbers --fix-moved writes; under reading P they stand in the property already.
-    for index, entry in enumerate(result):
-        place = entry.get("at") or entry.get("moved_to")
-        patterns = read_as[index][place[0] - 1][0] if place else ()
-        if patterns:
-            entry["masked_lines"] = [place[0] + k for k in sorted(patterns)]
-    # A block that was not found and has a [masked] line that masked_lines does not list at the block's recorded
-    # lines: that line was compared as plain text. The script cannot know whether the line hides a value and the
-    # property (or the heading) is behind, or the code changed. It says what it compared, and a person looks.
-    unlisted = []
-    for block, entry in zip(blocks, result):
-        if entry["state"] != "changed":
+    # Blocks with masked lines. For one that has a place: the lines of the block that are redactions, at their
+    # numbers in that place (entry["masked_lines"]). One that is not at its recorded lines is never written: a
+    # TODO line gives its new lines and the numbers masked_lines must hold for it. One with no place gets a
+    # TODO line too: a person reads the source. The script changes no number of masked_lines.
+    masked_todo, moved_masked, unread_masked = [], [], []
+    for index, (block, entry) in enumerate(zip(blocks, result)):
+        if not masked[index]:
             continue
-        missing = ranges_of([block["a"] + k for k, line in enumerate(block["code"])
-                             if MASK in line and not in_ranges(declared, block["a"] + k)])
-        if missing:
-            entry["masked_unlisted"] = missing
-            one = len(missing) == 1 and missing[0][0] == missing[0][1]
-            unlisted.append(f"block {entry['id']} (lines {span(entry['from'], entry['to'])}): "
-                            f"{'line' if one else 'lines'} {spans(missing)}")
-    masked_todo = []
-    if unlisted:
+        a, length = block["a"], len(block["code"])
+        place = entry.get("at") or entry.get("moved_to")
+        redacted = [place[0] + k for k, line in enumerate(block["code"])
+                    if MASK in line and in_ranges(declared, a + k)] if place else []
+        if redacted:
+            entry["masked_lines"] = redacted
+        was = f"block {entry['id']} (lines {span(a, entry['to'])})"
+        if place and (entry["state"] == "moved" or "moved_to" in entry):
+            old = cut_ranges(declared, a, max(entry["to"], a + length - 1))[0]
+            new = ranges_of(redacted)
+            moved_masked.append(f"{was} is at lines {span(*place)} now; masked_lines must hold "
+                                f"{spans(new) if new else 'no number'} for it"
+                                + (f", in place of {spans(old)}" if old and old != new else ""))
+        elif entry.get("masked_not_found"):
+            unread_masked.append(was)
+    if moved_masked:
         masked_todo.append(
-            "a block that was not found holds [masked] on a line that masked_lines does not list, counted from the "
-            "lines in the block's heading: " + "; ".join(unlisted[:SHOWN])
-            + (f"; and {len(unlisted) - SHOWN} more blocks" if len(unlisted) > SHOWN else "")
-            + ". Such a line was compared as plain text, not as a hidden value. Read the block in the file. Where "
-              "the code is as it was and only the heading's lines or masked_lines are behind, set them, so that "
-              "masked_lines lists every line that hides a value; where the code changed, rewrite the block (Later "
-              "runs, step 3)")
+            "blocks with masked lines moved, and --fix-moved never writes such a block or masked_lines: "
+            + "; ".join(moved_masked[:SHOWN])
+            + (f"; and {len(moved_masked) - SHOWN} more blocks" if len(moved_masked) > SHOWN else "")
+            + ". Write by hand, for each: the new lines in its heading and its Level 2 row, at depth full the Line "
+              "cells of its line rows, and its numbers in masked_lines. Then run again (Later runs, step 3)")
+    if unread_masked:
+        masked_todo.append(
+            "blocks with masked lines whose code is at no place, read with masked_lines as it stands: "
+            + "; ".join(unread_masked[:SHOWN])
+            + (f"; and {len(unread_masked) - SHOWN} more blocks" if len(unread_masked) > SHOWN else "")
+            + ". The script cannot tell whether such a block's code changed. Read the source where each was expected (its NOT COMPARED line, in --json "
+              "'expected', gives the lines) and decide. The code is as it was: set the block's lines and its numbers in masked_lines by hand. The "
+              "code changed: rewrite this block only, never the whole note for this reason (Later runs, step 3)")
+
 
     # Unexplained: non-blank lines outside every block that has one sure place.
     # The lines of a displaced block whose one place is sure are that block's: they form ranges of their own, so
@@ -754,7 +693,8 @@ def compare(note_lines, props, lines):
             if nearly:
                 entry["spaces_only"] = True
                 entry["likely"] = [nearly[0] + 1, nearly[0] + len(code)]
-    not_found = sorted((e["expected"][0], e["id"]) for e in result if e["state"] == "changed")
+    not_found = sorted((e["expected"][0], e["id"]) for e in result
+                       if e["state"] == "changed" or e.get("masked_not_found"))
     expected_lines = [line for line, _ in not_found]
     for u in unexplained:
         owners = [not_found[k][1] for k in nearest(expected_lines, u["from"], SHOWN)]
@@ -848,8 +788,7 @@ def compare(note_lines, props, lines):
     return {"blocks": result, "counts": counts, "unexplained": unexplained, "bounded": bounded, "problems": problems,
             "lines": total, "retired_blocks": retired, "reordered": reordered, "masked_todo": masked_todo,
             "_blocks": blocks, "_mask": mask,
-            "_declared": declared, "_cites": cites, "_depth": props.get("depth", ""), "_writer": writer_only,
-            "_unsure": unsure}
+            "_declared": declared, "_cites": cites, "_depth": props.get("depth", ""), "_writer": writer_only}
 
 
 CITE = re.compile(r"\b([Ll]ines?\s+)(\d{1,9})(?:(\s*(?:-|to|and)\s*)(\d{1,9}))?")
@@ -1297,13 +1236,12 @@ def unhandled(lines):
 
 def own_check(old, new):
     """Looks at what the writer made, by itself: `old` and `new` are the note's lines before and after. Returns
-    None when every line that differs is one of the four places the writer may touch, and on such a line nothing
+    None when every line that differs is one of the three places the writer may touch, and on such a line nothing
     differs but the numbers of the line range:
       (a) a block heading;
-      (b) the masked_lines property;
-      (c) a row of the Level 2 table: the table directly under the heading '## Level 2: blocks' (only blank
+      (b) a row of the Level 2 table: the table directly under the heading '## Level 2: blocks' (only blank
           lines between), with the template's heading row, in its Lines cell;
-      (d) at depth full, a row of a block's line table: the table directly after the block's code fence (only
+      (c) at depth full, a row of a block's line table: the table directly after the block's code fence (only
           blank lines between), inside the block's section, with the template's heading row, in its Line cell.
     A row of the Trace table, or of any other table, is never one of them.
     A section ends at the next heading that is not deeper than its own: a block at any #, ## or ### line.
@@ -1444,10 +1382,7 @@ def own_check(old, new):
         if inside:
             return n
         if props_line:
-            if (was.startswith("masked_lines:") and now.startswith("masked_lines:")
-                    and re.fullmatch(r"[\d,\s-]*", now[len("masked_lines:"):])):
-                continue
-            return n
+            return n                                 # no property is written, masked_lines least of all
         if OWN_HEADING.fullmatch(was) and OWN_HEADING.fullmatch(now):
             if was[:was.rindex("(line")] == now[:now.rindex("(line")]:
                 moved_head = n                       # allowed once this block's own code fence has been seen
@@ -1484,8 +1419,10 @@ def move_check(before, note_lines, props, lines):
     """The last check before a note is written, and the general one: the script's own comparison, run once more
     on the new text of the note (`note_lines`, `props`) against the same source lines, in memory. `before` is
     the comparison the writer worked from. A move is right only when the result says so:
-      every block that this run moved is 'same', at the lines that were written;
-      every block that was 'same' is 'same', at the same lines;
+      every block that this run moved is 'same', at the lines that were written, and is no block with masked
+      lines (no number of masked_lines lies in its new lines);
+      every block that was 'same' is 'same', at the same lines, and every moved block with masked lines, which
+      is not written, is 'moved' to the same lines as before;
       no other block has a worse state than before (the order of STATES);
       the note has no more PROBLEM lines than before;
       at depth full, every row of a line table the writer went through quotes the code of the line it names
@@ -1502,13 +1439,15 @@ def move_check(before, note_lines, props, lines):
         return e["state"] + (f" at {'line' if e['at'][0] == e['at'][1] else 'lines'} {span(*e['at'])}" if "at" in e else "")
 
     for old, new in zip(was, now):
-        if old["state"] == "moved" or "moved_to" in old:
+        if to_write(old):
             target = old["at"] if old["state"] == "moved" else old["moved_to"]
             if new["state"] != "same" or new["at"] != target:
                 return f"block {old['id']}: was moved, would be {state(new)}"
-        elif old["state"] == "same":
-            if new["state"] != "same" or new["at"] != old["at"]:
-                return f"block {old['id']}: was same, would be {state(new)}"
+            if new.get("masked_block"):
+                return f"block {old['id']}: a number of masked_lines would lie in its new lines"
+        elif old["state"] in ("same", "moved"):      # 'moved' here: a block with masked lines, which is not written
+            if new["state"] != old["state"] or new["at"] != old["at"]:
+                return f"block {old['id']}: was {state(old)}, would be {state(new)}"
         elif STATES.index(new["state"]) > STATES.index(old["state"]):
             return f"block {old['id']}: was {old['state']}, would be {new['state']}"
     if len(after["problems"]) > before["_own_problems"]:
@@ -1535,6 +1474,12 @@ def move_check(before, note_lines, props, lines):
                 return (f"block {block['id']}: the line row {span(first, last)} at note line {i + 1} would not "
                         f"quote the code of the line it names")
     return None
+
+
+def to_write(entry):
+    """Whether --fix-moved writes this block's new lines: it only moved (also past other blocks, to its one free
+    place), and it is no block with masked lines. Those are set by hand, from their TODO line."""
+    return (entry["state"] == "moved" or "moved_to" in entry) and not entry.get("masked_block")
 
 
 class Refuse(Exception):
@@ -1597,9 +1542,9 @@ def line_cell(lines, i, column, table):
 
 def moved_text(data, report):
     """The note's bytes with the new line numbers of every moved block. `data` are the bytes `report` was made
-    from. A number is written in exactly four places and nowhere else: (a) the block heading, (b) the
-    property masked_lines, (c) the Lines cell of the Level 2 table, and at depth full (d) the Line cell of the
-    block's own line table. The two tables are those of note-templates.md, found by their exact heading rows and
+    from. A block with masked lines is never one of them, and the property masked_lines is never written. A number
+    is written in exactly three places and nowhere else: (a) the block heading, (b) the Lines cell of the Level 2
+    table, and at depth full (c) the Line cell of the block's own line table. The two tables are those of note-templates.md, found by their exact heading rows and
     places. The Trace table is not written. Returns (new bytes or None when nothing changes, what changed, error or None, what was left for
     a person: rows that look like line rows in a table without such a heading)."""
     left = []
@@ -1616,7 +1561,7 @@ def moved_text(data, report):
     if len(set(ids)) != len(ids):
         # A row of a table is found by the block's id; with one id for two blocks a row would get the wrong lines.
         return None, [], None, left                  # the PROBLEM line of the comparison says why
-    if any("stray" in block for block in blocks) or report.get("_unsure"):
+    if any("stray" in block for block in blocks):
         return None, [], None, left                  # the PROBLEM line of the comparison names the block
     # The comparison ran this test on the same text already. It stays here, under the lock and directly before
     # the writing, so that the writer never rests on a test made elsewhere. Both kinds refuse the writing: what
@@ -1629,78 +1574,29 @@ def moved_text(data, report):
         strange = strange or named
         return None, [], (f"--fix-moved writes nothing for this note: note line {strange[0]} holds {strange[1]}, "
                           f"which the writer does not handle. Set the line numbers of the moved blocks by hand"), left
-    wrote, masked_changed = [], False
-    masked_new = []                                  # the masked ranges of moved blocks, at their new lines
+    wrote = []
     full = report["_depth"] == "full"                # a line table and a Trace table exist at depth full only
-    level2 = level2_table(lines, mask)               # (c): None when the note has no such table at the template's place
+    level2 = level2_table(lines, mask)               # (b): None when the note has no such table at the template's place
     rows_of = {}                                     # block id -> its rows in the Level 2 table, read once
     for i in (level2 or [0])[1:]:
         rows_of.setdefault((cells(lines[i]) or [""])[0], []).append(i)
     level2_missing = False
-    # For (b): the blocks by the first of their recorded lines, and for each place in that order the highest last
-    # line so far, so that the blocks whose recorded lines meet a range are found without going over every block
-    # for every moved block. Made only for a note that has masked_lines; without them (b) has nothing to do.
-    by_first = sorted((b["a"], b["a"] + len(b["code"]) - 1, n) for n, b in enumerate(blocks)) if declared else []
-    firsts, reach = [first for first, _, _ in by_first], []
-    for _, last, _ in by_first:
-        reach.append(max(last, reach[-1]) if reach else last)
     source = report["_source"]                       # the source lines the comparison was made with
-    moves = [(at, block, entry["at"] if entry["state"] == "moved" else entry["moved_to"], entry)
-             for at, (block, entry) in enumerate(zip(blocks, report["blocks"]))
-             if entry["state"] == "moved" or "moved_to" in entry]
-    # (b) masked_lines, for all moved blocks first: the line rows below are judged with the masked lines as they
-    # will be. The comparison placed each block under one whole reading of the property, and only that reading
-    # says what is written (entry["masked_lines"]: the lines that were patterns in it, at their new numbers).
-    # Reading R, the numbers counted from the recorded lines: those numbers are taken out and the new ones are
-    # written. Reading P, the numbers are the new lines already (an update that stopped half-way): nothing is
-    # added, and a number the same lines had at the recorded place is taken out. No number is ever written for
-    # a line that the matching reading did not list: a [masked] line outside it was compared as plain text and
-    # hides nothing. Any other number in the block's recorded lines fits neither as it stands nor after the
-    # move: it is left, and named for a person.
-    # After a partial update the recorded lines of two blocks can overlap. A number that another block's recorded
-    # lines hold too is taken out only when that block has a sure place: its masked lines are then known as well
-    # (all_right below), and a number that is one of them stays. With such a block without a place, nothing is
-    # moved. A number in a block's recorded lines that is a masked line of any placed block, at that block's
-    # place, is right as it stands and is not named for a person.
-    all_right = {n for entry in report["blocks"] for n in entry.get("masked_lines", ())}
-    was_declared = declared
-    masked_left = {}                                 # place of the block -> what was left for a person
-    for at, block, (new_a, _), entry in moves if declared else ():
-        low, high = block["a"], block["a"] + len(block["code"]) - 1
-        delta = new_a - low
-        old, rest = cut_ranges(declared, low, high)
-        right = set(entry.get("masked_lines", ()))
-        if not old or not delta:
-            continue                                 # no number counts from the recorded lines: nothing to move
-        shared = []
-        k = bisect_right(firsts, high) - 1           # the last block that starts at or before the range's end
-        while k >= 0 and reach[k] >= low:            # before k no block reaches the range once reach[k] < low
-            first, last, n = by_first[k]
-            if (n != at and last >= low and any(first <= b and a <= last for a, b in old)
-                    and not ("at" in report["blocks"][n] or "moved_to" in report["blocks"][n])):
-                shared.append(n)
-            k -= 1
-        if shared:
-            shared = [blocks[n]["id"] for n in sorted(shared)]
-            masked_left[at] = (f"masked_lines {', '.join(span(a, b) for a, b in old)}: these lines are in the "
-                               f"recorded lines of block {block['id']} and of block {', '.join(shared)}, so they "
-                               f"were not moved. Set them by hand (block {block['id']} moved by {delta:+d})")
-            continue
-        here = {n for a, b in old for n in range(a, b + 1)}
-        stale = {n - delta for n in right} & here    # the numbers its masked lines had at the recorded place
-        keep = (here - (stale - all_right)) | right
-        if keep != here:
-            declared = rest
-            masked_new += ranges_of(sorted(keep))
-            masked_changed = True
-        other = ranges_of(sorted(here - stale - right - all_right))
-        if other:
-            masked_left[at] = (f"masked_lines {', '.join(span(a, b) for a, b in other)}: in the recorded lines of "
-                               f"block {block['id']}, but no [masked] line of its code is there, as the number "
-                               f"stands or after the move ({delta:+d}), so it was not moved. Set it by hand")
-    masked_now = merge_ranges(declared + masked_new)
+    moves = [(block, entry["at"] if entry["state"] == "moved" else entry["moved_to"], entry)
+             for block, entry in zip(blocks, report["blocks"]) if to_write(entry)]
+    # masked_lines is never written. A number of it inside the new lines of a block that is to be written would
+    # make that block one with masked lines for every reader of the note, the checker too. Nothing is written
+    # for such a note.
+    for block, (new_a, new_b), _ in moves:
+        inside = cut_ranges(declared, new_a, new_b)[0]
+        if inside:
+            return None, [], (f"--fix-moved writes nothing for this note: masked_lines {spans(inside)} would lie in "
+                              f"the new lines {span(new_a, new_b)} of block {block['id']}, which has no masked line, "
+                              f"and the script never changes masked_lines. First set the blocks with masked lines "
+                              f"by hand (their TODO line gives the lines and the numbers), or correct masked_lines, "
+                              f"then run again"), left
     by_hand = report["_rows"] = {}                   # for move_check(): block id -> its line rows left for a person
-    for at, block, (new_a, new_b), entry in moves:
+    for block, (new_a, new_b), entry in moves:
         delta, new_range = new_a - block["a"], span(new_a, new_b)
         heading = lines[block["start"]]
         word = "line" if new_a == new_b else "lines"
@@ -1708,7 +1604,7 @@ def moved_text(data, report):
         done = [f"heading (lines {span(block['a'], block['b'])}) -> ({word} {new_range})"]
         if entry["state"] != "moved":
             done.append("its code was there whole, past other blocks")
-        # (d) The block's line table: at depth full only, the table directly after the block's code fence (only
+        # (c) The block's line table: at depth full only, the table directly after the block's code fence (only
         # blank lines between), inside the block's own section, and only when its heading row is the template's.
         # The section ends at the next #, ## or ### heading. No other table in a block is written, at any depth.
         # Each row is decided by the code it quotes, with the check's own rule (row_quote), not by where it
@@ -1727,7 +1623,7 @@ def moved_text(data, report):
 
             def fits(first, last):
                 return (new_a <= first <= last <= new_b
-                        and row_quote(code_cell, first, last, source, lambda n: in_ranges(masked_now, n))[0] is None)
+                        and row_quote(code_cell, first, last, source, lambda n: in_ranges(declared, n))[0] is None)
 
             def named(first, last):
                 return {n for n in range(first, last + 1) if source[n - 1].strip()}
@@ -1789,7 +1685,7 @@ def moved_text(data, report):
             left.append(f"line rows of block {block['id']} are not decided: the code they quote is at their lines "
                         f"and at their lines after the move ({delta:+d}) as well. They were left as they are; look "
                         f"at them: rows {spans(both)}")
-        # (c) The block's row of the Level 2 table: the row that starts with its id, in the Lines cell. The
+        # (b) The block's row of the Level 2 table: the row that starts with its id, in the Lines cell. The
         # block's new lines are written as they are, never a shift of what stands there.
         for i in rows_of.get(block["id"], ()):
             a, b = line_cell(lines, i, 1, "Level 2 table")
@@ -1798,22 +1694,11 @@ def moved_text(data, report):
                 lines[i] = lines[i][:a] + new_numbers(m, [new_a, new_b]) + lines[i][b:]
                 done.append("Level 2 row")
         level2_missing = level2_missing or level2 is None
-        if at in masked_left:
-            left.append(masked_left[at])
         wrote.append(f"block {block['id']}: " + ", ".join(done))
     if level2_missing:
         left.append("the note has no Level 2 table at the template's place (directly under '## Level 2: blocks', "
                     "with the heading row #, Lines, Purpose, Why this way, Concepts), so no Lines cell was written. "
                     "Set them by hand")
-    if masked_changed and masked_now != was_declared:
-        value = ", ".join(span(a, b) for a, b in masked_now)
-        for i in range(1, len(lines)):
-            if lines[i].strip() == "---":
-                break
-            if lines[i].split(":", 1)[0].strip() == "masked_lines":
-                lines[i] = f"masked_lines: {value}"
-                wrote.append(f"masked_lines: {value}")
-                break
     if not wrote:
         return None, [], None, left
     return bom + "".join(line + end for line, end in zip(lines, ends)).encode("utf-8"), wrote, None, left
@@ -1936,7 +1821,7 @@ def note_report(path, root, scopes, fix, known, notes_dir):
     if report is None:
         return None
     found = report["_found"]
-    if fix and found and any(e["state"] == "moved" or "moved_to" in e for e in found["blocks"]):
+    if fix and found and any(to_write(e) for e in found["blocks"]):
         # Read, decide, compare and write as one step, under the note's lock. Nothing decided before the lock is
         # used: whether the note is this skill's File note, its scope, its source path, the source text and the
         # blocks are all taken again from the bytes read under the lock, and those bytes are the ones written over.
@@ -1967,7 +1852,7 @@ def note_report(path, root, scopes, fix, known, notes_dir):
                         bad = own_check(split(decoded[1]), split(decode_note(new)[1]))
                         if bad is not None:
                             error = (f"the writer's own check failed at note line {bad}: a difference that is no "
-                                     f"line number in a block heading, in masked_lines or in a Line column. Nothing "
+                                     f"line number in a block heading or in a Lines or Line column. Nothing "
                                      f"written; set the line numbers of the moved blocks by hand")
                     if new is not None and not error:
                         # The general check, last of all: the new text is compared once more, in memory, with
@@ -2183,7 +2068,9 @@ def print_report(report):
     for entry in report["blocks"]:
         was = f"block {entry['id']} ({at(entry['from'], entry['to'])})"
         if entry["state"] == "moved":
-            print(f"MOVED {was}: now {at(*entry['at'])}")
+            print(f"MOVED {was}: now {at(*entry['at'])}"
+                  + ("; it has masked lines, so --fix-moved does not write it: set it by hand (see TODO)"
+                     if entry.get("masked_block") else ""))
         elif entry["state"] == "undecided":
             where = (f"its code is at {at(*entry['proposed'])}, but the search for places was cut short (see "
                      f"BOUNDED), so a full search could place it elsewhere" if "proposed" in entry else
@@ -2205,7 +2092,8 @@ def print_report(report):
             if "moved_to" in entry:
                 print(f"DISPLACED {was}: its code is unchanged at {at(*entry['moved_to'])}, but the order of the "
                       f"blocks does not allow it there: it is past other blocks now. Not a changed block. "
-                      f"--fix-moved writes the new lines")
+                      + ("It has masked lines, so --fix-moved does not write it: set it by hand (see TODO)"
+                         if entry.get("masked_block") else "--fix-moved writes the new lines"))
             elif entry.get("held"):
                 print(f"DISPLACED {was}: its code is unchanged in the source, but only at lines another block holds "
                       f"(lines {spans(entry['elsewhere'])}{more}). Not a changed block. Read the file before you "
@@ -2215,16 +2103,17 @@ def print_report(report):
                       f"of the blocks does not allow it there; there is more than one such place, or another block "
                       f"could be there too, or the search was cut short (BOUNDED). Not a changed block. Choose "
                       f"the place and set the block's line numbers by hand")
+        elif entry.get("masked_not_found"):
+            print(f"NOT COMPARED {was}: it has masked lines, and its code is at no place in the file; it was "
+                  f"expected at {at(*entry['expected'])}. The script cannot tell whether its code changed. Not a "
+                  f"changed block for the script: read the source there and decide (see TODO)")
         elif entry["state"] == "not compared":
             why = ("a property of the note stands twice in its properties block" if entry.get("property_twice") else
                    "the note's code fences or headings can be read in two ways" if entry.get("note_form") else
                    "its code fence is empty" if entry.get("empty_fence") else
-                   "which lines masked_lines means for it is not sure" if entry.get("masked_unsure") else
                    "it has no code fence of its own to compare")
             print(f"NOT COMPARED {was}: {why} (see PROBLEM). Not a changed "
-                  f"block, and nothing is said about its place: "
-                  + ("read the block in the file" if entry.get("masked_unsure") else
-                     "repair the note's form, then run again"))
+                  f"block, and nothing is said about its place: repair the note's form, then run again")
         elif entry["state"] == "changed":
             if entry.get("spaces_only"):
                 print(f"CHANGED {was}: not found as copied, but at {at(*entry['likely'])} it differs only in spaces "
@@ -2243,8 +2132,8 @@ def print_report(report):
             print(f"{here}: holds the whole code of block {', '.join(u['code_of'])}, which moved past other blocks: "
                   f"these lines are that block's, no new block")
         elif u.get("not_compared"):
-            print(f"{here}: lines of block {', '.join(u['not_compared'][:SHOWN])}, which is not compared: repair the "
-                  f"note's form first (see PROBLEM), then run again. No id for a new block until then")
+            print(f"{here}: lines of block {', '.join(u['not_compared'][:SHOWN])}, which is not compared: act on "
+                  f"its NOT COMPARED line first, then run again. No id for a new block until then")
         elif u.get("unplaced_here"):
             more = (f" and {u['unplaced_count'] - len(u['unplaced_here'])} more"
                     if u["unplaced_count"] > len(u["unplaced_here"]) else "")
