@@ -323,16 +323,16 @@ test("withoutInlineCode: each code span becomes one space, as the checker's regu
     ["a `b` c", "a   c"], ["``a ` b``", " "], ["`[[x]]` [[y]]", "  [[y]]"], ["| `a \\| b` | [[c]] |", "|   | [[c]] |"],
     ["`a` ``b`` ```c``` `d", "      `d"],
     ["", ""], ["no code", "no code"], ["a ` b", "a ` b"], ["`", "`"],                // a run that never closes stays as text
-    // A run closes at the next place where as many backticks stand together, also at the start of a longer run.
-    ["`a`` b` c", "   c"], ["`a``b```c", "   c"],
-    // A run with no such place opens with fewer of its backticks; its own second half may be what closes it.
-    ["```x``", " "], ["```a``b`c", " b`c"], ["``a`", " a`"], ["a `` b ` c", "a   b ` c"], ["``", " "], ["```", " `"], ["````", " "],
-    ["`````a``", "  `"], ["x`` `` ``y", "x   y"], ["``[[x]]` [[y]]", " [[x]]` [[y]]"], ["`\\`[[x]]`", " [[x]]`"],
-    // A span does not run over a line break.
-    ["`a\nb`", "`a\nb`"], ["`a` \n `b`", "  \n  "],
+    // A run closes at the next run of the same length; a longer or shorter run does not close it.
+    ["`a`` b` c", "  c"], ["`a``b```c", "`a``b```c"],
+    // A run with no later run of its length is text.
+    ["```x``", "```x``"], ["```a``b`c", "```a``b`c"], ["``a`", "``a`"], ["a `` b ` c", "a `` b ` c"], ["``", "``"], ["```", "```"], ["````", "````"],
+    ["`````a``", "`````a``"], ["x`` `` ``y", "x  ``y"], ["``[[x]]` [[y]]", "``[[x]]` [[y]]"], ["`\\`[[x]]`", " [[x]]`"],
+    // A span runs over a line break when the text holds one, as in the checker.
+    ["`a\nb`", " "], ["`a` \n `b`", "  \n  "],
   ];
   for (const [line, expected] of cases) { assert.equal(withoutInlineCode(line), expected, JSON.stringify(line)); }
-  assert.deepEqual(linkNames(["`[[a]]` [[b]] ``[[c]]`` [[d]] `[[e]]", "```[[f]]`` [[g]]"]), ["b", "d", "e", "g"]);
+  assert.deepEqual(linkNames(["`[[a]]` [[b]] ``[[c]]`` [[d]] `[[e]]", "```[[f]]`` [[g]]"]), ["b", "d", "e", "f", "g"]);
 });
 
 /** Lines of backticks, letters and line breaks: every one up to a length, and long ones made by a fixed rule. */
@@ -375,7 +375,7 @@ test("withoutInlineCode gives what without_inline_code in check_notes.py gives",
       assert.equal(withoutInlineCode(line), answers[i], JSON.stringify(line));
       if (answers[i] !== line) { changed++; }
     });
-    assert.ok(changed > 5000, `only ${changed} lines held a code span`);
+    assert.ok(changed > 3000, `only ${changed} lines held a code span`);
     t.diagnostic(`${lines.length} lines compared with the checker; ${changed} of them held a code span`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -386,9 +386,9 @@ test("withoutInlineCode: backticks cost time in proportion to their number", () 
   const upTo = (n: number) => Array.from({ length: n }, (_, k) => k + 1);
   const runs = (lengths: number[], between = "x") => lengths.map((n) => "`".repeat(n)).join(between);
   const shapes: [string, string, string?][] = [
-    ["64,000 backticks", "`".repeat(64000), " "],
-    ["64,001 backticks", "`".repeat(64001), " `"],
-    ["x and 64,000 backticks", "x" + "`".repeat(64000) + "y", "x y"],
+    ["64,000 backticks", "`".repeat(64000), "`".repeat(64000)],
+    ["64,001 backticks", "`".repeat(64001), "`".repeat(64001)],
+    ["x and 64,000 backticks", "x" + "`".repeat(64000) + "y", "x" + "`".repeat(64000) + "y"],
     ["runs of every length from 1 to 350", runs(upTo(350))],
     ["runs of every length from 350 down to 1", runs(upTo(350).reverse())],
     ["runs of 1 to 200 and of 201 to 400, by turns", runs(upTo(200).flatMap((n) => [n, n + 200]))],
@@ -398,7 +398,7 @@ test("withoutInlineCode: backticks cost time in proportion to their number", () 
     ["20,000 runs of 3 and of 2 by turns, then one of 1", "``` a `` b ".repeat(20000) + "`"],
     ["a run of 30,000, then 30,000 single backticks", "`".repeat(30000) + " ` x".repeat(30000)],
     ["30,000 single backticks, then a run of 30,000", "x ` ".repeat(30000) + "`".repeat(30000)],
-    ["32,000 lines of one backtick", "`\n".repeat(32000), "`\n".repeat(32000)],
+    ["32,000 lines of one backtick", "`\n".repeat(32000), " \n".repeat(16000)],
     ["64,000 backticks in linkNames", "[[a]] " + "`".repeat(64000) + " [[b]]"],
   ];
   for (const [name, text, expected] of shapes) {

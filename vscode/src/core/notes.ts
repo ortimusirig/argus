@@ -215,51 +215,47 @@ function unescapePipes(cell: string): string {
  *  the closer, in the middle of a run when the closer was the start of a longer one. */
 export function withoutInlineCode(line: string): string {
   if (!line.includes("`")) { return line; }
-  return line.includes("\n") ? line.split("\n").map(withoutCodeInLine).join("\n") : withoutCodeInLine(line);
+  return withoutCodeInLine(line);
 }
 
 function withoutCodeInLine(line: string): string {
-  const starts: number[] = [], lengths: number[] = [];      // the runs of backticks of the line
+  // The same reading as without_inline_code in the checker (skills/argus/scripts/_common.py): a run of backticks
+  // opens a span that the next run of the same length closes; a backslash keeps the character after it as text
+  // (a backtick too); a run that is never closed is text.
+  const byLength = new Map<number, number[]>();             // length of a run -> where the runs of that length start
   for (let at = line.indexOf("`"); at >= 0;) {
     let end = at + 1;
     while (line[end] === "`") { end++; }
-    starts.push(at);
-    lengths.push(end - at);
+    const list = byLength.get(end - at);
+    if (list) { list.push(at); } else { byLength.set(end - at, [at]); }
     at = line.indexOf("`", end);
   }
-  const count = starts.length;
-  if (count === 0) { return line; }
-  const later = new Int32Array(count);                      // for each run: the longest of the runs after it
-  for (let r = count - 2; r >= 0; r--) { later[r] = Math.max(later[r + 1], lengths[r + 1]); }
   const out: string[] = [];
-  let kept = 0;                                             // the text up to here is written
-  let r = 0, at = starts[0], rest = lengths[0];             // where reading stands: in run r, with `rest` backticks left
-  while (r < count) {
-    const most = later[r];
-    const opener = most >= rest ? rest : Math.max(most, rest >> 1);
-    let end = -1;                                           // where the span ends
-    if (opener > 0 && opener < rest && 2 * opener <= rest) {
-      end = at + 2 * opener;                                // closed by the backticks right after the opener
-      rest -= 2 * opener;
-    } else if (opener > 0) {
-      // The first later run at least as long as the opener: there is one, as `most` says. The runs passed over
-      // lie inside the span and are not read again.
-      let closer = r + 1;
-      while (lengths[closer] < opener) { closer++; }
-      end = starts[closer] + opener;
-      r = closer;
-      rest = lengths[closer] - opener;
+  const n = line.length;
+  let i = 0;
+  while (i < n) {
+    let at = i;
+    while (at < n && line[at] !== "`" && line[at] !== "\\") { at++; }
+    if (at >= n) { out.push(line.slice(i)); break; }
+    out.push(line.slice(i, at));
+    if (line[at] === "\\") {
+      out.push(line.slice(at, at + 2));
+      i = at + 2;
+      continue;
     }
-    if (end >= 0) {
-      out.push(line.slice(kept, at), " ");
-      kept = at = end;
-    }
-    if (end < 0 || rest === 0) {
-      r++;
-      if (r < count) { at = starts[r]; rest = lengths[r]; }
+    let end = at + 1;
+    while (line[end] === "`") { end++; }
+    const starts = byLength.get(end - at) ?? [];
+    let lo = 0, hi = starts.length;                         // the next run of the same length at or after `end`
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] < end) { lo = mid + 1; } else { hi = mid; } }
+    if (lo < starts.length) {
+      out.push(" ");
+      i = starts[lo] + (end - at);
+    } else {
+      out.push(line.slice(at, end));
+      i = end;
     }
   }
-  out.push(line.slice(kept));
   return out.join("");
 }
 
