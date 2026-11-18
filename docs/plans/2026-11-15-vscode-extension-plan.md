@@ -362,3 +362,9 @@ may wait here for the owner's pilot. They are fixed and confirmed by a review be
 - P2 BACKLOG (stress round 6 of the new features, commit a90cf4e): "Watch graph-directory links for retargeting"
   (check.ts): a graph folder that is a junction and is pointed elsewhere is not watched; the badge is corrected at
   the next check.
+- P2 BACKLOG (confirming round 6, commit f2dca33): "Track external checker dependencies before caching success"
+  (check.ts): a `.md` link that leads to a note outside every watched root is read by the checker but not watched;
+  a change there keeps the "checked" badge until the next event. Planned fix: watch what the checker read.
+- P2 BACKLOG (confirming round 6, commit f2dca33): "Rebind watchers when configured directory links change"
+  (index.ts): when the configured notes folder is a junction and is pointed elsewhere, the watcher stays on the old
+  target, also after Refresh. Planned fix: watch the link and build the watchers again when its target changes.
